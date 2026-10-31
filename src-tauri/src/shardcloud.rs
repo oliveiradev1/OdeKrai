@@ -1528,6 +1528,11 @@ mod tests {
         .is_err());
         for command in [
             "rm -rf /",
+            "rm -fr /",
+            "rm  -rf  /",
+            "rm -rf /*",
+            "RM -RF /",
+            "rm -r -f /",
             "sudo rm --recursive --force -- /",
             "rm -rf .",
             "find / -delete",
@@ -1539,6 +1544,7 @@ mod tests {
                 "{command}"
             );
         }
+        assert!(validate_exec_commands(&["rm -rf ./pasta-de-teste".into()]).is_ok());
         assert!(validate_exec_commands(&["printf 'safe'".into()]).is_ok());
     }
 
