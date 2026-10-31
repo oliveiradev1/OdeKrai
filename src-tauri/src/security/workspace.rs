@@ -390,67 +390,100 @@ impl Tool for WorkspaceWrite {
         ))
     }
     fn execute(&self, action: &SimulatedAction, workspace: &Path) -> Result<String, String> {
-        let SimulatedAction::WriteFile { content, .. } = action else {
-            return Err("Parâmetros incompatíveis.".into());
-        };
-        if content.len() > MAX_FILE_BYTES {
-            return Err("O arquivo excede o limite de 1 MB.".into());
-        }
-        let path = create_safe_target(workspace, action_path(action)?)?;
-        if path.exists() && !path.is_file() {
-            return Err("A gravação só pode substituir um arquivo comum.".into());
-        }
-        let history = workspace.join(".history");
-        if let Ok(metadata) = fs::symlink_metadata(&history) {
-            if metadata.file_type().is_symlink() || !metadata.is_dir() || has_reparse(&history) {
-                return Err("A pasta reservada .history foi alterada.".into());
-            }
-        }
-        fs::create_dir_all(&history)
-            .map_err(|_| "Não foi possível preparar o histórico reversível.".to_string())?;
-        let key = digest(
-            path.strip_prefix(workspace)
-                .unwrap_or(&path)
-                .to_string_lossy()
-                .as_bytes(),
-        );
-        let unique = format!(
-            "{}-{}",
-            now_millis(),
-            ID_COUNTER.fetch_add(1, Ordering::Relaxed)
-        );
-        let backup = history.join(format!("{key}-{unique}.bak"));
-        let temporary = history.join(format!("{key}-{unique}.tmp"));
-        let had_previous = path.exists();
-        if had_previous {
-            fs::rename(&path, &backup).map_err(|_| {
-                "Não foi possível mover a versão anterior para o histórico reversível.".to_string()
-            })?;
-        }
-        let write_result = (|| {
-            let mut file = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&temporary)
-                .map_err(|_| "Não foi possível preparar a gravação temporária.".to_string())?;
-            file.write_all(content.as_bytes())
-                .and_then(|_| file.sync_data())
-                .map_err(|_| "Não foi possível preparar o novo arquivo.".to_string())?;
-            fs::rename(&temporary, &path)
-                .map_err(|_| "Não foi possível instalar o novo arquivo.".to_string())
-        })();
-        if let Err(error) = write_result {
-            let _ = fs::remove_file(&temporary);
-            if had_previous {
-                let _ = fs::rename(&backup, &path);
-            }
-            return Err(error);
-        }
-        Ok(format!(
-            "Arquivo salvo; a versão anterior foi guardada quando existia: {}",
-            path.display()
-        ))
+        execute_workspace_write(action, workspace, None)
     }
+    fn execute_with_app<'a>(
+        &'a self,
+        action: &'a SimulatedAction,
+        workspace: &'a Path,
+        app: &'a tauri::AppHandle,
+        _origin: &'a crate::policy::Origin,
+        _cancel: &'a tokio_util::sync::CancellationToken,
+        _operation_id: &'a str,
+        _on_output: &'a mut (dyn FnMut(String) + Send),
+    ) -> Pin<Box<dyn Future<Output = Result<String, String>> + Send + 'a>> {
+        let result = execute_workspace_write(action, workspace, Some(app));
+        Box::pin(async move { result })
+    }
+}
+
+fn execute_workspace_write(
+    action: &SimulatedAction,
+    workspace: &Path,
+    app: Option<&tauri::AppHandle>,
+) -> Result<String, String> {
+    let SimulatedAction::WriteFile { content, .. } = action else {
+        return Err("Parâmetros incompatíveis.".into());
+    };
+    if content.len() > MAX_FILE_BYTES {
+        return Err("O arquivo excede o limite de 1 MB.".into());
+    }
+    let path = create_safe_target(workspace, action_path(action)?)?;
+    if path.exists() && !path.is_file() {
+        return Err("A gravação só pode substituir um arquivo comum.".into());
+    }
+    let history = workspace.join(".history");
+    if let Ok(metadata) = fs::symlink_metadata(&history) {
+        if metadata.file_type().is_symlink() || !metadata.is_dir() || has_reparse(&history) {
+            return Err("A pasta reservada .history foi alterada.".into());
+        }
+    }
+    fs::create_dir_all(&history)
+        .map_err(|_| "Não foi possível preparar o histórico reversível.".to_string())?;
+    let key = digest(
+        path.strip_prefix(workspace)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .as_bytes(),
+    );
+    let unique = format!(
+        "{}-{}",
+        now_millis(),
+        ID_COUNTER.fetch_add(1, Ordering::Relaxed)
+    );
+    let backup = history.join(format!("{key}-{unique}.bak"));
+    let temporary = history.join(format!("{key}-{unique}.tmp"));
+    let had_previous = path.exists();
+    if had_previous {
+        fs::rename(&path, &backup).map_err(|_| {
+            "Não foi possível mover a versão anterior para o histórico reversível.".to_string()
+        })?;
+    }
+    let write_result = (|| {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .map_err(|_| "Não foi possível preparar a gravação temporária.".to_string())?;
+        file.write_all(content.as_bytes())
+            .and_then(|_| file.sync_data())
+            .map_err(|_| "Não foi possível preparar o novo arquivo.".to_string())?;
+        fs::rename(&temporary, &path)
+            .map_err(|_| "Não foi possível instalar o novo arquivo.".to_string())
+    })();
+    if let Err(error) = write_result {
+        let cleanup = cleanup_file(&temporary, app, "gravação temporária");
+        if had_previous {
+            if fs::rename(&backup, &path).is_err() {
+                if let Some(app) = app {
+                    crate::diagnostics::log_agent_error(
+                        app,
+                        "workspace_cleanup",
+                        "operation=restaurar versão anterior; error_kind=RestoreFailed",
+                    );
+                }
+                return Err(append_cleanup_notice(
+                    format!("{error} A versão anterior também não pôde ser restaurada."),
+                    [cleanup.err()],
+                ));
+            }
+        }
+        return Err(append_cleanup_notice(error, [cleanup.err()]));
+    }
+    Ok(format!(
+        "Arquivo salvo; a versão anterior foi guardada quando existia: {}",
+        path.display()
+    ))
 }
 
 impl Tool for WorkspaceDelete {
@@ -894,7 +927,8 @@ impl Tool for Productivity {
             });
         }
         if skill_id.starts_with("files.") {
-            let result = execute_file_skill_with_undo(skill_id, params, root, operation_id);
+            let result =
+                execute_file_skill_with_undo(skill_id, params, root, operation_id, Some(app));
             return Box::pin(async move { result });
         }
         let result = crate::productivity::execute(skill_id, params, root, Some(app));
@@ -1184,6 +1218,41 @@ fn history_record_path(root: &Path, state_id: &str, suffix: &str) -> Result<Path
     Ok(path)
 }
 
+fn cleanup_file(
+    path: &Path,
+    app: Option<&tauri::AppHandle>,
+    operation: &str,
+) -> Result<(), String> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => {
+            if let Some(app) = app {
+                crate::diagnostics::log_agent_error(
+                    app,
+                    "workspace_cleanup",
+                    &format!("operation={operation}; error_kind={:?}", error.kind()),
+                );
+            }
+            Err(format!(
+                "Não foi possível limpar os dados auxiliares da operação ({operation})."
+            ))
+        }
+    }
+}
+
+fn append_cleanup_notice(
+    mut message: String,
+    warnings: impl IntoIterator<Item = Option<String>>,
+) -> String {
+    let warnings = warnings.into_iter().flatten().collect::<Vec<_>>();
+    if !warnings.is_empty() {
+        message.push(' ');
+        message.push_str(&warnings.join(" "));
+    }
+    message
+}
+
 fn relative_file_path(root: &Path, target: &Path) -> Result<String, String> {
     target
         .strip_prefix(root)
@@ -1198,6 +1267,7 @@ fn save_file_undo_record(
     state_id: &str,
     record: &FileUndoRecord,
     previous: Option<&[u8]>,
+    app: Option<&tauri::AppHandle>,
 ) -> Result<(), String> {
     let manifest = history_record_path(root, state_id, "undo.json")?;
     let backup_name = if let Some(bytes) = previous {
@@ -1206,14 +1276,24 @@ fn save_file_undo_record(
         if backup.exists() || manifest.exists() {
             return Err("Já existe um estado de desfazer para esta ação.".into());
         }
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(backup)
-            .map_err(|_| "Não foi possível guardar a versão anterior em .history.")?;
-        file.write_all(bytes)
-            .and_then(|_| file.sync_data())
-            .map_err(|_| "Não foi possível confirmar a versão anterior em .history.")?;
+        let backup_write = (|| -> Result<(), String> {
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&backup)
+                .map_err(|_| {
+                    "Não foi possível guardar a versão anterior em .history.".to_string()
+                })?;
+            file.write_all(bytes)
+                .and_then(|_| file.sync_data())
+                .map_err(|_| {
+                    "Não foi possível confirmar a versão anterior em .history.".to_string()
+                })
+        })();
+        if let Err(error) = backup_write {
+            let cleanup = cleanup_file(&backup, app, "cópia anterior incompleta");
+            return Err(append_cleanup_notice(error, [cleanup.err()]));
+        }
         Some(name)
     } else {
         None
@@ -1227,9 +1307,15 @@ fn save_file_undo_record(
         .open(manifest)
         .map_err(|_| "Não foi possível registrar o estado de desfazer.")?;
     if serde_json::to_writer(&mut file, &stored).is_err() || file.sync_all().is_err() {
-        let _ = fs::remove_file(history_record_path(root, state_id, "undo.json")?);
-        let _ = fs::remove_file(history_record_path(root, state_id, "bak")?);
-        return Err("Não foi possível confirmar o estado de desfazer.".into());
+        drop(file);
+        let cleanup_manifest = history_record_path(root, state_id, "undo.json")
+            .and_then(|path| cleanup_file(&path, app, "registro de desfazer"));
+        let cleanup_backup = history_record_path(root, state_id, "bak")
+            .and_then(|path| cleanup_file(&path, app, "cópia anterior"));
+        return Err(append_cleanup_notice(
+            "Não foi possível confirmar o estado de desfazer.".into(),
+            [cleanup_manifest.err(), cleanup_backup.err()],
+        ));
     }
     Ok(())
 }
@@ -1263,7 +1349,11 @@ pub(super) fn inspect_file_undo(
     Ok((record.kind, changed))
 }
 
-fn restore_file_undo(root: &Path, params: &serde_json::Value) -> Result<String, String> {
+fn restore_file_undo(
+    root: &Path,
+    params: &serde_json::Value,
+    app: Option<&tauri::AppHandle>,
+) -> Result<String, String> {
     let state_id = params["state_id"]
         .as_str()
         .ok_or("O identificador do estado anterior está ausente.")?;
@@ -1294,10 +1384,13 @@ fn restore_file_undo(root: &Path, params: &serde_json::Value) -> Result<String, 
         }
         fs::rename(&target, &source)
             .map_err(|_| "Não foi possível desfazer a renomeação do arquivo.")?;
-        let _ = fs::remove_file(manifest_path);
-        return Ok(format!(
-            "Renomeação desfeita. Arquivo restaurado em {}.",
-            source.display()
+        let cleanup = cleanup_file(&manifest_path, app, "registro de renomeação").err();
+        return Ok(append_cleanup_notice(
+            format!(
+                "Renomeação desfeita. Arquivo restaurado em {}.",
+                source.display()
+            ),
+            [cleanup],
         ));
     }
     if changed {
@@ -1308,6 +1401,7 @@ fn restore_file_undo(root: &Path, params: &serde_json::Value) -> Result<String, 
         fs::copy(&target, modified_backup)
             .map_err(|_| "Não foi possível preservar a versão alterada do arquivo.")?;
     }
+    let mut cleanup_warnings = Vec::new();
     if let Some(backup) = record.backup {
         let backup_path = history_record_path(root, state_id, "bak")?;
         if backup_path.file_name().and_then(|name| name.to_str()) != Some(backup.as_str())
@@ -1319,15 +1413,18 @@ fn restore_file_undo(root: &Path, params: &serde_json::Value) -> Result<String, 
         }
         fs::copy(&backup_path, &target)
             .map_err(|_| "Não foi possível restaurar a versão anterior do arquivo.")?;
-        let _ = fs::remove_file(backup_path);
+        cleanup_warnings.push(cleanup_file(&backup_path, app, "cópia anterior").err());
     } else {
         fs::remove_file(&target)
             .map_err(|_| "Não foi possível remover o arquivo criado pela ação.")?;
     }
-    let _ = fs::remove_file(manifest_path);
-    Ok(format!(
-        "Versão anterior do arquivo restaurada em {}.",
-        target.display()
+    cleanup_warnings.push(cleanup_file(&manifest_path, app, "registro de desfazer").err());
+    Ok(append_cleanup_notice(
+        format!(
+            "Versão anterior do arquivo restaurada em {}.",
+            target.display()
+        ),
+        cleanup_warnings,
     ))
 }
 
@@ -1336,10 +1433,11 @@ fn execute_file_skill_with_undo(
     params: &serde_json::Value,
     root: &Path,
     state_id: &str,
+    app: Option<&tauri::AppHandle>,
 ) -> Result<String, String> {
     use serde_json::Value;
     if id == "files.restore" {
-        return restore_file_undo(root, params);
+        return restore_file_undo(root, params, app);
     }
     if !matches!(
         id,
@@ -1412,20 +1510,53 @@ fn execute_file_skill_with_undo(
         } else {
             None
         },
+        app,
     )?;
     match execute_file_skill(id, params, root) {
         Ok(result) => Ok(result),
         Err(error) => {
+            let mut cleanup_warnings = Vec::new();
             if let Some(bytes) = previous.as_deref() {
-                let _ = fs::write(&source, bytes);
+                if fs::write(&source, bytes).is_err() {
+                    cleanup_warnings.push(Some(
+                        "Não foi possível restaurar a versão anterior após a falha.".to_string(),
+                    ));
+                    if let Some(app) = app {
+                        crate::diagnostics::log_agent_error(
+                            app,
+                            "workspace_cleanup",
+                            "operation=restauração após falha; error_kind=WriteFailed",
+                        );
+                    }
+                }
             } else if id == "files.write" {
-                let _ = fs::remove_file(&source);
+                cleanup_warnings
+                    .push(cleanup_file(&source, app, "arquivo criado pela operação").err());
             }
-            let _ = fs::remove_file(
-                history_record_path(root, state_id, "undo.json").unwrap_or_default(),
-            );
-            let _ = fs::remove_file(history_record_path(root, state_id, "bak").unwrap_or_default());
-            Err(error)
+            for (suffix, operation) in [
+                ("undo.json", "registro de desfazer após falha"),
+                ("bak", "cópia anterior após falha"),
+            ] {
+                if let Ok(path) = history_record_path(root, state_id, suffix) {
+                    cleanup_warnings.push(cleanup_file(&path, app, operation).err());
+                } else if let Some(app) = app {
+                    crate::diagnostics::log_agent_error(
+                        app,
+                        "workspace_cleanup",
+                        "operation=localizar dados auxiliares após falha; error_kind=RecordUnavailable",
+                    );
+                    cleanup_warnings.push(Some(
+                        "Não foi possível localizar todos os dados auxiliares para limpeza."
+                            .to_string(),
+                    ));
+                } else {
+                    cleanup_warnings.push(Some(
+                        "Não foi possível localizar todos os dados auxiliares para limpeza."
+                            .to_string(),
+                    ));
+                }
+            }
+            Err(append_cleanup_notice(error, cleanup_warnings))
         }
     }
 }
@@ -2049,6 +2180,17 @@ mod files_tests {
     }
 
     #[test]
+    fn falha_de_limpeza_notifica_sem_expor_caminho() {
+        let root = temp_root("cleanup-notice");
+        let directory = root.join("auxiliary-directory");
+        fs::create_dir(&directory).unwrap();
+        let error = cleanup_file(&directory, None, "registro de desfazer").unwrap_err();
+        assert!(error.contains("Não foi possível limpar os dados auxiliares"));
+        assert!(!error.contains(root.to_string_lossy().as_ref()));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn plan_proposal_only_returns_text_and_has_no_filesystem_effects() {
         let root = temp_root("plan-propose");
         let action = SimulatedAction::Productivity {
@@ -2076,13 +2218,14 @@ mod files_tests {
             &serde_json::json!({"path":"write.txt","content":"nova versão"}),
             &root,
             "act-write-1",
+            None,
         )
         .unwrap();
         assert_eq!(
             fs::read_to_string(root.join("write.txt")).unwrap(),
             "nova versão"
         );
-        execute_file_skill_with_undo("files.restore", &serde_json::json!({"path":"write.txt","state_id":"act-write-1","confirm_modified":false}), &root, "undo-write").unwrap();
+        execute_file_skill_with_undo("files.restore", &serde_json::json!({"path":"write.txt","state_id":"act-write-1","confirm_modified":false}), &root, "undo-write", None).unwrap();
         assert_eq!(
             fs::read_to_string(root.join("write.txt")).unwrap(),
             "versão anterior"
@@ -2093,9 +2236,10 @@ mod files_tests {
             &serde_json::json!({"path":"write.txt","content":" + complemento"}),
             &root,
             "act-append-2",
+            None,
         )
         .unwrap();
-        execute_file_skill_with_undo("files.restore", &serde_json::json!({"path":"write.txt","state_id":"act-append-2","confirm_modified":false}), &root, "undo-append").unwrap();
+        execute_file_skill_with_undo("files.restore", &serde_json::json!({"path":"write.txt","state_id":"act-append-2","confirm_modified":false}), &root, "undo-append", None).unwrap();
         assert_eq!(
             fs::read_to_string(root.join("write.txt")).unwrap(),
             "versão anterior"
@@ -2106,9 +2250,10 @@ mod files_tests {
             &serde_json::json!({"path":"write.txt","destination":"renamed.txt"}),
             &root,
             "act-rename-3",
+            None,
         )
         .unwrap();
-        execute_file_skill_with_undo("files.restore", &serde_json::json!({"path":"renamed.txt","state_id":"act-rename-3","confirm_modified":false}), &root, "undo-rename").unwrap();
+        execute_file_skill_with_undo("files.restore", &serde_json::json!({"path":"renamed.txt","state_id":"act-rename-3","confirm_modified":false}), &root, "undo-rename", None).unwrap();
         assert_eq!(
             fs::read_to_string(root.join("write.txt")).unwrap(),
             "versão anterior"
@@ -2126,13 +2271,14 @@ mod files_tests {
             &serde_json::json!({"path":"notes.txt","content":"ação"}),
             &root,
             "act-modified-4",
+            None,
         )
         .unwrap();
         fs::write(root.join("notes.txt"), "edição posterior").unwrap();
         let (_, changed) = inspect_file_undo(&root, "act-modified-4", "notes.txt").unwrap();
         assert!(changed);
-        assert!(execute_file_skill_with_undo("files.restore", &serde_json::json!({"path":"notes.txt","state_id":"act-modified-4","confirm_modified":false}), &root, "undo-modified").is_err());
-        execute_file_skill_with_undo("files.restore", &serde_json::json!({"path":"notes.txt","state_id":"act-modified-4","confirm_modified":true}), &root, "undo-modified-confirmed").unwrap();
+        assert!(execute_file_skill_with_undo("files.restore", &serde_json::json!({"path":"notes.txt","state_id":"act-modified-4","confirm_modified":false}), &root, "undo-modified", None).is_err());
+        execute_file_skill_with_undo("files.restore", &serde_json::json!({"path":"notes.txt","state_id":"act-modified-4","confirm_modified":true}), &root, "undo-modified-confirmed", None).unwrap();
         assert_eq!(fs::read_to_string(root.join("notes.txt")).unwrap(), "antes");
         assert_eq!(
             fs::read_to_string(root.join(".history/act-modified-4.modified.bak")).unwrap(),
