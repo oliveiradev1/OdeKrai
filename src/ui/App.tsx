@@ -2142,11 +2142,6 @@ function MainApp() {
                   key={requestedSkillFamily?.requestId ?? 'all-families'}
                   initialFamily={requestedSkillFamily?.family}
                   onOpenPrivacy={() => navigate('permissions')}
-                  agentRuntime={{
-                    modeEnabled: agentEnabled,
-                    available: agentAvailability.available,
-                    reason: agentAvailability.reason,
-                  }}
                 />
               )}
               {section === 'companion' && (

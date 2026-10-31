@@ -914,17 +914,24 @@ mod tests {
                     .collect::<Vec<_>>()
                     .join("\n");
                 self.received_tools = tools.iter().map(|tool| tool.name.clone()).collect();
-                let answer = if self
-                    .received_system
-                    .contains("Não diga que a ferramenta não existe")
-                    && !self
-                        .received_tools
-                        .iter()
-                        .any(|name| name == "discord.send")
+                let has_discord_tool = self
+                    .received_tools
+                    .iter()
+                    .any(|name| name == "discord.send");
+                let answer = if self.received_system.contains("Estado do Discord: não configurado")
+                    && !has_discord_tool
                 {
                     "Falta cadastrar um webhook em Privacidade e permissões > Destinos do Discord."
+                } else if self.received_system.contains("Estado do Discord: configurado e ativo")
+                    && has_discord_tool
+                {
+                    "A habilidade do Discord está ativa. Cada envio exige aprovação na janela nativa."
+                } else if self.received_system.contains("Estado do Discord: bloqueado")
+                    && !has_discord_tool
+                {
+                    "A habilidade do Discord está desativada em Habilidades > Mensagens."
                 } else {
-                    "A ferramenta do Discord não está disponível nesta sessão."
+                    "O estado do Discord não corresponde às ferramentas desta conversa."
                 };
                 Ok(reply(answer, vec![]))
             })
@@ -975,6 +982,81 @@ mod tests {
         assert!(provider
             .received_system
             .contains("Não diga que a ferramenta não existe"));
+    }
+
+    #[tokio::test]
+    async fn simulated_provider_reports_active_discord_as_offered_with_mandatory_approval() {
+        let enabled = std::collections::HashSet::from(["discord.send".to_string()]);
+        let offer = crate::security::skills::SkillTurnOffer::from_registry(
+            crate::security::skills::registry(),
+            &enabled,
+            true,
+        );
+        let tools = offer.model_tools();
+        let mut messages = vec![Message {
+            role: "system".into(),
+            blocks: vec![Block::Text {
+                text: offer.system_context(),
+            }],
+        }];
+        let mut provider = SimulatedProvider {
+            received_system: String::new(),
+            received_tools: Vec::new(),
+        };
+        let result = run_agent(
+            &mut provider,
+            &mut messages,
+            &tools,
+            AgentLimits::default(),
+            &CancellationToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap();
+
+        assert!(provider
+            .received_tools
+            .iter()
+            .any(|name| name == "discord.send"));
+        assert!(provider.received_system.contains("Cada envio exige aprovação"));
+        assert!(result.contains("Cada envio exige aprovação na janela nativa"));
+    }
+
+    #[tokio::test]
+    async fn simulated_provider_reports_disabled_discord_as_blocked_without_claiming_it_missing() {
+        let offer = crate::security::skills::SkillTurnOffer::from_registry(
+            crate::security::skills::registry(),
+            &std::collections::HashSet::new(),
+            true,
+        );
+        let tools = offer.model_tools();
+        let mut messages = vec![Message {
+            role: "system".into(),
+            blocks: vec![Block::Text {
+                text: offer.system_context(),
+            }],
+        }];
+        let mut provider = SimulatedProvider {
+            received_system: String::new(),
+            received_tools: Vec::new(),
+        };
+        let result = run_agent(
+            &mut provider,
+            &mut messages,
+            &tools,
+            AgentLimits::default(),
+            &CancellationToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap();
+
+        assert!(!provider
+            .received_tools
+            .iter()
+            .any(|name| name == "discord.send"));
+        assert!(provider.received_system.contains("Estado do Discord: bloqueado"));
+        assert!(result.contains("desativada em Habilidades > Mensagens"));
     }
 
     fn reply(content: &str, calls: Vec<ToolCall>) -> ProviderReply {

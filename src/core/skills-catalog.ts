@@ -1,4 +1,6 @@
-export type SkillStatus = 'installed' | 'available' | 'configuration_required' | 'unavailable';
+export type SkillStatus =
+  'installed' | 'available' | 'blocked' | 'configuration_required' | 'unavailable';
+export type DiscordSkillState = 'not_configured' | 'active' | 'blocked';
 export type SkillCategory = 'local' | 'integration';
 export type SkillRisk =
   | 'leitura'
@@ -42,6 +44,7 @@ export type CatalogSkill = {
   status: SkillStatus;
   statusReason?: string | null;
   configurationRequired: boolean;
+  discordState?: DiscordSkillState;
   family: SkillFamily;
   icon: string;
   examples: string[];
@@ -196,7 +199,8 @@ export function groupSkillFamilies(skills: CatalogSkill[]): CatalogFamily[] {
 
 export function familyEnableTarget(skills: CatalogSkill[]): boolean | undefined {
   const eligible = skills.filter(
-    (skill) => skill.status === 'available' || skill.status === 'installed',
+    (skill) =>
+      skill.status === 'available' || skill.status === 'blocked' || skill.status === 'installed',
   );
   if (eligible.length === 0) return undefined;
   return !eligible.every((skill) => skill.enabled);

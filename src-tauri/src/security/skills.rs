@@ -1047,18 +1047,37 @@ fn action_example(id: &str) -> SimulatedAction {
 pub(crate) enum SkillOfferState {
     Unavailable,
     Disabled,
+    Blocked,
     ConfigurationPending,
     Offered,
 }
 
-const DISCORD_CONFIGURATION_GUIDANCE: &str = "Se o usuário pedir uma ação que depende de configuração pendente, explique o que falta e onde cadastrar (Privacidade e permissões > Destinos do Discord). Não diga que a ferramenta não existe.";
-const DISCORD_CONFIGURATION_NOTICE: &str = "\n\nConfiguração pendente: falta cadastrar um webhook do Discord em Privacidade e permissões > Destinos do Discord. ";
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum DiscordSkillState {
+    NotConfigured,
+    Active,
+    Blocked,
+}
+
+pub(crate) fn discord_skill_state(enabled: bool, configured: bool) -> DiscordSkillState {
+    match (configured, enabled) {
+        (false, _) => DiscordSkillState::NotConfigured,
+        (true, true) => DiscordSkillState::Active,
+        (true, false) => DiscordSkillState::Blocked,
+    }
+}
+
+const DISCORD_NOT_CONFIGURED_GUIDANCE: &str = "Estado do Discord: não configurado. Se o usuário pedir uma ação pelo Discord, explique que falta cadastrar um webhook em Privacidade e permissões > Destinos do Discord. Não diga que a ferramenta não existe.";
+const DISCORD_ACTIVE_GUIDANCE: &str = "Estado do Discord: configurado e ativo. A ferramenta discord.send é oferecida ao modelo em todas as conversas no modo agente. Cada envio exige aprovação na janela nativa, em qualquer modo de permissão; nunca diga que um envio já foi feito antes da execução aprovada.";
+const DISCORD_BLOCKED_GUIDANCE: &str = "Estado do Discord: bloqueado porque a habilidade está desativada. Não afirme que a ferramenta está disponível nem que não existe; explique que o usuário pode ativá-la em Habilidades > Mensagens.";
 
 impl SkillOfferState {
     fn catalog_status(self) -> &'static str {
         match self {
             Self::Unavailable => "unavailable",
             Self::Disabled => "available",
+            Self::Blocked => "blocked",
             Self::ConfigurationPending => "configuration_required",
             Self::Offered => "installed",
         }
@@ -1072,8 +1091,12 @@ pub(crate) fn skill_offer_state(
 ) -> SkillOfferState {
     if !skill_available(skill_id) {
         SkillOfferState::Unavailable
-    } else if skill_id == "discord.send" && !discord_configured {
-        SkillOfferState::ConfigurationPending
+    } else if skill_id == "discord.send" {
+        match discord_skill_state(enabled, discord_configured) {
+            DiscordSkillState::NotConfigured => SkillOfferState::ConfigurationPending,
+            DiscordSkillState::Active => SkillOfferState::Offered,
+            DiscordSkillState::Blocked => SkillOfferState::Blocked,
+        }
     } else if enabled {
         SkillOfferState::Offered
     } else {
@@ -1093,6 +1116,7 @@ pub(crate) fn skill_exposed_to_agent(
 #[derive(Clone)]
 pub(crate) struct SkillTurnOffer {
     entries: Vec<(Skill, SkillOfferState)>,
+    discord_state: Option<DiscordSkillState>,
 }
 
 impl SkillTurnOffer {
@@ -1101,6 +1125,10 @@ impl SkillTurnOffer {
         enabled: &std::collections::HashSet<String>,
         discord_configured: bool,
     ) -> Self {
+        let has_discord_skill = skills.iter().any(|skill| skill.id == "discord.send");
+        let discord_state = has_discord_skill.then(|| {
+            discord_skill_state(enabled.contains("discord.send"), discord_configured)
+        });
         let entries = skills
             .into_iter()
             .map(|skill| {
@@ -1109,7 +1137,10 @@ impl SkillTurnOffer {
                 (skill, state)
             })
             .collect();
-        Self { entries }
+        Self {
+            entries,
+            discord_state,
+        }
     }
 
     pub(crate) fn offered_skills(&self) -> Vec<Skill> {
@@ -1124,7 +1155,9 @@ impl SkillTurnOffer {
         self.entries.iter().any(|(_, state)| {
             matches!(
                 state,
-                SkillOfferState::Offered | SkillOfferState::ConfigurationPending
+                SkillOfferState::Offered
+                    | SkillOfferState::ConfigurationPending
+                    | SkillOfferState::Blocked
             )
         })
     }
@@ -1160,11 +1193,20 @@ impl SkillTurnOffer {
             "Habilidades ativas para esta execução:\n{}",
             offered.join("\n")
         );
-        if self.entries.iter().any(|(skill, state)| {
-            skill.id == "discord.send" && *state == SkillOfferState::ConfigurationPending
-        }) {
-            context.push_str(DISCORD_CONFIGURATION_NOTICE);
-            context.push_str(DISCORD_CONFIGURATION_GUIDANCE);
+        match self.discord_state {
+            Some(DiscordSkillState::NotConfigured) => {
+                context.push_str("\n\n");
+                context.push_str(DISCORD_NOT_CONFIGURED_GUIDANCE);
+            }
+            Some(DiscordSkillState::Active) => {
+                context.push_str("\n\n");
+                context.push_str(DISCORD_ACTIVE_GUIDANCE);
+            }
+            Some(DiscordSkillState::Blocked) => {
+                context.push_str("\n\n");
+                context.push_str(DISCORD_BLOCKED_GUIDANCE);
+            }
+            None => {}
         }
         context
     }
@@ -1228,6 +1270,8 @@ pub struct SkillView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status_reason: Option<String>,
     pub configuration_required: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub discord_state: Option<DiscordSkillState>,
     pub family: SkillFamily,
     pub icon: String,
     pub examples: Vec<String>,
@@ -1474,12 +1518,14 @@ where
                     (Risk::CapturaSensivel, Some(short_catalog_reason(&error)))
                 }
             };
+            let stored_enabled = enabled_for(skill.id);
             let offer_state = if build_error.is_some() {
                 SkillOfferState::Unavailable
             } else {
-                skill_offer_state(skill.id, enabled_for(skill.id), discord_configured)
+                skill_offer_state(skill.id, stored_enabled, discord_configured)
             };
             let enabled = offer_state == SkillOfferState::Offered;
+            let catalog_available = build_error.is_none();
             SkillView {
                 id: skill.id.into(),
                 name: skill.name.into(),
@@ -1488,7 +1534,7 @@ where
                 result_trust: skill.result_trust,
                 enabled,
                 more_permissive: override_for(skill.id),
-                fixed_blocked: matches!(skill.id, "simulated.payment" | "discord.send"),
+                fixed_blocked: skill.id == "simulated.payment",
                 category: skill_category(skill.id).into(),
                 status: offer_state.catalog_status().into(),
                 status_reason: build_error.or_else(|| {
@@ -1496,6 +1542,8 @@ where
                         .then(|| "Habilidade indisponível nesta versão.".into())
                 }),
                 configuration_required: offer_state == SkillOfferState::ConfigurationPending,
+                discord_state: (skill.id == "discord.send" && catalog_available)
+                    .then(|| discord_skill_state(stored_enabled, discord_configured)),
                 family: skill.family,
                 icon: skill.icon.into(),
                 examples: skill
@@ -2099,6 +2147,7 @@ mod tests {
             status: "available".into(),
             status_reason: None,
             configuration_required: false,
+            discord_state: None,
             family: SkillFamily::Arquivos,
             icon: "folder".into(),
             examples: vec!["Leia o arquivo".into()],
@@ -2124,6 +2173,7 @@ mod tests {
         ] {
             assert!(value.get(field).is_some(), "campo ausente: {field}");
         }
+        assert!(value.get("discordState").is_none());
     }
 
     #[test]
@@ -2142,6 +2192,7 @@ mod tests {
             status: "available".into(),
             status_reason: None,
             configuration_required,
+            discord_state: None,
             family,
             icon: "calendar".into(),
             examples: vec!["Consulte a agenda.".into()],
@@ -2313,7 +2364,12 @@ mod tests {
             .any(|tool| tool.name == "discord.send"));
         assert!(before
             .system_context()
-            .contains(DISCORD_CONFIGURATION_GUIDANCE));
+            .contains(DISCORD_NOT_CONFIGURED_GUIDANCE));
+        assert!(!pending_view.fixed_blocked);
+        assert_eq!(
+            pending_view.discord_state,
+            Some(DiscordSkillState::NotConfigured)
+        );
         assert_eq!(pending_view.status, "configuration_required");
         assert!(pending_view.configuration_required);
         assert!(!pending_view.enabled);
@@ -2331,12 +2387,86 @@ mod tests {
             .model_tools()
             .iter()
             .any(|tool| tool.name == "discord.send"));
-        assert!(!after
-            .system_context()
-            .contains(DISCORD_CONFIGURATION_GUIDANCE));
+        assert!(after.system_context().contains(DISCORD_ACTIVE_GUIDANCE));
+        assert!(!ready_view.fixed_blocked);
+        assert_eq!(ready_view.discord_state, Some(DiscordSkillState::Active));
         assert_eq!(ready_view.status, "installed");
         assert!(ready_view.enabled);
         assert!(!ready_view.configuration_required);
+    }
+
+    #[test]
+    fn discord_state_is_the_source_for_catalog_offer_and_agent_guidance() {
+        let skills = registry();
+        let unconfigured = SkillTurnOffer::from_registry(
+            skills.clone(),
+            &std::collections::HashSet::from(["discord.send".to_string()]),
+            false,
+        );
+        let blocked = SkillTurnOffer::from_registry(
+            skills.clone(),
+            &std::collections::HashSet::new(),
+            true,
+        );
+        let active = SkillTurnOffer::from_registry(
+            skills,
+            &std::collections::HashSet::from(["discord.send".to_string()]),
+            true,
+        );
+
+        for (offer, expected_state, expected_status, expected_guidance, is_offered) in [
+            (
+                unconfigured,
+                DiscordSkillState::NotConfigured,
+                "configuration_required",
+                DISCORD_NOT_CONFIGURED_GUIDANCE,
+                false,
+            ),
+            (
+                blocked,
+                DiscordSkillState::Blocked,
+                "blocked",
+                DISCORD_BLOCKED_GUIDANCE,
+                false,
+            ),
+            (
+                active,
+                DiscordSkillState::Active,
+                "installed",
+                DISCORD_ACTIVE_GUIDANCE,
+                true,
+            ),
+        ] {
+            let view = build_skill_views(
+                registry(),
+                expected_state != DiscordSkillState::NotConfigured,
+                catalog_risk,
+                |id| id == "discord.send" && expected_state == DiscordSkillState::Active,
+                |_| false,
+            )
+            .into_iter()
+            .find(|skill| skill.id == "discord.send")
+            .unwrap();
+            let tool_is_offered = offer
+                .model_tools()
+                .iter()
+                .any(|tool| tool.name == "discord.send");
+            let serialized_view = serde_json::to_value(&view).unwrap();
+            let expected_state_json = match expected_state {
+                DiscordSkillState::NotConfigured => "not_configured",
+                DiscordSkillState::Active => "active",
+                DiscordSkillState::Blocked => "blocked",
+            };
+
+            assert_eq!(offer.discord_state, Some(expected_state));
+            assert_eq!(view.discord_state, Some(expected_state));
+            assert_eq!(serialized_view["discordState"], expected_state_json);
+            assert_eq!(view.status, expected_status);
+            assert_eq!(view.enabled, is_offered);
+            assert_eq!(tool_is_offered, is_offered);
+            assert!(offer.system_context().contains(expected_guidance));
+            assert!(offer.has_response_context());
+        }
     }
 
     #[test]

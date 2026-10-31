@@ -2016,6 +2016,11 @@ select:focus-visible {
   background: var(--color-warning-surface);
   color: var(--color-warning);
 }
+.skills-detail-status--blocked {
+  border-color: color-mix(in srgb, var(--color-warning) 40%, var(--color-border-subtle));
+  background: var(--color-warning-surface);
+  color: var(--color-warning);
+}
 .skills-family-status--unavailable,
 .skills-detail-status--unavailable {
   border-color: color-mix(in srgb, var(--color-danger) 40%, var(--color-border-subtle));
