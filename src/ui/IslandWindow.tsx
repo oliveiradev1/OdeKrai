@@ -1,4 +1,11 @@
-import { useEffect, useRef, useState, type CSSProperties, type FormEvent } from 'react';
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type FormEvent,
+} from 'react';
 import { emit, listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -325,7 +332,7 @@ export function IslandWindow() {
   };
   const state = snapshot.state;
   const petHitTestEnabled = settings.companion.freeMode && state !== 'expanded';
-  useEffect(() => {
+  useLayoutEffect(() => {
     let disposed = false;
     const sprite = document.querySelector<HTMLElement>('.island-mascot-renderer');
     const updateHitTest = () => {

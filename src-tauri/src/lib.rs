@@ -342,6 +342,13 @@ struct PetHitTestState {
     rect: Mutex<Option<pet_hit_test::SpriteRect>>,
     enabled: AtomicBool,
     last_ignore: Mutex<Option<bool>>,
+    changed: tokio::sync::Notify,
+}
+
+fn notify_pet_hit_test_changed(app: &tauri::AppHandle) {
+    if let Some(state) = app.try_state::<PetHitTestState>() {
+        state.changed.notify_one();
+    }
 }
 
 #[cfg(windows)]
@@ -349,8 +356,7 @@ fn cursor_position_physical() -> Option<(f64, f64)> {
     use windows_sys::Win32::{Foundation::POINT, UI::WindowsAndMessaging::GetCursorPos};
 
     let mut point = POINT { x: 0, y: 0 };
-    // A posição global do cursor é consultada somente para decidir a passagem
-    // de cliques da janela transparente do pet.
+    // SAFETY: `point` is a valid writable POINT for GetCursorPos; the API does not retain it.
     (unsafe { GetCursorPos(&mut point) } != 0).then_some((f64::from(point.x), f64::from(point.y)))
 }
 
@@ -361,50 +367,61 @@ fn cursor_position_physical() -> Option<(f64, f64)> {
 
 async fn monitor_pet_hit_test(app: tauri::AppHandle) {
     loop {
-        let mut active = false;
-        if let (Some(window), Some(state)) = (
-            app.get_webview_window("pet"),
-            app.try_state::<PetHitTestState>(),
-        ) {
-            let visible = window.is_visible().unwrap_or(false);
-            let enabled = state.enabled.load(Ordering::SeqCst);
-            active = cfg!(windows) && visible && enabled;
-            let ignore = if active {
-                let rect = state.rect.lock().ok().and_then(|guard| *guard);
-                match (
-                    rect,
-                    cursor_position_physical(),
-                    window.outer_position().ok(),
-                    window.scale_factor().ok(),
-                ) {
-                    (Some(rect), Some((cursor_x, cursor_y)), Some(position), Some(scale))
-                        if scale.is_finite() && scale > 0.0 =>
-                    {
-                        let x = (cursor_x - f64::from(position.x)) / scale;
-                        let y = (cursor_y - f64::from(position.y)) / scale;
-                        !pet_hit_test::contains(rect, x, y)
-                    }
-                    _ => cfg!(windows),
-                }
-            } else {
-                false
-            };
-            if let Ok(mut previous) = state.last_ignore.lock() {
-                if *previous != Some(ignore) && window.set_ignore_cursor_events(ignore).is_ok() {
-                    *previous = Some(ignore);
-                }
-            }
-        } else if let Some(state) = app.try_state::<PetHitTestState>() {
+        let Some(state) = app.try_state::<PetHitTestState>() else {
+            // The state is managed before setup starts this task; if that invariant changes,
+            // stop safely instead of creating an idle polling loop.
+            return;
+        };
+        let Some(window) = app.get_webview_window("pet") else {
             if let Ok(mut previous) = state.last_ignore.lock() {
                 *previous = None;
             }
+            state.changed.notified().await;
+            continue;
+        };
+
+        let visible = window.is_visible().unwrap_or(false);
+        let enabled = cfg!(windows) && state.enabled.load(Ordering::SeqCst);
+        if !visible || !enabled {
+            if let Ok(mut previous) = state.last_ignore.lock() {
+                if *previous != Some(false) && window.set_ignore_cursor_events(false).is_ok() {
+                    *previous = Some(false);
+                }
+            }
+            state.changed.notified().await;
+            continue;
         }
-        tokio::time::sleep(if active {
-            Duration::from_millis(16)
-        } else {
-            Duration::from_millis(200)
-        })
-        .await;
+
+        let rect = state.rect.lock().ok().and_then(|guard| *guard);
+        let mut cursor_in_hit_area = false;
+        let cursor = cursor_position_physical()
+            .zip(window.outer_position().ok())
+            .zip(window.scale_factor().ok())
+            .and_then(|(((cursor_x, cursor_y), position), scale)| {
+                if !scale.is_finite() || scale <= 0.0 {
+                    return None;
+                }
+                Some((
+                    (cursor_x - f64::from(position.x)) / scale,
+                    (cursor_y - f64::from(position.y)) / scale,
+                ))
+            });
+        if let (Some(rect), Some((x, y))) = (rect, cursor) {
+            cursor_in_hit_area = pet_hit_test::contains(rect, x, y);
+        }
+        let ignore = pet_hit_test::should_ignore_cursor_events(true, rect, cursor);
+        if let Ok(mut previous) = state.last_ignore.lock() {
+            if *previous != Some(ignore) && window.set_ignore_cursor_events(ignore).is_ok() {
+                *previous = Some(ignore);
+            }
+        }
+
+        let delay = pet_hit_test::poll_interval(true, true, cursor_in_hit_area)
+            .unwrap_or(Duration::from_millis(60));
+        tokio::select! {
+            _ = tokio::time::sleep(delay) => {},
+            _ = state.changed.notified() => {},
+        }
     }
 }
 
@@ -445,6 +462,7 @@ fn set_pet_hit_test(
             .map_err(|_| "Estado de cliques do pet indisponível.".to_string())? = None;
     }
     state.enabled.store(enabled, Ordering::SeqCst);
+    state.changed.notify_one();
     Ok(())
 }
 
@@ -875,6 +893,7 @@ async fn show_pet_quick_command(app: &tauri::AppHandle) -> Result<(), String> {
         window
             .show()
             .map_err(|_| "Não foi possível mostrar a ilha para o comando rápido.".to_string())?;
+        notify_pet_hit_test_changed(app);
         let _ = app.emit("pet-window-visibility", true);
     }
     let _ = app.emit("pet-quick-focus-request", ());
@@ -888,12 +907,14 @@ pub(crate) async fn toggle_pet_from_tray(app: &tauri::AppHandle) {
                 let _ = record_window_position(app, &window, position, true);
             }
             let _ = window.hide();
+            notify_pet_hit_test_changed(app);
             let _ = app.emit("pet-window-visibility", false);
         }
         _ => {
             if let Ok(window) = ensure_pet_window(app).await {
                 let _ = restore_pet_position(app, &window);
                 if window.show().is_ok() {
+                    notify_pet_hit_test_changed(app);
                     let _ = app.emit("pet-window-visibility", true);
                 }
             }
@@ -921,6 +942,7 @@ async fn set_pet_visible(
                 let (target, outside, scale) = pet_window_transition_positions(&window)?;
                 set_physical_position_expected(&window, &app, outside, scale)?;
                 window.show().map_err(|error| error.to_string())?;
+                notify_pet_hit_test_changed(&app);
                 let _ = app.emit("pet-window-visibility", true);
                 animate_pet_window(&app, &window, outside, target, scale).await?;
             }
@@ -938,6 +960,7 @@ async fn set_pet_visible(
         }
         VisibilityAction::Noop => {}
     }
+    notify_pet_hit_test_changed(&app);
     if !visible {
         let _ = app.emit("pet-window-visibility", false);
     }
