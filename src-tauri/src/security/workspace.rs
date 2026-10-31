@@ -463,20 +463,18 @@ fn execute_workspace_write(
     })();
     if let Err(error) = write_result {
         let cleanup = cleanup_file(&temporary, app, "gravação temporária");
-        if had_previous {
-            if fs::rename(&backup, &path).is_err() {
-                if let Some(app) = app {
-                    crate::diagnostics::log_agent_error(
-                        app,
-                        "workspace_cleanup",
-                        "operation=restaurar versão anterior; error_kind=RestoreFailed",
-                    );
-                }
-                return Err(append_cleanup_notice(
-                    format!("{error} A versão anterior também não pôde ser restaurada."),
-                    [cleanup.err()],
-                ));
+        if had_previous && fs::rename(&backup, &path).is_err() {
+            if let Some(app) = app {
+                crate::diagnostics::log_agent_error(
+                    app,
+                    "workspace_cleanup",
+                    "operation=restaurar versão anterior; error_kind=RestoreFailed",
+                );
             }
+            return Err(append_cleanup_notice(
+                format!("{error} A versão anterior também não pôde ser restaurada."),
+                [cleanup.err()],
+            ));
         }
         return Err(append_cleanup_notice(error, [cleanup.err()]));
     }

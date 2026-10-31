@@ -390,10 +390,8 @@ async fn monitor_pet_hit_test(app: tauri::AppHandle) {
                 false
             };
             if let Ok(mut previous) = state.last_ignore.lock() {
-                if *previous != Some(ignore) {
-                    if window.set_ignore_cursor_events(ignore).is_ok() {
-                        *previous = Some(ignore);
-                    }
+                if *previous != Some(ignore) && window.set_ignore_cursor_events(ignore).is_ok() {
+                    *previous = Some(ignore);
                 }
             }
         } else if let Some(state) = app.try_state::<PetHitTestState>() {
