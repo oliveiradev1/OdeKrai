@@ -167,26 +167,34 @@ pub(crate) fn create_xlsx(root: &Path, params: &Value) -> Result<String, String>
             .add_worksheet()
             .set_name(required_str(&sheet_data["name"], "Nome da aba")?)
             .map_err(|_| "Não foi possível preparar o nome da aba XLSX.".to_string())?;
-        for (column, header) in
-            required_array(&sheet_data["headers"], "Cabeçalhos")?.iter().enumerate()
+        for (column, header) in required_array(&sheet_data["headers"], "Cabeçalhos")?
+            .iter()
+            .enumerate()
         {
             worksheet
-                .write(column_to_row(0), column as u16, required_str(header, "Cabeçalho")?)
+                .write(
+                    column_to_row(0),
+                    column as u16,
+                    required_str(header, "Cabeçalho")?,
+                )
                 .map_err(|_| "Não foi possível escrever cabeçalho XLSX.".to_string())?;
         }
-        for (row_index, row) in required_array(&sheet_data["rows"], "Linhas")?.iter().enumerate() {
+        for (row_index, row) in required_array(&sheet_data["rows"], "Linhas")?
+            .iter()
+            .enumerate()
+        {
             for (column, cell) in required_array(row, "Linha")?.iter().enumerate() {
                 let row = column_to_row(row_index + 1);
                 let column = column as u16;
                 let result = match cell {
                     Value::String(value) => worksheet.write_string(row, column, value),
-                    Value::Number(value) => {
-                        worksheet.write_number(
-                            row,
-                            column,
-                            value.as_f64().ok_or("Número de célula inválido na planilha.")?,
-                        )
-                    }
+                    Value::Number(value) => worksheet.write_number(
+                        row,
+                        column,
+                        value
+                            .as_f64()
+                            .ok_or("Número de célula inválido na planilha.")?,
+                    ),
                     Value::Bool(value) => worksheet.write_boolean(row, column, *value),
                     Value::Object(_) => worksheet.write_formula(
                         row,

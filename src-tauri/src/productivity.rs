@@ -434,8 +434,7 @@ pub(crate) fn preview(skill_id: &str, params: &Value, root: &Path) -> Result<Str
         ));
     }
     if skill_id == "sheet.read" {
-        let target =
-            crate::security::workspace::safe_target(root, string_param(params, "path")?)?;
+        let target = crate::security::workspace::safe_target(root, string_param(params, "path")?)?;
         return Ok(format!(
             "Ler até {} linhas da planilha {}.",
             params["max_rows"],
@@ -611,7 +610,8 @@ pub(crate) fn execute(
         .and_then(|_| file.sync_data())
         .map_err(|_| "Não foi possível gravar o arquivo.".to_string())?;
     if skill_id == "calendar.create_event" {
-        let app = app.ok_or("O calendário padrão só pode ser aberto após aprovação no aplicativo.")?;
+        let app =
+            app.ok_or("O calendário padrão só pode ser aberto após aprovação no aplicativo.")?;
         app.opener()
             .open_path(path.to_string_lossy(), None::<&str>)
             .map_err(|_| {
@@ -996,8 +996,7 @@ mod tests {
 
     #[test]
     fn malformed_csv_delimiter_returns_an_error_instead_of_panicking() {
-        let error = create_csv(&json!({"delimiter":"invalid","headers":[],"rows":[]}))
-            .unwrap_err();
+        let error = create_csv(&json!({"delimiter":"invalid","headers":[],"rows":[]})).unwrap_err();
         assert!(error.contains("Separador CSV inválido"));
     }
 

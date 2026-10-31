@@ -803,9 +803,11 @@ mod tests {
 
     #[test]
     fn malformed_open_url_preview_returns_a_skill_error() {
-        assert!(preview("system.open_url", &serde_json::json!({}), Path::new("."))
-            .unwrap_err()
-            .contains("não correspondem à habilidade permitida"));
+        assert!(
+            preview("system.open_url", &serde_json::json!({}), Path::new("."))
+                .unwrap_err()
+                .contains("não correspondem à habilidade permitida")
+        );
     }
 
     #[test]
