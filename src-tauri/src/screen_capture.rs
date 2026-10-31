@@ -172,9 +172,13 @@ fn capture_virtual_screen() -> Result<Vec<u8>, String> {
         },
     };
 
+    // SAFETY: GetSystemMetrics receives only integer constants and no pointers.
     let left = unsafe { GetSystemMetrics(SM_XVIRTUALSCREEN) };
+    // SAFETY: GetSystemMetrics receives only integer constants and no pointers.
     let top = unsafe { GetSystemMetrics(SM_YVIRTUALSCREEN) };
+    // SAFETY: GetSystemMetrics receives only integer constants and no pointers.
     let width = unsafe { GetSystemMetrics(SM_CXVIRTUALSCREEN) };
+    // SAFETY: GetSystemMetrics receives only integer constants and no pointers.
     let height = unsafe { GetSystemMetrics(SM_CYVIRTUALSCREEN) };
     if width <= 0
         || height <= 0
@@ -185,6 +189,7 @@ fn capture_virtual_screen() -> Result<Vec<u8>, String> {
         return Err("A resolução da tela não está dentro do limite permitido.".into());
     }
 
+    // SAFETY: handles are checked before use, buffers/bitmap info remain live for each synchronous GDI call, and all acquired GDI resources are released on every exit path.
     unsafe {
         let screen = GetDC(null_mut());
         if screen.is_null() {

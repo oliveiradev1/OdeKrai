@@ -90,6 +90,7 @@ fn erase() -> Result<(), String> {
 fn random_url_token() -> Result<String, String> {
     let mut bytes = [0u8; 32];
     #[cfg(windows)]
+    // SAFETY: `bytes` is a valid writable 32-byte buffer and BCrypt uses the system RNG without a caller-owned handle.
     unsafe {
         use windows_sys::Win32::Security::Cryptography::{
             BCryptGenRandom, BCRYPT_USE_SYSTEM_PREFERRED_RNG,

@@ -550,8 +550,10 @@ fn system_information(app: &tauri::AppHandle) -> Result<String, String> {
         },
     };
 
+    // SAFETY: MEMORYSTATUSEX is a C ABI output struct whose zero state is valid before dwLength is set.
     let mut memory: MEMORYSTATUSEX = unsafe { std::mem::zeroed() };
     memory.dwLength = std::mem::size_of::<MEMORYSTATUSEX>() as u32;
+    // SAFETY: `memory` is a valid writable struct with dwLength initialized as required by the API.
     if unsafe { GlobalMemoryStatusEx(&mut memory) } == 0 {
         return Err("Não foi possível consultar a memória do sistema.".into());
     }
@@ -559,6 +561,7 @@ fn system_information(app: &tauri::AppHandle) -> Result<String, String> {
         "Sistema: Windows\nMemória física: {} total; {} disponível\nTempo ligado: {}\n",
         format_bytes(memory.ullTotalPhys),
         format_bytes(memory.ullAvailPhys),
+        // SAFETY: GetTickCount64 has no pointer arguments or caller-maintained invariants.
         format_duration(unsafe { GetTickCount64() } / 1000),
     );
 
@@ -585,6 +588,7 @@ fn system_information(app: &tauri::AppHandle) -> Result<String, String> {
         let mut available = 0_u64;
         let mut total = 0_u64;
         let mut free = 0_u64;
+        // SAFETY: `wide` is NUL-terminated and all output pointers reference live local integers.
         if unsafe { GetDiskFreeSpaceExW(wide.as_ptr(), &mut available, &mut total, &mut free) } != 0
         {
             output.push_str(&format!(
@@ -597,7 +601,9 @@ fn system_information(app: &tauri::AppHandle) -> Result<String, String> {
         }
     }
 
+    // SAFETY: SYSTEM_POWER_STATUS is a C ABI output struct with a valid zero initialization.
     let mut power: SYSTEM_POWER_STATUS = unsafe { std::mem::zeroed() };
+    // SAFETY: `power` is a live writable output struct for the duration of this call.
     if unsafe { GetSystemPowerStatus(&mut power) } != 0 {
         if power.BatteryFlag & 128 != 0 || power.BatteryLifePercent == 255 {
             output.push_str("Bateria: não detectada ou sem medição disponível\n");

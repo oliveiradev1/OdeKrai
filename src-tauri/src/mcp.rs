@@ -438,6 +438,7 @@ struct WindowsJob(windows_sys::Win32::Foundation::HANDLE);
 
 // A Job Object handle is process-wide; ownership is exclusive and Drop only closes it.
 #[cfg(windows)]
+// SAFETY: Windows handles are process-wide; this wrapper transfers exclusive ownership and only closes the handle in Drop.
 unsafe impl Send for WindowsJob {}
 #[cfg(windows)]
 impl WindowsJob {
@@ -454,12 +455,15 @@ impl WindowsJob {
                 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
             },
         };
+        // SAFETY: null security attributes and name request a private Job Object.
         let job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
         if job.is_null() {
             return Err("Não foi possível criar o Job Object.".into());
         }
+        // SAFETY: the Windows limits struct accepts zero initialization before its fields are set.
         let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { zeroed() };
         limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        // SAFETY: `job` is a valid owned handle and `limits` is a live input struct of the declared size.
         let ok = unsafe {
             SetInformationJobObject(
                 job,
@@ -468,8 +472,10 @@ impl WindowsJob {
                 size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
             )
         } != 0
+            // SAFETY: `job` remains valid and `child` is alive while its process handle is assigned.
             && unsafe { AssignProcessToJobObject(job, child.as_raw_handle() as HANDLE) } != 0;
         if !ok {
+            // SAFETY: this error branch owns the non-null Job Object handle and closes it once.
             unsafe { CloseHandle(job) };
             return Err("Não foi possível associar o servidor MCP ao Job Object.".into());
         }
@@ -479,6 +485,7 @@ impl WindowsJob {
 #[cfg(windows)]
 impl Drop for WindowsJob {
     fn drop(&mut self) {
+        // SAFETY: `WindowsJob` owns this handle exclusively and Drop runs once for that owner.
         unsafe { windows_sys::Win32::Foundation::CloseHandle(self.0) };
     }
 }

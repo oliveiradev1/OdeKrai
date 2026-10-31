@@ -54,6 +54,7 @@ fn windows_profile() -> Result<HardwareProfile, String> {
         ..Default::default()
     };
     let mut warnings = Vec::new();
+    // SAFETY: `memory` is initialized with its required size and remains writable for the API call.
     if unsafe { GlobalMemoryStatusEx(&mut memory) }.is_err() {
         warnings.push("Não foi possível consultar a memória RAM.".to_string());
     }
@@ -68,6 +69,7 @@ fn windows_profile() -> Result<HardwareProfile, String> {
         .chain(Some(0))
         .collect();
     let mut free = 0u64;
+    // SAFETY: `wide` is NUL-terminated and `free` is a live writable output; unused outputs are null.
     let disk_ok = unsafe {
         GetDiskFreeSpaceExW(
             wide.as_ptr(),
@@ -79,11 +81,14 @@ fn windows_profile() -> Result<HardwareProfile, String> {
     if disk_ok == 0 {
         warnings.push("Não foi possível consultar o espaço livre para modelos.".to_string());
     }
+    // SAFETY: CreateDXGIFactory1 has no caller pointers; the returned COM interface owns its lifetime.
     let factory: Option<IDXGIFactory1> = unsafe { CreateDXGIFactory1().ok() };
     let mut adapters = Vec::new();
     if let Some(factory) = factory {
         let mut index = 0;
+        // SAFETY: `factory` is a live COM interface; each returned adapter owns its COM reference.
         while let Ok(adapter) = unsafe { factory.EnumAdapters1(index) } {
+            // SAFETY: `adapter` is a live COM interface and GetDesc1 writes into its own output.
             if let Ok(desc) = unsafe { adapter.GetDesc1() } {
                 let name = String::from_utf16_lossy(&desc.Description)
                     .trim_end_matches('\0')

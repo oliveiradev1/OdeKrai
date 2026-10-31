@@ -448,11 +448,13 @@ pub(crate) struct NativeAdapter;
 #[cfg(windows)]
 impl SystemAdapter for NativeAdapter {
     fn volume(&mut self) -> Result<u8, String> {
+        // SAFETY: `on_audio_thread` supplies a live initialized COM endpoint for this synchronous call.
         on_audio_thread(|endpoint| unsafe { endpoint.GetMasterVolumeLevelScalar() })
             .map(|value| (value.clamp(0.0, 1.0) * 100.0).round() as u8)
     }
 
     fn set_volume(&mut self, value: u8) -> Result<(), String> {
+        // SAFETY: `on_audio_thread` supplies a live COM endpoint; scalar and GUID references live through the call.
         on_audio_thread(move |endpoint| unsafe {
             endpoint
                 .SetMasterVolumeLevelScalar(value as f32 / 100.0, &windows::core::GUID::zeroed())
@@ -460,6 +462,7 @@ impl SystemAdapter for NativeAdapter {
     }
 
     fn mute(&mut self, muted: bool) -> Result<(), String> {
+        // SAFETY: `on_audio_thread` supplies a live COM endpoint; the temporary GUID reference lives through the call.
         on_audio_thread(move |endpoint| unsafe {
             endpoint.SetMute(muted, &windows::core::GUID::zeroed())
         })
@@ -487,6 +490,7 @@ impl SystemAdapter for NativeAdapter {
             },
         };
         let inputs = [make(Default::default()), make(KEYEVENTF_KEYUP)];
+        // SAFETY: `inputs` contains two initialized INPUT values and remains alive for the synchronous call.
         let sent = unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
         if sent == inputs.len() as u32 {
             Ok(())
@@ -500,6 +504,7 @@ impl SystemAdapter for NativeAdapter {
             SystemParametersInfoW, SPI_GETDESKWALLPAPER,
         };
         let mut buffer = [0_u16; 260];
+        // SAFETY: `buffer` is writable and its length is passed to the API; its storage remains live during the call.
         let ok = unsafe {
             SystemParametersInfoW(
                 SPI_GETDESKWALLPAPER,
@@ -537,6 +542,7 @@ impl SystemAdapter for NativeAdapter {
         } else {
             std::ptr::null_mut()
         };
+        // SAFETY: `parameter` is null or points to a live NUL-terminated UTF-16 path for the synchronous call.
         let ok = unsafe {
             SystemParametersInfoW(
                 SPI_SETDESKWALLPAPER,
@@ -554,6 +560,7 @@ impl SystemAdapter for NativeAdapter {
 
     fn lock_workstation(&mut self) -> Result<(), String> {
         use windows_sys::Win32::System::Shutdown::LockWorkStation;
+        // SAFETY: LockWorkStation has no pointer arguments or caller-maintained invariants.
         if unsafe { LockWorkStation() } == 0 {
             Err("O Windows não aceitou a solicitação de bloqueio.".into())
         } else {
@@ -592,6 +599,7 @@ fn registry_theme_values() -> Result<ThemeSnapshot, String> {
             .encode_wide()
             .chain(Some(0))
             .collect();
+    // SAFETY: `path` is NUL-terminated; the registry key output is checked before use and closed before return.
     unsafe {
         let mut key = std::ptr::null_mut();
         if RegOpenKeyExW(
@@ -616,6 +624,8 @@ fn registry_theme_values() -> Result<ThemeSnapshot, String> {
 }
 
 #[cfg(windows)]
+/// # Safety
+/// SAFETY: `key` must be an open registry key that remains valid for the duration of the query.
 unsafe fn registry_read_value(
     key: windows_sys::Win32::System::Registry::HKEY,
     name: &str,
@@ -628,6 +638,7 @@ unsafe fn registry_read_value(
         .encode_wide()
         .chain(Some(0))
         .collect();
+    // SAFETY: caller guarantees the key remains open; `name` is NUL-terminated and buffers/size pointers are valid.
     let mut kind = 0;
     let mut size = 0;
     let status = RegQueryValueExW(
@@ -704,6 +715,7 @@ fn registry_apply_theme_snapshot(
             .encode_wide()
             .chain(Some(0))
             .collect();
+    // SAFETY: `path` is NUL-terminated; the registry key output is checked before use and closed before return.
     unsafe {
         let mut key = std::ptr::null_mut();
         if RegOpenKeyExW(
@@ -748,6 +760,8 @@ fn registry_apply_theme_snapshot(
 }
 
 #[cfg(windows)]
+/// # Safety
+/// SAFETY: `key` must be an open registry key that remains valid for the duration of the write or deletion.
 unsafe fn registry_write_or_delete(
     key: windows_sys::Win32::System::Registry::HKEY,
     name: &str,
@@ -762,6 +776,7 @@ unsafe fn registry_write_or_delete(
         .encode_wide()
         .chain(Some(0))
         .collect();
+    // SAFETY: caller guarantees the key remains open; all UTF-16 names and value buffers remain live for the API call.
     let status = if let Some(value) = value {
         RegSetValueExW(
             key,
@@ -801,6 +816,7 @@ fn notify_theme_change() {
         .chain(Some(0))
         .collect();
     let mut result = 0;
+    // SAFETY: `detail` is NUL-terminated UTF-16 and `result` is a live writable output for the synchronous call.
     unsafe {
         SendMessageTimeoutW(
             HWND_BROADCAST,
@@ -899,6 +915,7 @@ fn suspend_windows() -> Result<(), String> {
         .encode_wide()
         .chain(Some(0))
         .collect();
+    // SAFETY: every input name is NUL-terminated; token/LUID/privilege buffers are initialized and remain live; opened token is closed on all explicit exits.
     unsafe {
         let mut token = std::ptr::null_mut();
         if OpenProcessToken(
@@ -996,6 +1013,7 @@ where
                 },
             },
         };
+        // SAFETY: COM initialization is thread-local and this worker thread has not initialized its apartment yet.
         let initialized = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
         if initialized.0 < 0 {
             return Err("Não foi possível inicializar o controle de áudio do Windows.".to_string());
@@ -1003,15 +1021,19 @@ where
         struct ComApartment;
         impl Drop for ComApartment {
             fn drop(&mut self) {
+                // SAFETY: this guard exists only after successful CoInitializeEx on this worker thread.
                 unsafe { CoUninitialize() }
             }
         }
         let _apartment = ComApartment;
         let clsid = GUID::from_u128(0xBCDE0395_E52F_467C_8E3D_C4579291692E);
+        // SAFETY: the worker apartment is initialized and `clsid` is a valid IID/CLSID reference.
         let enumerator: IMMDeviceEnumerator = unsafe { CoCreateInstance(&clsid, None, CLSCTX_ALL) }
             .map_err(|_| "Não foi possível localizar o serviço de áudio do Windows.".to_string())?;
+        // SAFETY: `enumerator` is a live COM interface in the initialized apartment.
         let endpoint = unsafe { enumerator.GetDefaultAudioEndpoint(eRender, eMultimedia) }
             .map_err(|_| "Não há dispositivo de saída de áudio disponível.".to_string())?;
+        // SAFETY: `endpoint` is a live COM interface in the initialized apartment; the returned interface owns its COM reference.
         let control: IAudioEndpointVolume = unsafe { endpoint.Activate(CLSCTX_ALL, None) }
             .map_err(|_| {
                 "Não foi possível acessar o volume do dispositivo de áudio.".to_string()

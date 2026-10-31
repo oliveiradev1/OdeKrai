@@ -804,9 +804,13 @@ fn runtime_context() -> String {
             Time::{GetTimeZoneInformation, TIME_ZONE_ID_INVALID, TIME_ZONE_INFORMATION},
         };
 
+        // SAFETY: TIME data structs are C-compatible Windows output structs where all-zero is valid.
         let mut local = unsafe { std::mem::zeroed() };
+        // SAFETY: `local` is a live writable Windows struct for the duration of the call.
         unsafe { GetLocalTime(&mut local) };
+        // SAFETY: TIME_ZONE_INFORMATION is C-compatible and has a valid all-zero initial state.
         let mut zone: TIME_ZONE_INFORMATION = unsafe { std::mem::zeroed() };
+        // SAFETY: `zone` is a live writable Windows output struct for the duration of the call.
         let zone_id = unsafe { GetTimeZoneInformation(&mut zone) };
         let (bias, name) = if zone_id == TIME_ZONE_ID_INVALID {
             (0, "fuso desconhecido".to_string())

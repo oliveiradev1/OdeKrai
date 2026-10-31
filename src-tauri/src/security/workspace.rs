@@ -1620,6 +1620,7 @@ fn recycle_file(path: &Path) -> Result<(), String> {
         hNameMappings: std::ptr::null_mut(),
         lpszProgressTitle: std::ptr::null(),
     };
+    // SAFETY: SHFILEOPSTRUCTW and its double-NUL-terminated source buffer remain valid synchronously for this call.
     let result = unsafe { SHFileOperationW(&mut op) };
     if result != 0 || op.fAnyOperationsAborted != 0 || path.exists() {
         return Err("O Windows não confirmou o envio à Lixeira; o arquivo foi preservado.".into());
@@ -2042,7 +2043,9 @@ pub(super) fn has_multiple_links(path: &Path) -> bool {
         else {
             return true;
         };
+        // SAFETY: BY_HANDLE_FILE_INFORMATION is a C ABI output struct with a valid zero initialization.
         let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+        // SAFETY: `file` owns an open handle and `info` is a live writable output struct.
         (unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0)
             || info.nNumberOfLinks > 1
     }

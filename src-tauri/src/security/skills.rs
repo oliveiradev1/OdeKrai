@@ -1831,6 +1831,7 @@ fn validate_allowed_folder_path(
             root.push(b'\\' as u16);
         }
         root.push(0);
+        // SAFETY: `root` is a NUL-terminated UTF-16 drive root and remains alive for the call.
         if unsafe { GetDriveTypeW(root.as_ptr()) } != 3 {
             return Err("Unidades removíveis ou de rede não são permitidas.".into());
         }
@@ -1867,6 +1868,7 @@ fn is_fixed_drive(path: &std::path::Path) -> bool {
             root.push(b'\\' as u16);
         }
         root.push(0);
+        // SAFETY: `root` is a NUL-terminated UTF-16 drive root and remains alive for the call.
         unsafe { GetDriveTypeW(root.as_ptr()) == 3 }
     }
     #[cfg(not(windows))]

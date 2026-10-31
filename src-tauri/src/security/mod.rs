@@ -663,12 +663,14 @@ pub(crate) async fn confirm_native(message: String) -> bool {
 #[cfg(windows)]
 fn native_confirm_blocking(message: &str) -> bool {
     use std::ffi::c_void;
+    // SAFETY: the declaration mirrors the Win32 ABI; pointers are valid UTF-16 strings during the call.
     #[link(name = "user32")]
     unsafe extern "system" {
         fn MessageBoxW(hwnd: *mut c_void, text: *const u16, caption: *const u16, kind: u32) -> i32;
     }
     let text: Vec<u16> = format!("{message}\0").encode_utf16().collect();
     let caption: Vec<u16> = "Confirmação do OdeKrai\0".encode_utf16().collect();
+    // SAFETY: both buffers are NUL-terminated UTF-16 and remain alive until MessageBoxW returns.
     unsafe {
         MessageBoxW(
             std::ptr::null_mut(),

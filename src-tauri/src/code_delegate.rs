@@ -682,12 +682,15 @@ impl WindowsJob {
                 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
             },
         };
+        // SAFETY: null security attributes and name are documented inputs for a private Job Object.
         let job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
         if job.is_null() {
             return Err("Não foi possível criar o Job Object.".into());
         }
+        // SAFETY: the Windows Job Object limits struct accepts zero initialization before fields are set.
         let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { zeroed() };
         limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        // SAFETY: `job` is a non-null handle created above and `limits` is a live, sized input struct.
         let configured = unsafe {
             SetInformationJobObject(
                 job,
@@ -696,9 +699,11 @@ impl WindowsJob {
                 size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
             )
         };
+        // SAFETY: `job` is still owned here; `child` is live and exposes its process handle.
         let assigned = configured != 0
             && unsafe { AssignProcessToJobObject(job, child.as_raw_handle() as HANDLE) } != 0;
         if !assigned {
+            // SAFETY: this failure branch owns the valid Job Object handle and closes it once.
             unsafe { CloseHandle(job) };
             return Err("Não foi possível associar a ferramenta ao Job Object.".into());
         }
@@ -709,6 +714,7 @@ impl WindowsJob {
 #[cfg(windows)]
 impl Drop for WindowsJob {
     fn drop(&mut self) {
+        // SAFETY: `WindowsJob` owns this handle exclusively and Drop runs once for that owner.
         unsafe { windows_sys::Win32::Foundation::CloseHandle(self.0) };
     }
 }
