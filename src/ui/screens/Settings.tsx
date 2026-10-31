@@ -6,6 +6,11 @@ import { moveFallbackProvider, setFallbackProviderIds } from '../../core/provide
 import { PageHeader, Toggle } from '../DesignSystem';
 import { CodeDelegationSettings } from '../CodeDelegationSettings';
 import { localBrazilianPortugueseVoices, type LocalSpeechVoice } from '../../core/speech';
+import { openUrl } from '@tauri-apps/plugin-opener';
+import {
+  MICROSOFT_SPEECH_SETTINGS_URL,
+  openMicrosoftSupportLink,
+} from '../../core/microsoft-support-link';
 import type { PerformanceModeView } from '../usePerformanceMode';
 
 type ProviderUsage = {
@@ -46,6 +51,7 @@ export function SettingsScreen({
   });
   const [agentLimitsError, setAgentLimitsError] = useState('');
   const [speechVoices, setSpeechVoices] = useState<LocalSpeechVoice[]>([]);
+  const [speechHelpError, setSpeechHelpError] = useState('');
   const totalTokensToday = usage.reduce(
     (total, item) => total + item.todayInput + item.todayOutput,
     0,
@@ -294,15 +300,21 @@ export function SettingsScreen({
             Hora e idioma → Idioma e região → opções do Português (Brasil) e instale o recurso
             “Conversão de texto em fala”. Depois, feche e abra o OdeKrai.{' '}
             <a
-              href="https://support.microsoft.com/pt-br/windows/hardware/input-devices/manage-the-language-and-keyboard-input-layout-settings-in-windows"
-              target="_blank"
-              rel="noreferrer"
+              href={MICROSOFT_SPEECH_SETTINGS_URL}
+              onClick={(event) => {
+                event.preventDefault();
+                void openMicrosoftSupportLink(MICROSOFT_SPEECH_SETTINGS_URL, openUrl).then(
+                  () => setSpeechHelpError(''),
+                  () => setSpeechHelpError('Não foi possível abrir as instruções da Microsoft.'),
+                );
+              }}
             >
               Instruções da Microsoft
             </a>
             .
           </p>
         )}
+        {speechHelpError && <p role="alert">{speechHelpError}</p>}
         <div className="preference-row">
           <label htmlFor="speech-rate">
             <strong>Velocidade</strong>
