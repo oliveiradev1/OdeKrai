@@ -239,7 +239,7 @@ mod tests {
             .iter()
             .flat_map(|category| &category.services)
             .collect::<Vec<_>>();
-        assert_eq!(services.len(), 8);
+        assert_eq!(services.len(), 7);
         for service in services {
             let url = url::Url::parse(&service.url).unwrap();
             assert_eq!(url.scheme(), "https");

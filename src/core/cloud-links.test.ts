@@ -31,7 +31,7 @@ describe('links da Nuvem', () => {
 
   it('mantém cada serviço HTTPS dentro da lista única de domínios autorizados', () => {
     const services = CLOUD_LINK_CATEGORIES.flatMap((category) => category.services);
-    expect(services).toHaveLength(8);
+    expect(services).toHaveLength(7);
     for (const service of services) {
       const url = new URL(service.url);
       expect(url.protocol).toBe('https:');

@@ -2,7 +2,6 @@
   "allowedDomains": [
     "magalu.cloud",
     "www.locaweb.com.br",
-    "uolhost.uol.com.br",
     "aws.amazon.com",
     "cloud.google.com",
     "azure.microsoft.com",
@@ -14,8 +13,7 @@
       "title": "Nuvens brasileiras",
       "services": [
         { "name": "Magalu Cloud", "url": "https://magalu.cloud/" },
-        { "name": "Locaweb", "url": "https://www.locaweb.com.br/cloud/" },
-        { "name": "UOL Host", "url": "https://uolhost.uol.com.br/cloud-computing" }
+        { "name": "Locaweb", "url": "https://www.locaweb.com.br/cloud/" }
       ]
     },
     {
