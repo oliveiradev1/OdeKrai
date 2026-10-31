@@ -21,6 +21,7 @@ import {
   type ProviderDirectoryTab,
 } from '../core/provider-directory';
 import { PageHeader } from './DesignSystem';
+import { useConfirmation } from './ConfirmationProvider';
 import { Icon } from './Icon';
 import {
   activeProviderSettings,
@@ -63,6 +64,7 @@ export function ProviderCatalog({
   initialTab,
   onboardingMode = false,
 }: Props) {
+  const requestConfirmation = useConfirmation();
   const selected = AI_PROVIDERS.find((provider) => provider.id === selectedId) ?? AI_PROVIDERS[0];
   const catalogEntry = providerCatalogEntry(selected.id);
   const active = activeProviderSettings(settings);
@@ -413,7 +415,18 @@ export function ProviderCatalog({
     const provider = AI_PROVIDERS.find((item) => item.id === providerId);
     await confirmProviderCredentialRemoval(
       provider?.name ?? providerId,
-      (message) => window.confirm(message),
+      async (message) => {
+        try {
+          return await requestConfirmation({
+            title: 'Remover credencial?',
+            message,
+            destructive: true,
+          });
+        } catch {
+          setNotice('Não foi possível mostrar a confirmação. A credencial não foi removida.');
+          return false;
+        }
+      },
       async () => {
         setBusy(true);
         try {

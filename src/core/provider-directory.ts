@@ -146,10 +146,10 @@ export async function removeProviderCredential(
 
 export async function confirmProviderCredentialRemoval(
   providerName: string,
-  confirm: (message: string) => boolean,
+  confirm: (message: string) => Promise<boolean>,
   remove: () => Promise<void>,
 ): Promise<boolean> {
-  if (!confirm(`Remover a credencial salva de ${providerName}?`)) return false;
+  if (!(await confirm(`Remover a credencial salva de ${providerName}?`))) return false;
   await remove();
   return true;
 }

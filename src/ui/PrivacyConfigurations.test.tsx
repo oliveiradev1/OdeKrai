@@ -3,11 +3,14 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { defaultSettings } from '../core/settings';
 import { PrivacyConfigurationSummary, PrivacyConfigurations } from './PrivacyConfigurations';
+import { ConfirmationProvider } from './ConfirmationProvider';
 
 describe('configurações de privacidade', () => {
   it('mantém os controles em Privacidade e o resumo de Habilidades somente para leitura', () => {
     const settingsMarkup = renderToStaticMarkup(
-      <PrivacyConfigurations settings={defaultSettings} update={() => undefined} />,
+      <ConfirmationProvider>
+        <PrivacyConfigurations settings={defaultSettings} update={() => undefined} />
+      </ConfirmationProvider>,
     );
     const summaryMarkup = renderToStaticMarkup(
       <PrivacyConfigurationSummary onOpen={() => undefined} />,

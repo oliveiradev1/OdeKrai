@@ -129,6 +129,7 @@ import { SettingsModal } from './SettingsModal';
 import { UpdateAvailableBanner, type UpdateCheckResult } from './UpdateAvailableBanner';
 import { FirstUseAssistant, type FirstUseStepContent } from './FirstUseAssistant';
 import { ReleaseNotesModal } from './ReleaseNotesModal';
+import { useConfirmation } from './ConfirmationProvider';
 import { resolveAgentReason, resolveConfigurationReason } from '../core/navigation';
 import { ScreenErrorBoundary } from './ScreenErrorBoundary';
 import { ResizeHandle } from './ResizeHandle';
@@ -176,6 +177,7 @@ export function App() {
 }
 
 function MainApp() {
+  const confirm = useConfirmation();
   const [hadSettingsAtStartup] = useState(() => {
     try {
       return Boolean(
@@ -1540,7 +1542,20 @@ function MainApp() {
   }
 
   async function deleteConversation(id: string) {
-    if (busy || !window.confirm('Apagar esta conversa e suas mensagens?')) return;
+    if (busy) return;
+    try {
+      if (
+        !(await confirm({
+          title: 'Apagar conversa?',
+          message: 'Apagar esta conversa e suas mensagens?',
+          destructive: true,
+        }))
+      )
+        return;
+    } catch {
+      setToast('Não foi possível mostrar a confirmação. A conversa não foi apagada.');
+      return;
+    }
     try {
       await invoke('delete_conversation', { conversationId: id });
       setConversations((items) => items.filter((item) => item.id !== id));
@@ -1593,9 +1608,16 @@ function MainApp() {
     if (!url || !domain) return;
     const needsConfirmation = !settings.trustedLinkDomains.includes(domain);
     if (needsConfirmation) {
-      const accepted = window.confirm(
-        `Este link abrirá ${domain} no navegador padrão.\n\n${url}\n\nAbrir e lembrar este domínio?`,
-      );
+      let accepted = false;
+      try {
+        accepted = await confirm({
+          title: 'Abrir link externo?',
+          message: `Este link abrirá ${domain} no navegador padrão.\n\n${url}\n\nAbrir e lembrar este domínio?`,
+        });
+      } catch {
+        setToast('Não foi possível mostrar a confirmação. O link não foi aberto.');
+        return;
+      }
       if (!accepted) return;
     }
     try {
@@ -2006,9 +2028,22 @@ function MainApp() {
                     'undo_agent_action',
                     { descriptor, confirmModified },
                   )
-                    .then((result) => {
+                    .then(async (result) => {
                       if (result.confirmationRequired) {
-                        if (window.confirm(result.message)) requestUndo(true);
+                        try {
+                          if (
+                            await confirm({
+                              title: 'Confirmar restauração?',
+                              message: result.message,
+                              destructive: true,
+                            })
+                          )
+                            requestUndo(true);
+                        } catch {
+                          setToast(
+                            'Não foi possível mostrar a confirmação. O arquivo não foi restaurado.',
+                          );
+                        }
                         return;
                       }
                       setAgentActionCards((items) =>
@@ -2209,9 +2244,22 @@ function MainApp() {
                   'undo_agent_action',
                   { descriptor: action.undoDescriptor, confirmModified },
                 )
-                  .then((result) => {
+                  .then(async (result) => {
                     if (result.confirmationRequired) {
-                      if (window.confirm(result.message)) requestUndo(true);
+                      try {
+                        if (
+                          await confirm({
+                            title: 'Confirmar restauração?',
+                            message: result.message,
+                            destructive: true,
+                          })
+                        )
+                          requestUndo(true);
+                      } catch {
+                        setToast(
+                          'Não foi possível mostrar a confirmação. O arquivo não foi restaurado.',
+                        );
+                      }
                       return;
                     }
                     setAgentActionCards((items) =>

@@ -4,6 +4,7 @@ import { open, save as saveDialog } from '@tauri-apps/plugin-dialog';
 import { PageHeader } from '../DesignSystem';
 import { PetSprite } from '../PetSprite';
 import type { PetAnimationState } from '../../core/pets';
+import { useConfirmation } from '../ConfirmationProvider';
 
 type CalendarEvent = {
   id: string;
@@ -54,6 +55,7 @@ export function CalendarScreen({
   reduceMotion?: boolean;
   reduceMascot?: boolean;
 }) {
+  const requestConfirmation = useConfirmation();
   const [month, setMonth] = useState(() => new Date());
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -129,7 +131,18 @@ export function CalendarScreen({
     }
   }
   async function remove(event: CalendarEvent) {
-    if (!window.confirm(`Apagar “${event.title}” da Agenda local?`)) return;
+    let accepted = false;
+    try {
+      accepted = await requestConfirmation({
+        title: 'Apagar evento?',
+        message: `Apagar “${event.title}” da Agenda local?`,
+        destructive: true,
+      });
+    } catch {
+      setError('Não foi possível mostrar a confirmação. O evento não foi apagado.');
+      return;
+    }
+    if (!accepted) return;
     try {
       await invoke('calendar_delete_event', { id: event.id.split('@')[0] });
       setMessage('Evento apagado da Agenda local.');

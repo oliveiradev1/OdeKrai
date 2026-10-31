@@ -3144,6 +3144,25 @@ select:focus-visible {
   overscroll-behavior: contain;
   padding: 22px;
 }
+.modal-surface:has(.confirmation-dialog-content) {
+  width: min(440px, calc(100vw - 32px));
+  height: auto;
+  max-height: calc(100vh - 48px);
+}
+.confirmation-dialog-content {
+  display: grid;
+  gap: 22px;
+}
+.confirmation-dialog-message {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.confirmation-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
 @keyframes modal-enter {
   from {
     opacity: 0;

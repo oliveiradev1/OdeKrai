@@ -7,6 +7,7 @@ import { normalizeTrustedLinkDomain } from '../core/markdown';
 import { Button, SelectInput } from './DesignSystem';
 import { Icon } from './Icon';
 import { DiscordWebhooksSettings } from './DiscordWebhooksSettings';
+import { useConfirmation } from './ConfirmationProvider';
 
 type Folder = { path: string; access: 'read_only' | 'read_write'; workspace: boolean };
 type AllowedApp = { id: string; name: string; path: string };
@@ -50,6 +51,7 @@ export function PrivacyConfigurations({
   settings: AppSettings;
   update: (settings: AppSettings) => void;
 }) {
+  const requestConfirmation = useConfirmation();
   const [folders, setFolders] = useState<Folder[]>([]);
   const [apps, setApps] = useState<AllowedApp[]>([]);
   const [access, setAccess] = useState<Folder['access']>('read_only');
@@ -80,6 +82,15 @@ export function PrivacyConfigurations({
       setError(String(cause));
     }
   }, []);
+
+  async function confirmAction(request: Parameters<typeof requestConfirmation>[0]) {
+    try {
+      return await requestConfirmation(request);
+    } catch {
+      setError('Não foi possível mostrar a confirmação. A ação não foi realizada.');
+      return false;
+    }
+  }
 
   useEffect(() => {
     void refresh();
@@ -232,9 +243,11 @@ export function PrivacyConfigurations({
       .map((part) => `"${part.replaceAll('"', '\\"')}"`)
       .join(' ');
     if (
-      !window.confirm(
-        `Este programa será executado no seu computador com os privilégios da sua conta.\n\nComando completo:\n${command}\n\nDeseja continuar?`,
-      )
+      !(await confirmAction({
+        title: 'Executar programa local?',
+        message: `Este programa será executado no seu computador com os privilégios da sua conta.\n\nComando completo:\n${command}\n\nDeseja continuar?`,
+        destructive: true,
+      }))
     )
       return;
     setServerStates((states) => ({ ...states, [server.id]: { label: 'Conectando…' } }));
@@ -539,14 +552,19 @@ export function PrivacyConfigurations({
                       variant="ghost"
                       disabled={busy}
                       onClick={() => {
-                        if (
-                          window.confirm(
-                            `Remover ${server.name} e apagar suas credenciais do Gerenciador de Credenciais?`,
+                        void (async () => {
+                          if (
+                            !(await confirmAction({
+                              title: 'Remover servidor?',
+                              message: `Remover ${server.name} e apagar suas credenciais do Gerenciador de Credenciais?`,
+                              destructive: true,
+                            }))
                           )
-                        )
-                          void invoke('mcp_remove_server', { serverId: server.id })
+                            return;
+                          await invoke('mcp_remove_server', { serverId: server.id })
                             .then(refresh)
                             .catch((cause) => setError(String(cause)));
+                        })();
                       }}
                     >
                       Remover
