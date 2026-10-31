@@ -311,7 +311,7 @@ mod tests {
     #[test]
     fn malformed_memory_preview_returns_a_validation_error() {
         let error = preview("memory.propose_note", &json!({})).unwrap_err();
-        assert!(error.contains("Parâmetros de memória inválidos"));
+        assert!(error.contains("não correspondem ao esquema permitido"));
     }
 
     #[test]

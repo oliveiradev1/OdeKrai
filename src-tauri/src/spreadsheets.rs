@@ -400,7 +400,7 @@ mod tests {
     fn malformed_xlsx_input_returns_a_validation_error() {
         let root = temp_root();
         let error = create_xlsx(&root, &json!({})).unwrap_err();
-        assert!(error.contains("Parâmetros da planilha inválidos"));
+        assert!(error.contains("não correspondem ao esquema permitido"));
         let _ = fs::remove_dir_all(root);
     }
 }
