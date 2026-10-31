@@ -15,25 +15,83 @@ function compareVersions(left, right) {
 }
 
 function parseReleaseNote(filename, source) {
-  const heading = source.match(/^# v(\d+\.\d+\.\d+) — (.+)$/m);
+  const heading = source.match(/^# v(\d+\.\d+\.\d+)(?: — |: )(.+)$/m);
   const expectedVersion = filename.match(/^v(\d+\.\d+\.\d+)\.md$/)?.[1];
   if (!expectedVersion || !heading || heading[1] !== expectedVersion || !heading[2].trim()) {
     throw new Error(
-      `${filename}: título deve seguir “# vX.Y.Z — Título” e corresponder ao nome do arquivo.`,
+      `${filename}: título deve seguir “# vX.Y.Z — Título” ou “# vX.Y.Z: Título” e corresponder ao nome do arquivo.`,
     );
   }
 
+  const plainSectionNames = [
+    'Importante antes de instalar',
+    'Novidades',
+    'Correções',
+    'Limitações conhecidas',
+    'Verificação',
+  ];
+  const plainSectionPattern = new RegExp(`^(${plainSectionNames.join('|')})\\s*$`, 'gm');
+  const plainSectionMatches = [...source.matchAll(plainSectionPattern)];
+  const plainFormat = plainSectionMatches.length > 0;
   const date = source.match(
     /^Data do (?:marco|commit de fechamento): (\d{4}-\d{2}-\d{2})\.$/m,
   )?.[1];
   const parsedDate = date ? new Date(`${date}T00:00:00Z`) : null;
-  if (
-    !date ||
-    !parsedDate ||
-    Number.isNaN(parsedDate.valueOf()) ||
-    parsedDate.toISOString().slice(0, 10) !== date
-  ) {
-    throw new Error(`${filename}: informe “Data do marco: AAAA-MM-DD.”.`);
+  if (!plainFormat) {
+    if (
+      !date ||
+      !parsedDate ||
+      Number.isNaN(parsedDate.valueOf()) ||
+      parsedDate.toISOString().slice(0, 10) !== date
+    ) {
+      throw new Error(`${filename}: informe “Data do marco: AAAA-MM-DD.”.`);
+    }
+  }
+
+  if (plainFormat) {
+    const summaryEnd = plainSectionMatches[0].index;
+    const summary = source
+      .slice(heading.index + heading[0].length, summaryEnd)
+      .trim()
+      .replace(/\s+/g, ' ');
+    if (!summary) throw new Error(`${filename}: inclua um resumo após o título.`);
+
+    const sections = new Map();
+    for (let index = 0; index < plainSectionMatches.length; index += 1) {
+      const current = plainSectionMatches[index];
+      const start = current.index + current[0].length;
+      const end = plainSectionMatches[index + 1]?.index ?? source.length;
+      sections.set(current[1], source.slice(start, end).trim());
+    }
+
+    const changes = [];
+    for (const sectionName of ['Novidades', 'Correções']) {
+      const content = sections.get(sectionName);
+      if (!content) continue;
+      for (const line of content.split(/\r?\n/)) {
+        if (!line.trim()) continue;
+        if (!/^[-*]\s+/.test(line)) {
+          throw new Error(
+            `${filename}: itens de “${sectionName}” devem ser listas com marcadores.`,
+          );
+        }
+        const change = line.replace(/^[-*]\s+/, '').trim();
+        if (!change)
+          throw new Error(`${filename}: itens de “${sectionName}” não podem estar vazios.`);
+        changes.push(change);
+      }
+    }
+    if (changes.length === 0) {
+      throw new Error(`${filename}: inclua mudanças em “Novidades” ou “Correções”.`);
+    }
+
+    return {
+      version: heading[1] ?? '',
+      title: heading[2]?.trim() ?? '',
+      date: '',
+      summary,
+      changes: changes.map((change) => change ?? ''),
+    };
   }
 
   const sections = new Map();

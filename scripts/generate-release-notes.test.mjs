@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -109,5 +109,27 @@ describe('manifesto de notas de versão', () => {
     await expect(buildReleaseNotes(temporaryDirectory, '2.0.0')).rejects.toThrow(
       'Nota docs/releases/v2.0.0.md não encontrada',
     );
+  });
+
+  it('lê as notas v0.16.0 sem exigir alterações no texto fornecido', async () => {
+    temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), 'odekrai-release-notes-'));
+    const note = await readFile(new URL('../docs/releases/v0.16.0.md', import.meta.url), 'utf8');
+    await writeFile(path.join(temporaryDirectory, 'v0.16.0.md'), note);
+
+    const manifest = await buildReleaseNotes(temporaryDirectory, '0.16.0');
+    expect(manifest.releases).toEqual([
+      {
+        version: '0.16.0',
+        title: 'navegação nova, habilidades, Nuvem (ShardCloud) e aviso de atualização',
+        date: '',
+        summary:
+          'Esta versão reorganiza o OdeKrai e traz as primeiras habilidades de agente que usam serviços externos.',
+        changes: expect.arrayContaining([
+          'Navegação: sidebar com Início, Conversas, Agenda, Habilidades e Conectores de IA. Perfil no rodapé e Configurações em janela com busca.',
+          'Campos de token ficam em formulário, sem sugestão de salvar pelo navegador.',
+        ]),
+      },
+    ]);
+    expect(manifest.releases[0].changes).toHaveLength(12);
   });
 });
