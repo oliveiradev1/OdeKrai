@@ -918,15 +918,21 @@ mod tests {
                     .received_tools
                     .iter()
                     .any(|name| name == "discord.send");
-                let answer = if self.received_system.contains("Estado do Discord: não configurado")
+                let answer = if self
+                    .received_system
+                    .contains("Estado do Discord: não configurado")
                     && !has_discord_tool
                 {
                     "Falta cadastrar um webhook em Privacidade e permissões > Destinos do Discord."
-                } else if self.received_system.contains("Estado do Discord: configurado e ativo")
+                } else if self
+                    .received_system
+                    .contains("Estado do Discord: configurado e ativo")
                     && has_discord_tool
                 {
                     "A habilidade do Discord está ativa. Cada envio exige aprovação na janela nativa."
-                } else if self.received_system.contains("Estado do Discord: bloqueado")
+                } else if self
+                    .received_system
+                    .contains("Estado do Discord: bloqueado")
                     && !has_discord_tool
                 {
                     "A habilidade do Discord está desativada em Habilidades > Mensagens."
@@ -1018,7 +1024,9 @@ mod tests {
             .received_tools
             .iter()
             .any(|name| name == "discord.send"));
-        assert!(provider.received_system.contains("Cada envio exige aprovação"));
+        assert!(provider
+            .received_system
+            .contains("Cada envio exige aprovação"));
         assert!(result.contains("Cada envio exige aprovação na janela nativa"));
     }
 
@@ -1055,7 +1063,9 @@ mod tests {
             .received_tools
             .iter()
             .any(|name| name == "discord.send"));
-        assert!(provider.received_system.contains("Estado do Discord: bloqueado"));
+        assert!(provider
+            .received_system
+            .contains("Estado do Discord: bloqueado"));
         assert!(result.contains("desativada em Habilidades > Mensagens"));
     }
 

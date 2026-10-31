@@ -1126,9 +1126,8 @@ impl SkillTurnOffer {
         discord_configured: bool,
     ) -> Self {
         let has_discord_skill = skills.iter().any(|skill| skill.id == "discord.send");
-        let discord_state = has_discord_skill.then(|| {
-            discord_skill_state(enabled.contains("discord.send"), discord_configured)
-        });
+        let discord_state = has_discord_skill
+            .then(|| discord_skill_state(enabled.contains("discord.send"), discord_configured));
         let entries = skills
             .into_iter()
             .map(|skill| {
@@ -2403,11 +2402,8 @@ mod tests {
             &std::collections::HashSet::from(["discord.send".to_string()]),
             false,
         );
-        let blocked = SkillTurnOffer::from_registry(
-            skills.clone(),
-            &std::collections::HashSet::new(),
-            true,
-        );
+        let blocked =
+            SkillTurnOffer::from_registry(skills.clone(), &std::collections::HashSet::new(), true);
         let active = SkillTurnOffer::from_registry(
             skills,
             &std::collections::HashSet::from(["discord.send".to_string()]),
