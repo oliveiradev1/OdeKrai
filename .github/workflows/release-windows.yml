@@ -42,6 +42,10 @@ jobs:
       - name: Instalar dependências JavaScript
         run: npm ci
 
+      - name: Definir identificação do build
+        shell: pwsh
+        run: node scripts/set-build-metadata.mjs $env:GITHUB_SHA $env:GITHUB_ENV
+
       - name: Validar versão da tag e configuração de release
         shell: pwsh
         run: |
