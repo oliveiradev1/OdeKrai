@@ -7,6 +7,18 @@ const MAX_INPUT_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_OUTPUT_BYTES: usize = 32 * 1024 * 1024;
 const MAX_CELLS: usize = 250_000;
 
+fn required_str<'a>(value: &'a Value, label: &str) -> Result<&'a str, String> {
+    value
+        .as_str()
+        .ok_or_else(|| format!("{label} inválido na planilha."))
+}
+
+fn required_array<'a>(value: &'a Value, label: &str) -> Result<&'a Vec<Value>, String> {
+    value
+        .as_array()
+        .ok_or_else(|| format!("{label} inválido na planilha."))
+}
+
 fn object_keys(value: &Value, allowed: &[&str], required: &[&str]) -> Result<(), String> {
     let object = value
         .as_object()
@@ -144,38 +156,44 @@ pub(crate) fn validate_create(params: &Value) -> Result<(), String> {
 
 pub(crate) fn create_xlsx(root: &Path, params: &Value) -> Result<String, String> {
     validate_create(params)?;
-    let raw = params["path"].as_str().unwrap();
+    let raw = required_str(&params["path"], "Caminho")?;
     let path = crate::security::workspace::create_safe_target(root, raw)?;
     if path.exists() {
         return Err("O arquivo de destino já existe; a criação foi recusada.".into());
     }
     let mut workbook = Workbook::new();
-    for sheet_data in params["sheets"].as_array().unwrap() {
+    for sheet_data in required_array(&params["sheets"], "Lista de abas")? {
         let worksheet = workbook
             .add_worksheet()
-            .set_name(sheet_data["name"].as_str().unwrap())
+            .set_name(required_str(&sheet_data["name"], "Nome da aba")?)
             .map_err(|_| "Não foi possível preparar o nome da aba XLSX.".to_string())?;
-        for (column, header) in sheet_data["headers"].as_array().unwrap().iter().enumerate() {
+        for (column, header) in
+            required_array(&sheet_data["headers"], "Cabeçalhos")?.iter().enumerate()
+        {
             worksheet
-                .write(column_to_row(0), column as u16, header.as_str().unwrap())
+                .write(column_to_row(0), column as u16, required_str(header, "Cabeçalho")?)
                 .map_err(|_| "Não foi possível escrever cabeçalho XLSX.".to_string())?;
         }
-        for (row_index, row) in sheet_data["rows"].as_array().unwrap().iter().enumerate() {
-            for (column, cell) in row.as_array().unwrap().iter().enumerate() {
+        for (row_index, row) in required_array(&sheet_data["rows"], "Linhas")?.iter().enumerate() {
+            for (column, cell) in required_array(row, "Linha")?.iter().enumerate() {
                 let row = column_to_row(row_index + 1);
                 let column = column as u16;
                 let result = match cell {
                     Value::String(value) => worksheet.write_string(row, column, value),
                     Value::Number(value) => {
-                        worksheet.write_number(row, column, value.as_f64().unwrap())
+                        worksheet.write_number(
+                            row,
+                            column,
+                            value.as_f64().ok_or("Número de célula inválido na planilha.")?,
+                        )
                     }
                     Value::Bool(value) => worksheet.write_boolean(row, column, *value),
                     Value::Object(_) => worksheet.write_formula(
                         row,
                         column,
-                        Formula::new(cell["formula"].as_str().unwrap()),
+                        Formula::new(required_str(&cell["formula"], "Fórmula")?),
                     ),
-                    _ => unreachable!("validate_create rejeita tipos não suportados"),
+                    _ => return Err("Tipo de célula inválido na planilha.".into()),
                 };
                 result.map_err(|_| "Não foi possível escrever célula XLSX.".to_string())?;
             }
@@ -367,6 +385,14 @@ mod tests {
             json!({"path":"existing.xlsx","sheets":[{"name":"Dados","headers":["x"],"rows":[]}]});
         assert!(create_xlsx(&root, &existing).is_err());
         assert_eq!(fs::read(root.join("existing.xlsx")).unwrap(), b"keep");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn malformed_xlsx_input_returns_a_validation_error() {
+        let root = temp_root();
+        let error = create_xlsx(&root, &json!({})).unwrap_err();
+        assert!(error.contains("Parâmetros da planilha inválidos"));
         let _ = fs::remove_dir_all(root);
     }
 }

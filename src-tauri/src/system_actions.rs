@@ -4,6 +4,12 @@ use std::path::{Path, PathBuf};
 use tauri_plugin_opener::OpenerExt;
 use url::Url;
 
+fn string_param<'a>(params: &'a Value, key: &str) -> Result<&'a str, String> {
+    params[key]
+        .as_str()
+        .ok_or_else(|| format!("O parâmetro {key} da habilidade do sistema é inválido."))
+}
+
 const SETTINGS_PAGES: &[(&str, &str)] = &[
     ("som", "ms-settings:sound"),
     ("tela", "ms-settings:display"),
@@ -173,7 +179,7 @@ pub(crate) fn validate(skill_id: &str, params: &Value) -> Result<(), String> {
         }
         "clipboard.read" => {}
         "system.info" => {}
-        _ => unreachable!(),
+        _ => return Err("Habilidade do sistema desconhecida.".into()),
     }
     Ok(())
 }
@@ -198,7 +204,7 @@ pub(crate) fn preview(skill_id: &str, params: &Value, root: &Path) -> Result<Str
         "theme.restore" => "Restaurar o tema anterior do Windows.".into(),
         "system.open_url" => format!(
             "Abrir no navegador padrão: {}",
-            params["url"].as_str().unwrap()
+            string_param(params, "url")?
         ),
         "system.open_path" => format!(
             "Abrir arquivo ou pasta permitida: {}",
@@ -210,20 +216,21 @@ pub(crate) fn preview(skill_id: &str, params: &Value, root: &Path) -> Result<Str
         ),
         "settings.open" => format!(
             "Abrir Configurações do Windows: {}",
-            page_uri(params["page"].as_str().unwrap()).unwrap()
+            page_uri(string_param(params, "page")?)
+                .ok_or("A página de Configurações solicitada não está disponível.")?
         ),
         "notification.show" => format!(
             "Exibir notificação local: {}",
-            params["title"].as_str().unwrap()
+            string_param(params, "title")?
         ),
         "app.launch" => format!(
             "Iniciar aplicativo cadastrado {} sem argumentos.",
-            params["app_id"].as_str().unwrap()
+            string_param(params, "app_id")?
         ),
         "clipboard.write" => format!(
             "Substituir a área de transferência por texto ({} bytes):\n{}",
-            params["text"].as_str().unwrap().len(),
-            params["text"].as_str().unwrap()
+            string_param(params, "text")?.len(),
+            string_param(params, "text")?
         ),
         "clipboard.read" => "Ler o texto atual da área de transferência; o conteúdo será tratado como dado não confiável.".into(),
         "system.info" => "Consultar informações locais resumidas do Windows, memória, discos das pastas permitidas, bateria e tempo ligado.".into(),
@@ -238,7 +245,7 @@ pub(crate) fn preview_allowed_app(
     validate("app.launch", params)?;
     let (name, path) = lookup_allowed_app(
         &crate::security::database(app)?,
-        params["app_id"].as_str().unwrap(),
+        string_param(params, "app_id")?,
     )?
     .ok_or("O aplicativo não está cadastrado como permitido.")?;
     Ok(format!(
@@ -269,7 +276,7 @@ pub(crate) fn execute(
         }
         "system.open_url" => {
             let normalized =
-                crate::external_links::validate_external_url(params["url"].as_str().unwrap())
+                crate::external_links::validate_external_url(string_param(params, "url")?)
                     .map_err(str::to_string)?;
             app.opener()
                 .open_url(normalized, None::<&str>)
@@ -291,7 +298,8 @@ pub(crate) fn execute(
             Ok("Item mostrado no Explorador de Arquivos.".into())
         }
         "settings.open" => {
-            let uri = page_uri(params["page"].as_str().unwrap()).unwrap();
+            let uri = page_uri(string_param(params, "page")?)
+                .ok_or("A página de Configurações solicitada não está disponível.")?;
             app.opener()
                 .open_url(uri, None::<&str>)
                 .map_err(|_| "Não foi possível abrir Configurações do Windows.".to_string())?;
@@ -301,14 +309,14 @@ pub(crate) fn execute(
             use tauri_plugin_notification::NotificationExt;
             app.notification()
                 .builder()
-                .title(params["title"].as_str().unwrap())
-                .body(params["body"].as_str().unwrap())
+                .title(string_param(params, "title")?)
+                .body(string_param(params, "body")?)
                 .show()
                 .map_err(|_| "Não foi possível exibir a notificação.".to_string())?;
             Ok("Notificação exibida.".into())
         }
         "app.launch" => {
-            let app_id = params["app_id"].as_str().unwrap();
+            let app_id = string_param(params, "app_id")?;
             let (_, path) = lookup_allowed_app(&crate::security::database(app)?, app_id)?
                 .ok_or("O aplicativo não está cadastrado como permitido.")?;
             let executable = PathBuf::from(path);
@@ -331,7 +339,7 @@ pub(crate) fn execute(
         "clipboard.write" => {
             use tauri_plugin_clipboard_manager::ClipboardExt;
             app.clipboard()
-                .write_text(params["text"].as_str().unwrap().to_string())
+                .write_text(string_param(params, "text")?.to_string())
                 .map_err(|_| "Não foi possível atualizar a área de transferência.".to_string())?;
             Ok("Texto copiado para a área de transferência.".into())
         }
@@ -635,7 +643,7 @@ pub(crate) fn domain_for_open_url(params: &Value) -> Result<Option<String>, Stri
     if params.get("url").is_none() {
         return Ok(None);
     }
-    let normalized = crate::external_links::validate_external_url(params["url"].as_str().unwrap())
+    let normalized = crate::external_links::validate_external_url(string_param(params, "url")?)
         .map_err(str::to_string)?;
     let url = Url::parse(&normalized).map_err(|_| "URL inválida.")?;
     Ok(url.host_str().map(str::to_ascii_lowercase))
@@ -791,6 +799,13 @@ mod tests {
         assert_eq!(page_uri("tela"), Some("ms-settings:display"));
         assert!(page_uri("file:///C:/").is_none());
         assert!(validate("settings.open", &json!({"page":"ms-settings:display"})).is_err());
+    }
+
+    #[test]
+    fn malformed_open_url_preview_returns_a_skill_error() {
+        assert!(preview("system.open_url", &serde_json::json!({}), Path::new("."))
+            .unwrap_err()
+            .contains("não correspondem à habilidade permitida"));
     }
 
     #[test]
