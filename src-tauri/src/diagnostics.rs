@@ -60,12 +60,12 @@ pub fn setup(app: &AppHandle) -> Result<StartupState, Box<dyn std::error::Error>
 
 fn install_panic_hook(diagnostic_log: PathBuf) {
     std::panic::set_hook(Box::new(move |panic| {
-        let payload_type =
-            if panic.payload().is::<String>() || panic.payload().is::<&'static str>() {
-                "string"
-            } else {
-                "other"
-            };
+        let payload_type = if panic.payload().is::<String>() || panic.payload().is::<&'static str>()
+        {
+            "string"
+        } else {
+            "other"
+        };
         let location = panic.location();
         let record = format_panic_record(
             payload_type,
@@ -83,7 +83,11 @@ fn format_panic_record(
     line: Option<u32>,
     column: Option<u32>,
 ) -> String {
-    let payload_type = if payload_type == "string" { "string" } else { "other" };
+    let payload_type = if payload_type == "string" {
+        "string"
+    } else {
+        "other"
+    };
     let source = source_file
         .and_then(|file| file.rsplit(['/', '\\']).next())
         .filter(|file| {
@@ -91,9 +95,7 @@ fn format_panic_record(
                 && file.len() <= 128
                 && file
                     .chars()
-                    .all(|character| {
-                        character.is_ascii_alphanumeric() || "._-".contains(character)
-                    })
+                    .all(|character| character.is_ascii_alphanumeric() || "._-".contains(character))
         })
         .unwrap_or("unknown");
     format!(
@@ -468,10 +470,7 @@ mod tests {
             Some(42),
             Some(7),
         );
-        assert_eq!(
-            record,
-            "panic_type=string source=main.rs line=42 column=7"
-        );
+        assert_eq!(record, "panic_type=string source=main.rs line=42 column=7");
         assert!(!record.contains("private-user"));
         assert!(!record.contains("secret-token"));
     }
