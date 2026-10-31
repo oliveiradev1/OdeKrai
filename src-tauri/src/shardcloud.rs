@@ -1237,6 +1237,14 @@ mod tests {
     }
 
     #[test]
+    fn vm_creation_cannot_be_requested_while_the_budget_is_unset() {
+        assert_eq!(validate_monthly_budget_cents(None).unwrap(), None);
+        assert!(!crate::security::skills::registry()
+            .iter()
+            .any(|skill| skill.id == "shardcloud.vm_create"));
+    }
+
+    #[test]
     fn api_host_is_fixed_and_vm_ids_are_validated_before_path_construction() {
         assert_eq!(
             api_endpoint("vms").unwrap().as_str(),
