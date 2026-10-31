@@ -22,6 +22,18 @@ fn microphone_permission_allowed(window_label: &str, enabled: bool, is_microphon
     window_label == "main" && enabled && is_microphone
 }
 
+fn microphone_permission_response(
+    window_label: &str,
+    enabled: bool,
+    is_microphone: bool,
+) -> tauri::webview::PermissionResponse {
+    if microphone_permission_allowed(window_label, enabled, is_microphone) {
+        tauri::webview::PermissionResponse::Default
+    } else {
+        tauri::webview::PermissionResponse::Deny
+    }
+}
+
 #[tauri::command]
 fn set_microphone_opt_in(
     caller: tauri::WebviewWindow,
@@ -132,14 +144,16 @@ mod providers;
 mod reminders;
 mod screen_capture;
 mod security;
+mod shardcloud;
 mod spreadsheets;
 mod system_actions;
 mod system_controls;
 mod tray;
+mod updates;
 mod web_fetch;
 mod window_sizing;
 
-fn require_main(window: &tauri::WebviewWindow) -> Result<(), String> {
+pub(crate) fn require_main(window: &tauri::WebviewWindow) -> Result<(), String> {
     require_caller(window, &["main"])
 }
 
@@ -733,6 +747,19 @@ async fn ensure_pet_window(app: &tauri::AppHandle) -> Result<WebviewWindow, Stri
     Ok(window)
 }
 
+async fn show_pet_quick_command(app: &tauri::AppHandle) -> Result<(), String> {
+    let window = ensure_pet_window(app).await?;
+    if !window.is_visible().unwrap_or(false) {
+        restore_pet_position(app, &window)?;
+        window
+            .show()
+            .map_err(|_| "Não foi possível mostrar a ilha para o comando rápido.".to_string())?;
+        let _ = app.emit("pet-window-visibility", true);
+    }
+    let _ = app.emit("pet-quick-focus-request", ());
+    Ok(())
+}
+
 pub(crate) async fn toggle_pet_from_tray(app: &tauri::AppHandle) {
     match app.get_webview_window("pet") {
         Some(window) if window.is_visible().unwrap_or(false) => {
@@ -792,6 +819,25 @@ async fn set_pet_visible(
     }
     if !visible {
         let _ = app.emit("pet-window-visibility", false);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn set_pet_keyboard_focus(caller: tauri::WebviewWindow, focused: bool) -> Result<(), String> {
+    require_caller(&caller, &["pet"])?;
+    if focused {
+        caller
+            .set_focusable(true)
+            .map_err(|_| "Não foi possível atualizar o foco do pet.".to_string())?;
+        caller.set_focus().map_err(|_| {
+            let _ = caller.set_focusable(false);
+            "Não foi possível focar o campo rápido do pet.".to_string()
+        })?;
+    } else {
+        caller
+            .set_focusable(false)
+            .map_err(|_| "Não foi possível atualizar o foco do pet.".to_string())?;
     }
     Ok(())
 }
@@ -918,20 +964,16 @@ pub fn run() -> Result<(), tauri::Error> {
     tauri::Builder::default()
         .manage(MicrophoneOptIn::default())
         .on_permission_request(|webview, kind| {
-            use tauri::webview::{PermissionKind, PermissionResponse};
+            use tauri::webview::PermissionKind;
             let enabled = webview
                 .app_handle()
                 .try_state::<MicrophoneOptIn>()
                 .is_some_and(|state| state.0.load(Ordering::SeqCst));
-            if microphone_permission_allowed(
+            microphone_permission_response(
                 webview.label(),
                 enabled,
                 kind == PermissionKind::Microphone,
-            ) {
-                PermissionResponse::Allow
-            } else {
-                PermissionResponse::Deny
-            }
+            )
         })
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
@@ -942,9 +984,9 @@ pub fn run() -> Result<(), tauri::Error> {
         }))
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
-                .with_handler(|app, _shortcut, event| {
+                .with_handler(|app, shortcut, event| {
                     if event.state() == tauri_plugin_global_shortcut::ShortcutState::Pressed {
-                        security::on_global_shortcut(app);
+                        security::handle_global_shortcut(app, shortcut.id());
                     }
                 })
                 .build(),
@@ -953,6 +995,7 @@ pub fn run() -> Result<(), tauri::Error> {
         .manage(local_models::Downloads::default())
         .manage(PetPositionStore::default())
         .manage(security::SecurityState::new(true))
+        .manage(shardcloud::ShardCloudState::default())
         .manage(tray::CloseBehaviorState::default())
         .manage(tray::ShutdownState::default())
         .manage(reminders::ReminderScheduler::default())
@@ -993,6 +1036,19 @@ pub fn run() -> Result<(), tauri::Error> {
             agent_runtime::set_agent_limits,
             get_build_info,
             external_links::open_external_link,
+            external_links::open_cloud_link,
+            external_links::open_update_release,
+            updates::check_for_update,
+            shardcloud::save_shardcloud_token,
+            shardcloud::has_shardcloud_token,
+            shardcloud::remove_shardcloud_token,
+            shardcloud::get_shardcloud_monthly_budget,
+            shardcloud::set_shardcloud_monthly_budget,
+            shardcloud::shardcloud_test_connection,
+            shardcloud::shardcloud_list_vms,
+            shardcloud::shardcloud_get_vm_details,
+            shardcloud::shardcloud_get_vm_metrics,
+            shardcloud::shardcloud_list_distros,
             hardware::get_hardware_profile,
             local_models::download_local_model,
             local_models::cancel_local_model_download,
@@ -1002,6 +1058,7 @@ pub fn run() -> Result<(), tauri::Error> {
             diagnostics::complete_startup,
             diagnostics::record_diagnostic_event,
             set_pet_visible,
+            set_pet_keyboard_focus,
             set_pet_position,
             set_pet_topmost,
             set_pet_size,
@@ -1057,8 +1114,6 @@ pub fn run() -> Result<(), tauri::Error> {
             calendar::calendar_export_ics,
             calendar::calendar_get_default,
             calendar::calendar_set_default,
-            screen_capture::capture_screen_preview,
-            screen_capture::save_screen_capture,
             security::get_permission_settings,
             security::get_trusted_external_domains,
             security::trust_external_domain,
@@ -1067,6 +1122,8 @@ pub fn run() -> Result<(), tauri::Error> {
             security::set_tool_override,
             security::skills::get_skills,
             security::skills::get_skill_family_summaries,
+            security::skills::get_home_reminder_count,
+            reminders::get_upcoming_reminders,
             security::skills::get_public_catalog,
             security::skills::set_skill_enabled,
             security::skills::set_skill_group_enabled,
@@ -1081,17 +1138,24 @@ pub fn run() -> Result<(), tauri::Error> {
             security::skills::register_allowed_app,
             security::skills::remove_allowed_app,
             security::set_kill_shortcut,
+            security::get_island_quick_shortcut,
+            security::set_island_quick_shortcut,
+            security::take_pet_quick_focus_request,
             security::set_approval_ttl,
             security::halt_all,
             security::resume_all,
             security::list_audit,
             security::verify_audit,
             security::get_pending_approval_count,
+            security::show_pending_approval_window,
             security::get_pending_approval,
+            system_actions::open_agent_artifact,
+            system_actions::reveal_agent_artifact,
             security::get_full_approval_preview,
             security::approval_respond,
             #[cfg(debug_assertions)]
             security::submit_simulated_action,
+            security::undo_agent_action,
             agent_home::agent_home_status,
             agent_home::agent_home_init,
             agent_home::agent_home_open_folder,
@@ -1109,7 +1173,8 @@ pub fn run() -> Result<(), tauri::Error> {
 
 #[cfg(test)]
 mod microphone_permission_tests {
-    use super::microphone_permission_allowed;
+    use super::{microphone_permission_allowed, microphone_permission_response};
+    use tauri::webview::PermissionResponse;
 
     #[test]
     fn microphone_requires_opt_in_main_window_and_audio_kind() {
@@ -1117,5 +1182,25 @@ mod microphone_permission_tests {
         assert!(!microphone_permission_allowed("main", false, true));
         assert!(!microphone_permission_allowed("approval", true, true));
         assert!(!microphone_permission_allowed("main", true, false));
+    }
+
+    #[test]
+    fn opted_in_main_microphone_continues_the_webview_permission_flow() {
+        assert_eq!(
+            microphone_permission_response("main", true, true),
+            PermissionResponse::Default
+        );
+        assert_eq!(
+            microphone_permission_response("main", false, true),
+            PermissionResponse::Deny
+        );
+        assert_eq!(
+            microphone_permission_response("pet", true, true),
+            PermissionResponse::Deny
+        );
+        assert_eq!(
+            microphone_permission_response("main", true, false),
+            PermissionResponse::Deny
+        );
     }
 }

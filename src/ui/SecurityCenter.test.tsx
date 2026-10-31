@@ -1,8 +1,14 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
-import { SecurityCenter } from './SecurityCenter';
+import { auditRuleLabel, SecurityCenter } from './SecurityCenter';
 
 describe('SecurityCenter embutido', () => {
+  it('nunca mostra o identificador da regra vazio na auditoria', () => {
+    expect(auditRuleLabel('')).toBe('configuração ausente');
+    expect(auditRuleLabel('   ')).toBe('configuração ausente');
+    expect(auditRuleLabel('discord_webhook_missing')).toBe('discord_webhook_missing');
+  });
+
   it('oferece a rota legada de atividade em tela completa', () => {
     const markup = renderToStaticMarkup(
       <SecurityCenter page="activity" embedded onOpenFullPage={vi.fn()} />,

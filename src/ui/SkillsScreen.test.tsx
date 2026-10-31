@@ -68,10 +68,11 @@ const discordSkill: CatalogSkill = {
   resultTrust: 'local',
   enabled: true,
   morePermissive: false,
-  fixedBlocked: true,
+  fixedBlocked: false,
   category: 'integration',
   status: 'installed',
   configurationRequired: false,
+  discordState: 'active',
   family: 'mensagens',
   icon: 'message',
   examples: ['Envie uma mensagem aprovada.'],
@@ -79,67 +80,53 @@ const discordSkill: CatalogSkill = {
 };
 
 describe('catálogo de habilidades', () => {
-  it('distingue habilidade Discord ativa de ferramenta exposta ao agente', () => {
-    const render = (agentRuntime: {
-      modeEnabled: boolean;
-      available: boolean;
-      reason: string | null;
-    }) =>
+  it('exibe o estado Discord calculado no Rust sem mensagens contraditórias', () => {
+    const render = (skill: CatalogSkill, onOpenPrivacy?: () => void) =>
       renderToStaticMarkup(
         <SkillsCatalogView
-          skills={[discordSkill]}
+          skills={[skill]}
           initialFamily="mensagens"
-          agentRuntime={agentRuntime}
+          onOpenPrivacy={onOpenPrivacy}
           onFamilyToggle={noOperation}
           onSkillToggle={noOperation}
           onOverrideToggle={noOperation}
         />,
       );
 
-    expect(render({ modeEnabled: false, available: true, reason: null })).toContain(
-      'habilidade ativa, mas não exposta: o modo agente está desligado nesta conversa.',
+    const activeMarkup = render(discordSkill);
+    expect(activeMarkup).toContain('>Ativa</span>');
+    expect(activeMarkup).toContain(
+      'Ativa e oferecida ao agente em todas as conversas no modo agente',
     );
-    expect(
-      render({
-        modeEnabled: false,
-        available: false,
-        reason: 'Este modelo não tem suporte verificado a ferramentas.',
-      }),
-    ).toContain('Este modelo não tem suporte verificado a ferramentas.');
-    expect(render({ modeEnabled: true, available: true, reason: null })).toContain(
-      'ferramenta disponível para esta conversa; cada envio ainda exige aprovação.',
+    expect(activeMarkup).toContain('Cada envio exige aprovação.');
+    expect(activeMarkup).not.toContain('Bloqueio fixo');
+    expect(activeMarkup).not.toContain('ferramenta disponível para esta conversa');
+
+    const unconfiguredMarkup = render(
+      {
+        ...discordSkill,
+        enabled: false,
+        status: 'configuration_required',
+        configurationRequired: true,
+        discordState: 'not_configured',
+      },
+      noOperation,
     );
-    expect(
-      renderToStaticMarkup(
-        <SkillsCatalogView
-          skills={[
-            {
-              ...discordSkill,
-              enabled: false,
-              status: 'configuration_required',
-              configurationRequired: true,
-            },
-          ]}
-          initialFamily="mensagens"
-          agentRuntime={{ modeEnabled: true, available: true, reason: null }}
-          onFamilyToggle={noOperation}
-          onSkillToggle={noOperation}
-          onOverrideToggle={noOperation}
-        />,
-      ),
-    ).toContain('configure e teste um webhook válido');
-    expect(
-      renderToStaticMarkup(
-        <SkillsCatalogView
-          skills={[{ ...discordSkill, enabled: false, status: 'available' }]}
-          initialFamily="mensagens"
-          agentRuntime={{ modeEnabled: true, available: true, reason: null }}
-          onFamilyToggle={noOperation}
-          onSkillToggle={noOperation}
-          onOverrideToggle={noOperation}
-        />,
-      ),
-    ).toContain('habilidade desativada; ela não é enviada ao modelo.');
+    expect(unconfiguredMarkup).toContain('Cadastre um webhook para liberar esta habilidade.');
+    expect(unconfiguredMarkup).toContain('Não configurada');
+    expect(unconfiguredMarkup).toContain('Cadastrar webhook');
+    expect(unconfiguredMarkup).toContain('aria-checked="false"');
+    expect(unconfiguredMarkup).not.toContain('Bloqueio fixo');
+
+    const blockedMarkup = render({
+      ...discordSkill,
+      enabled: false,
+      status: 'blocked',
+      discordState: 'blocked',
+    });
+    expect(blockedMarkup).toContain('>Bloqueada</span>');
+    expect(blockedMarkup).toContain('Bloqueada porque a habilidade está desativada.');
+    expect(blockedMarkup).not.toContain('Bloqueio fixo');
   });
 
   it('não mantém estilos dos cartões individuais substituídos pelo catálogo por família', () => {
@@ -156,6 +143,15 @@ describe('catálogo de habilidades', () => {
       const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       expect(styles).not.toMatch(new RegExp(`${escaped}(?=[\\s:{>+~])`));
     }
+  });
+
+  it('mantém a chave opcional do Google dentro do formulário e limpa após salvar', () => {
+    const source = readFileSync(new URL('./SkillsScreen.tsx', import.meta.url), 'utf8');
+    expect(source).toContain('submitSecretForm(event, saveGoogleCredentials');
+    expect(source).toContain('id="google-client-secret"');
+    expect(source).toContain('name="google-client-secret"');
+    expect(source).toContain('autoComplete="off"');
+    expect(source).toContain("() => setClientSecret('')");
   });
 
   it('exibe somente as famílias e habilidades recebidas do registro simulado', () => {
@@ -177,6 +173,27 @@ describe('catálogo de habilidades', () => {
     expect(markup).not.toContain('Captura de tela: indisponível');
     expect(markup).toContain('Abrir Privacidade e permissões');
     expect(markup.match(/class="skills-family-card"/g)).toHaveLength(2);
+    expect(markup).toContain('3 habilidades encontradas');
+    expect(markup).toContain('1 família ativa');
+  });
+
+  it('mostra erro e ação de nova tentativa quando o carregamento falha, sem exibir catálogo vazio', () => {
+    const markup = renderToStaticMarkup(
+      <SkillsCatalogView
+        skills={[]}
+        loadError="Não foi possível carregar as habilidades. Banco indisponível."
+        onRetry={noOperation}
+        onFamilyToggle={noOperation}
+        onSkillToggle={noOperation}
+        onOverrideToggle={noOperation}
+      />,
+    );
+
+    expect(markup).toContain('role="alert"');
+    expect(markup).toContain('Banco indisponível.');
+    expect(markup).toContain('Tentar de novo');
+    expect(markup).not.toContain('Nenhuma habilidade está registrada nesta versão.');
+    expect(markup).not.toContain('famílias ativas');
   });
 
   it('mostra busca por teclado, status, risco e um interruptor por família', () => {
@@ -355,6 +372,7 @@ describe('catálogo de habilidades', () => {
       name: 'Pagamento bloqueado',
       risk: 'destrutivo_financeiro',
       status: 'unavailable',
+      statusReason: 'Habilidade indisponível nesta versão.',
       fixedBlocked: true,
       enabled: false,
       examples: ['Não solicite pagamentos.'],
@@ -369,6 +387,7 @@ describe('catálogo de habilidades', () => {
       />,
     );
     expect(blockedMarkup).toContain('Bloqueio fixo: esta habilidade não pode ser liberada');
+    expect(blockedMarkup).toContain('Motivo: Habilidade indisponível nesta versão.');
     expect(blockedMarkup).not.toContain('skills-override-settings');
 
     const appSkill: CatalogSkill = {

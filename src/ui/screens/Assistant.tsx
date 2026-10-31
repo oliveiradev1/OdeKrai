@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { emit } from '@tauri-apps/api/event';
+import { emit, listen } from '@tauri-apps/api/event';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import {
   normalizeSoundPreferences,
@@ -23,6 +23,108 @@ export function PetActionError({ message, onRetry }: { message: string; onRetry:
         Tentar de novo
       </button>
     </div>
+  );
+}
+
+function QuickShortcutSettings() {
+  const [shortcut, setShortcut] = useState('Ctrl+Alt+Space');
+  const [enabled, setEnabled] = useState(false);
+  const [error, setError] = useState('');
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    if (!isTauri()) {
+      setLoaded(true);
+      return;
+    }
+    let disposed = false;
+    const refresh = () =>
+      invoke<{ shortcut: string; enabled: boolean; error?: string | null }>(
+        'get_island_quick_shortcut',
+      )
+        .then((value) => {
+          if (disposed) return;
+          setShortcut(value.shortcut);
+          setEnabled(value.enabled);
+          setError(value.error ?? '');
+        })
+        .catch(() => {
+          if (!disposed) setError('Não foi possível carregar o atalho salvo.');
+        })
+        .finally(() => {
+          if (!disposed) setLoaded(true);
+        });
+    let unlisten: (() => void) | undefined;
+    void listen('island-quick-shortcut-updated', () => void refresh())
+      .then((stop) => {
+        unlisten = stop;
+        void refresh();
+      })
+      .catch(() => void refresh());
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
+
+  async function save(nextEnabled = enabled) {
+    setError('');
+    if (!isTauri()) {
+      setEnabled(nextEnabled);
+      return;
+    }
+    try {
+      await invoke('set_island_quick_shortcut', { shortcut, enabled: nextEnabled });
+      setEnabled(nextEnabled);
+    } catch (cause) {
+      const current = await invoke<{ enabled: boolean }>('get_island_quick_shortcut').catch(
+        () => null,
+      );
+      setEnabled(current?.enabled ?? false);
+      setError(typeof cause === 'string' ? cause : 'Não foi possível registrar esta combinação.');
+    }
+  }
+
+  return (
+    <section id="assistant-quick-shortcut" className="settings-panel">
+      <div className="panel-heading">
+        <div>
+          <h3>Atalho para o comando rápido</h3>
+          <p>
+            O atalho apenas abre a ilha e foca o campo. Ele não envia mensagens nem aprova ações.
+          </p>
+        </div>
+      </div>
+      <label className="settings-field">
+        <span>Combinação</span>
+        <input
+          aria-label="Combinação do atalho para o comando rápido"
+          value={shortcut}
+          onChange={(event) => setShortcut(event.target.value)}
+          placeholder="Ctrl+Alt+Espaço"
+          autoComplete="off"
+          disabled={!loaded}
+        />
+      </label>
+      <label className="settings-toggle-row">
+        <input
+          type="checkbox"
+          aria-label="Atalho para o comando rápido"
+          checked={enabled}
+          disabled={!loaded}
+          onChange={(event) => void save(event.target.checked)}
+        />
+        <span>Atalho global (desligado por padrão)</span>
+      </label>
+      <button type="button" onClick={() => void save()} disabled={!loaded}>
+        Salvar atalho
+      </button>
+      {error && (
+        <p className="diagnostic-banner" role="alert">
+          {error}
+        </p>
+      )}
+    </section>
   );
 }
 
@@ -146,6 +248,7 @@ export function AssistantScreen({
   }
   return (
     <div className={embedded ? 'settings-embedded-content' : 'page subpage'}>
+      {!embedded && <QuickShortcutSettings />}
       <PetActionError message={petError} onRetry={retryPetAction ?? (() => undefined)} />
       {!embedded && (
         <PageHeader

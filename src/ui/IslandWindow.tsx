@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { emit, listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import {
   initialIslandSnapshot,
   islandLabels,
@@ -14,11 +15,54 @@ import { DEFAULT_PET_ID, PETS, petAnimationForIslandState, petGreeting } from '.
 import { PetSprite } from './PetSprite';
 import { Icon } from './Icon';
 import { petWindowLayout } from '../core/pet-layout';
+import {
+  createIslandQuickRequest,
+  canSubmitIslandQuickCommand,
+  islandKeyboardFocus,
+  isIslandReviewState,
+  islandSuggestions,
+  type IslandReviewState,
+  type IslandQuickRequest,
+} from '../core/island-quick';
+import type { HomeSuggestion } from '../core/home';
+import type { PerformanceModeStatus } from '../core/performance';
+
+type IslandQuickResult = {
+  requestId: string;
+  conversationId: string;
+  title: string;
+  summary: string;
+  success: boolean;
+};
+
+type IslandAlertSummary = {
+  alertId: string;
+  state: IslandReviewState;
+  message: string;
+};
+
+type IslandAlertPayload = {
+  alertId?: string;
+  state: IslandSnapshot['state'];
+  message: string;
+  count: number;
+  pinned: boolean;
+  alerts?: IslandAlertSummary[];
+};
 
 export function IslandWindow() {
   const [snapshot, setSnapshot] = useState<IslandSnapshot>(initialIslandSnapshot);
   const [settings, setSettings] = useState(loadSettings);
   const [selectedPetId, setSelectedPetId] = useState(DEFAULT_PET_ID);
+  const [quickDraft, setQuickDraft] = useState('');
+  const [quickSuggestions, setQuickSuggestions] = useState<HomeSuggestion[]>([]);
+  const [quickBusy, setQuickBusy] = useState(false);
+  const [quickResult, setQuickResult] = useState<IslandQuickResult | null>(null);
+  const [quickError, setQuickError] = useState('');
+  const [queuedAlerts, setQueuedAlerts] = useState<IslandAlertSummary[]>([]);
+  const quickInput = useRef<HTMLInputElement>(null);
+  const focusEnabled = useRef(false);
+  const quickRequestId = useRef<string | null>(null);
   const moveTimer = useRef<number | undefined>(undefined);
   const initialLayout = petWindowLayout(
     settings.companion.freeMode,
@@ -45,13 +89,8 @@ export function IslandWindow() {
           ),
         );
       }),
-      listen<{
-        alertId?: string;
-        state: IslandSnapshot['state'];
-        message: string;
-        count: number;
-        pinned: boolean;
-      }>('pet-alert-state', ({ payload }) =>
+      listen<IslandAlertPayload>('pet-alert-state', ({ payload }) => {
+        setQueuedAlerts((payload.alerts ?? []).filter((alert) => isIslandReviewState(alert.state)));
         setSnapshot((current) =>
           transitionIsland(current, {
             type: 'sync-alert',
@@ -63,8 +102,8 @@ export function IslandWindow() {
               pinned: payload.pinned,
             },
           }),
-        ),
-      ),
+        );
+      }),
       listen<[number, number]>('pet-moved', ({ payload: [x, y] }) => {
         window.clearTimeout(moveTimer.current);
         moveTimer.current = window.setTimeout(() => {
@@ -75,9 +114,23 @@ export function IslandWindow() {
       listen<string>('selected-pet-updated', ({ payload }) => {
         if (PETS.some((pet) => pet.id === payload)) setSelectedPetId(payload);
       }),
+      listen<PerformanceModeStatus>('performance-mode-updated', ({ payload }) => {
+        document.documentElement.dataset.performance = payload.enabled ? 'on' : 'off';
+      }),
+      listen<HomeSuggestion[]>('pet-quick-suggestions', ({ payload }) =>
+        setQuickSuggestions(islandSuggestions(payload)),
+      ),
+      listen<IslandQuickResult>('pet-quick-result', ({ payload }) => {
+        if (payload.requestId !== quickRequestId.current) return;
+        setQuickBusy(false);
+        setQuickResult(payload);
+        setQuickDraft('');
+        if (!payload.success) setQuickError(payload.summary);
+      }),
     ])
       .then((off) => {
         unlisten = off;
+        void emit('pet-window-ready');
       })
       .catch(() => {
         console.error('[OdeKrai diagnóstico] Falha ao registrar eventos da janela do pet.');
@@ -89,14 +142,9 @@ export function IslandWindow() {
       .catch(() =>
         console.warn('[OdeKrai diagnóstico] Falha no comando get_selected_pet da janela do pet.'),
       );
-    void invoke<{
-      alertId?: string;
-      state: IslandSnapshot['state'];
-      message: string;
-      count: number;
-      pinned: boolean;
-    }>('get_pet_alert_state')
-      .then((payload) =>
+    void invoke<IslandAlertPayload>('get_pet_alert_state')
+      .then((payload) => {
+        setQueuedAlerts((payload.alerts ?? []).filter((alert) => isIslandReviewState(alert.state)));
         setSnapshot((current) =>
           transitionIsland(current, {
             type: 'sync-alert',
@@ -108,8 +156,8 @@ export function IslandWindow() {
               pinned: payload.pinned,
             },
           }),
-        ),
-      )
+        );
+      })
       .catch(() =>
         console.warn(
           '[OdeKrai diagnóstico] Falha no comando get_pet_alert_state da janela do pet.',
@@ -121,7 +169,22 @@ export function IslandWindow() {
       window.removeEventListener('storage', refreshSettings);
       window.clearTimeout(moveTimer.current);
       unlisten.forEach((off) => off());
+      if (focusEnabled.current) void invoke('set_pet_keyboard_focus', { focused: false });
     };
+  }, []);
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void getCurrentWindow()
+      .onFocusChanged(({ payload: focused }) => {
+        if (focused || !focusEnabled.current) return;
+        focusEnabled.current = islandKeyboardFocus(focusEnabled.current, 'blur');
+        void invoke('set_pet_keyboard_focus', { focused: false }).catch(() => undefined);
+      })
+      .then((stop) => {
+        unlisten = stop;
+      })
+      .catch(() => setQuickError('Não foi possível acompanhar o foco do campo rápido.'));
+    return () => unlisten?.();
   }, []);
   useEffect(() => {
     let active = true;
@@ -186,6 +249,80 @@ export function IslandWindow() {
       );
     }
   };
+  const requestQuickFocus = async () => {
+    if (focusEnabled.current) {
+      quickInput.current?.focus();
+      return;
+    }
+    focusEnabled.current = islandKeyboardFocus(focusEnabled.current, 'request');
+    setQuickError('');
+    try {
+      await invoke('set_pet_keyboard_focus', { focused: true });
+      quickInput.current?.focus();
+    } catch {
+      focusEnabled.current = false;
+      setQuickError('O Windows não permitiu focar o campo rápido. Clique novamente para tentar.');
+    }
+  };
+  const releaseQuickFocus = async (event: 'send' | 'escape' | 'blur') => {
+    focusEnabled.current = islandKeyboardFocus(focusEnabled.current, event);
+    if (event !== 'blur') quickInput.current?.blur();
+    try {
+      await invoke('set_pet_keyboard_focus', { focused: false });
+    } catch {
+      setQuickError('Não foi possível devolver a ilha ao modo sem foco.');
+    }
+  };
+  useEffect(() => {
+    let disposed = false;
+    const focusIfRequested = async () => {
+      try {
+        const requested = await invoke<boolean>('take_pet_quick_focus_request');
+        if (!requested || disposed) return;
+        await send({ type: 'open' });
+        window.requestAnimationFrame(() => {
+          window.requestAnimationFrame(() => void requestQuickFocus());
+        });
+      } catch {
+        if (!disposed) setQuickError('Não foi possível abrir o campo de comando rápido.');
+      }
+    };
+    let stopFocus: (() => void) | undefined;
+    let stopError: (() => void) | undefined;
+    void listen('pet-quick-focus-request', () => void focusIfRequested())
+      .then((stop) => {
+        stopFocus = stop;
+        void focusIfRequested();
+      })
+      .catch(() => setQuickError('Não foi possível acompanhar o atalho do comando rápido.'));
+    void listen<string>('pet-quick-focus-error', ({ payload }) => setQuickError(payload))
+      .then((stop) => {
+        stopError = stop;
+      })
+      .catch(() => undefined);
+    return () => {
+      disposed = true;
+      stopFocus?.();
+      stopError?.();
+    };
+  }, []);
+  const submitQuickCommand = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!canSubmitIslandQuickCommand(quickDraft, quickBusy)) return;
+    const request: IslandQuickRequest | null = createIslandQuickRequest(quickDraft);
+    if (!request) return;
+    quickRequestId.current = request.requestId;
+    setQuickBusy(true);
+    setQuickResult(null);
+    setQuickError('');
+    await releaseQuickFocus('send');
+    try {
+      await emit('island-quick-command', request);
+    } catch {
+      setQuickBusy(false);
+      setQuickError('Não foi possível enviar a mensagem ao OdeKrai.');
+    }
+  };
   const state = snapshot.state;
   return (
     <main
@@ -246,7 +383,83 @@ export function IslandWindow() {
           </button>
         )}
         {state === 'expanded' && (
-          <div className="island-expanded">
+          <div
+            className="island-expanded"
+            onKeyDown={(event) => {
+              if (event.key === 'Escape' && focusEnabled.current) {
+                event.preventDefault();
+                void releaseQuickFocus('escape');
+              }
+            }}
+          >
+            <form
+              className="island-quick-command"
+              onSubmit={(event) => void submitQuickCommand(event)}
+            >
+              <input
+                ref={quickInput}
+                aria-label="Comando rápido"
+                placeholder="O que você precisa?"
+                value={quickDraft}
+                disabled={quickBusy}
+                onPointerDown={() => void requestQuickFocus()}
+              />
+              <button type="submit" disabled={quickBusy || !quickDraft.trim()}>
+                {quickBusy ? 'Enviando…' : 'Enviar'}
+              </button>
+            </form>
+            {quickError && (
+              <p className="island-quick-error" role="status">
+                {quickError}
+              </p>
+            )}
+            {quickSuggestions.length > 0 && (
+              <div className="island-quick-suggestions" aria-label="Sugestões reais">
+                {quickSuggestions.map((suggestion) => (
+                  <button
+                    type="button"
+                    key={suggestion.id}
+                    onClick={() => {
+                      setQuickDraft(suggestion.prompt);
+                      void requestQuickFocus();
+                    }}
+                  >
+                    {suggestion.label}
+                  </button>
+                ))}
+              </div>
+            )}
+            {quickResult && (
+              <div className="island-quick-result" role="status">
+                <strong>
+                  {quickResult.success ? quickResult.title : 'A resposta não ficou pronta'}
+                </strong>
+                <span>{quickResult.summary}</span>
+                {quickResult.success && (
+                  <button
+                    type="button"
+                    onClick={() => void emit('pet-open-conversation', quickResult.conversationId)}
+                  >
+                    Abrir no OdeKrai
+                  </button>
+                )}
+              </div>
+            )}
+            {queuedAlerts.length > 0 && (
+              <ul className="island-alerts" aria-label="Alertas da ilha">
+                {queuedAlerts.map((alert) => (
+                  <li key={alert.alertId}>
+                    <span>{alert.message}</span>
+                    <button
+                      type="button"
+                      onClick={() => void emit('pet-review-alert', alert.state)}
+                    >
+                      Revisar
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
             <button
               className="island-action-open"
               onClick={() => {

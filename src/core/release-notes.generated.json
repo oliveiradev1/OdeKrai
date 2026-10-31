@@ -1,0 +1,197 @@
+{
+  "currentVersion": "0.16.0",
+  "releases": [
+    {
+      "version": "0.16.0",
+      "title": "navegação nova, habilidades, Nuvem (ShardCloud) e aviso de atualização",
+      "date": "",
+      "summary": "Esta versão reorganiza o OdeKrai e traz as primeiras habilidades de agente que usam serviços externos.",
+      "changes": [
+        "Navegação: sidebar com Início, Conversas, Agenda, Habilidades e Conectores de IA. Perfil no rodapé e Configurações em janela com busca.",
+        "Início, Conversas com cartões de ação e desfazer, painel de Atividades, paleta de comandos (Ctrl+K).",
+        "Habilidades organizadas por famílias, com busca e detalhes.",
+        "Captura de tela e microfone sempre sob sua confirmação.",
+        "Discord: mensagens por webhook, sempre com aprovação.",
+        "Nuvem: ShardCloud (ver VMs; ligar e desligar com aprovação; comandos em lote aprovado; criação com limite mensal). Os demais provedores são planejados.",
+        "Atualizações: aviso diário de versão nova com link para download. Não instala sozinho.",
+        "Primeiro uso e modo desempenho.",
+        "Confirmações (apagar conversa, memória, credencial) usam diálogo do próprio app.",
+        "Links abrem no navegador pelo caminho validado.",
+        "Habilidades não ficam vazias quando uma tem erro.",
+        "Campos de token ficam em formulário, sem sugestão de salvar pelo navegador."
+      ]
+    },
+    {
+      "version": "0.15.0",
+      "title": "Ferramentas locais e análise visual",
+      "date": "2026-10-28",
+      "summary": "O marco amplia o conjunto de habilidades Rust do agente e adiciona captura de tela com confirmação explícita para análise visual. A versão continua pré-lançamento `0.x`; os testes de código não substituem validação do aplicativo instalado no Windows nem uso com contas reais.",
+      "changes": [
+        "Agenda local em SQLite, com criação, listagem, edição, exclusão sujeita a aprovação e importação/exportação iCalendar. O calendário padrão pode ser um arquivo `.ics`, mas abrir esse arquivo não comprova importação por outro aplicativo.",
+        "Habilidades locais para lembretes, leitura/criação de planilhas, busca e proposta de notas de memória, operações limitadas de arquivos e controles de áudio/mídia.",
+        "Integração Discord por webhook cadastrado: segredo no Gerenciador de Credenciais do Windows, teste sem publicar, bloqueio de `@everyone`/`@here`, limite por webhook, prévia e aprovação explícita para envio; a remoção remota exige confirmação.",
+        "Delegação para Codex CLI ou Claude Code já instalados, executada em `git worktree` temporário sob aprovação. O diff é apresentado para revisão e não é aplicado ao projeto original.",
+        "Consulta de recursos de hardware e inventário/download confirmado de modelos GGUF do catálogo, com retomada e verificação SHA-256. O OdeKrai não instala ou inicia um executor GGUF.",
+        "Captura local de tela no Windows, prévia em memória, salvamento separado e envio para análise somente após confirmação e dentro de uma lista explícita de modelos OpenAI e Anthropic.",
+        "Enquadramento JSON-RPC com limites como núcleo técnico; não há transporte MCP, cadastro de servidores, credenciais ou execução encaminhada a servidores.",
+        "Catálogo e telas de provedores, habilidades, Agenda, Computador e configurações foram ampliados; mensagens de falha do agente preservam categorias úteis sem exibir detalhes sensíveis.",
+        "Documentação de pesquisa para integrações Google e Discord foi adicionada. Ela não representa conectores Google ou bot Discord implementados."
+      ]
+    },
+    {
+      "version": "0.14.0",
+      "title": "Agente e habilidades",
+      "date": "2026-10-26",
+      "summary": "Broker assíncrono de aprovações e registro Rust de habilidades. Loop Rust conectado às habilidades e aprovações existentes. Ferramentas limitadas de arquivos, calendário, rascunhos de email e busca web aprovada.",
+      "changes": [
+        "Controles de conversa e cartões de ação; leitura limitada de arquivos; exportações; rascunhos e busca web aprovados.",
+        "Endurecimento de links externos e ajustes de CI incluídos no intervalo.",
+        "A lista completa de commits abaixo identifica as correções incluídas neste marco."
+      ]
+    },
+    {
+      "version": "0.13.0",
+      "title": "Chat, pet e perfil",
+      "date": "2026-10-26",
+      "summary": "Navegação do chat redimensionável e recolhível. Abertura de links validada no backend. Recuperação de identidade e ajustes no pet e no perfil.",
+      "changes": [
+        "Controles de navegação do chat e recuperação de identidade aprovada.",
+        "Exibição do modelo e geometria das janelas compactas ajustadas.",
+        "A lista completa de commits abaixo identifica as correções incluídas neste marco."
+      ]
+    },
+    {
+      "version": "0.12.0",
+      "title": "Roteador de provedores, tokens e IA local",
+      "date": "2026-10-26",
+      "summary": "Failover de provedores com auditoria e limites diários de tokens. Conector OpenAI compatível para servidores locais já iniciados. Catálogo e escolha de modelos locais com confirmação para download.",
+      "changes": [
+        "Failover, uso de tokens, conector local e descoberta de hardware/modelos.",
+        "Erros de rede classificados e consentimento de download exigido.",
+        "A lista completa de commits abaixo identifica as correções incluídas neste marco."
+      ]
+    },
+    {
+      "version": "0.11.0",
+      "title": "Testes no Windows, privacidade do log, sons e monitor do pet",
+      "date": "2026-10-25",
+      "summary": "Harness de janelas Tauri ajustado para testes no Windows. Logs com detalhes sensíveis reduzidos. Sons de eventos e posição do mascote persistida por monitor.",
+      "changes": [
+        "Persistência da posição relativa por monitor e sons agrupados.",
+        "Manifesto de teste nativo e geometria do pet revisados.",
+        "A lista completa de commits abaixo identifica as correções incluídas neste marco."
+      ]
+    },
+    {
+      "version": "0.10.0",
+      "title": "Diagnóstico, travamentos e mascote animado",
+      "date": "2026-10-25",
+      "summary": "Diagnóstico de inicialização e modo seguro apresentados na interface. Ciclo de vida de janelas auxiliares estabilizado. Mascote 2D animado com estados de interação.",
+      "changes": [
+        "Diagnóstico e animações em sprites.",
+        "Correções de ciclo de vida e estado de animação.",
+        "A lista completa de commits abaixo identifica as correções incluídas neste marco."
+      ]
+    },
+    {
+      "version": "0.9.0",
+      "title": "Endurecimento, refatoração e motor do agente",
+      "date": "2026-10-25",
+      "summary": "Módulos de provedores, segurança e interface extraídos em unidades menores. Motor Rust limitado por turnos, tempo e tokens. Proteções fail-closed e remoção de caminhos de panic de produção.",
+      "changes": [
+        "Motor limitado do agente e refatorações internas.",
+        "Tratamentos de erros e estado de aprovação reforçados.",
+        "A lista completa de commits abaixo identifica as correções incluídas neste marco."
+      ]
+    },
+    {
+      "version": "0.8.0",
+      "title": "Qualidade, CI Rust, tool calling e sons",
+      "date": "2026-10-25",
+      "summary": "CI passou a verificar código Rust e lint. Adaptadores neutros para tool calling e capacidades exibidas por provedor. Manifesto, seleção e prévia de efeitos sonoros.",
+      "changes": [
+        "Adaptadores de tool calling e configuração de sons.",
+        "Validações do manifesto e nomes de sons.",
+        "A lista completa de commits abaixo identifica as correções incluídas neste marco."
+      ]
+    },
+    {
+      "version": "0.7.0",
+      "title": "Estabilidade de inicialização e ícones Phosphor",
+      "date": "2026-10-25",
+      "summary": "Leituras nativas de inicialização executadas de forma assíncrona. Ícones Phosphor aplicados aos elementos da interface. Fechamento e abertura de janelas revisados no histórico do marco.",
+      "changes": [
+        "Componente visual compartilhado de ícones.",
+        "Inicialização assíncrona e ícones inconsistentes corrigidos.",
+        "A lista completa de commits abaixo identifica as correções incluídas neste marco."
+      ]
+    },
+    {
+      "version": "0.6.0",
+      "title": "Chat, conectores gratuitos e identidade unificada",
+      "date": "2026-10-25",
+      "summary": "Conversas pesquisáveis em duas colunas. Catálogo de planos gratuitos e gestão de provedores conectados. Perfil e pasta pessoal integrados em uma identidade.",
+      "changes": [
+        "Busca e organização de conversas; catálogo de conectores.",
+        "Histórico movido para configurações de privacidade e ajustes de janela.",
+        "A lista completa de commits abaixo identifica as correções incluídas neste marco."
+      ]
+    },
+    {
+      "version": "0.5.0",
+      "title": "Nova interface e mascotes 2D",
+      "date": "2026-10-24",
+      "summary": "Interface reorganizada e textos padronizados. Personagens 2D Kenney renderizados para o aplicativo. Seleção do mascote e escala da janela ajustadas.",
+      "changes": [
+        "Sprites 2D e seleção de personagem.",
+        "Layout, textos e dimensões do mascote ajustados.",
+        "A lista completa de commits abaixo identifica as correções incluídas neste marco."
+      ]
+    },
+    {
+      "version": "0.4.0",
+      "title": "Segurança e permissões — Fases 2.1, 3 e 3.1",
+      "date": "2026-10-24",
+      "summary": "Políticas de risco e permissões implementadas em Rust. Aprovações, auditoria, kill switch e ferramentas de workspace. Controles de segurança e validações de encerramento das fases 3 e 3.1.",
+      "changes": [
+        "Matriz de políticas, aprovações e ferramentas locais.",
+        "Tratamento fail-closed e correções de segurança registradas no marco.",
+        "A lista completa de commits abaixo identifica as correções incluídas neste marco."
+      ]
+    },
+    {
+      "version": "0.3.0",
+      "title": "Identidade e memória local — Fase 2",
+      "date": "2026-10-24",
+      "summary": "Identidade local aprovada para o assistente. Memória manual local e template de identidade. Estrutura da pasta pessoal do agente.",
+      "changes": [
+        "Identidade, pasta pessoal e memória manual.",
+        "Formatação e organização do template.",
+        "A lista completa de commits abaixo identifica as correções incluídas neste marco."
+      ]
+    },
+    {
+      "version": "0.2.0",
+      "title": "Provedores, janelas e histórico — Fase 1",
+      "date": "2026-10-24",
+      "summary": "Estabilização de provedores, janelas e histórico. Metadados de autenticação Anthropic alinhados ao contrato utilizado. Base da Fase 1 registrada nos commits do marco.",
+      "changes": [
+        "Histórico e suporte a provedores na Fase 1.",
+        "Metadados de autenticação Anthropic alinhados.",
+        "A lista completa de commits abaixo identifica as correções incluídas neste marco."
+      ]
+    },
+    {
+      "version": "0.1.0",
+      "title": "Fundação",
+      "date": "2026-10-24",
+      "summary": "Base inicial do aplicativo Tauri com interface React e Vite. Primeira integração do mascote e da ilha de trabalho. Estrutura inicial para conectores nativos e execução no Windows.",
+      "changes": [
+        "Estrutura inicial do app e do mascote 3D.",
+        "Ilha e modo livre.",
+        "Configuração inicial e estabilização dos conectores nativos.",
+        "A lista completa de commits abaixo identifica as correções incluídas neste marco."
+      ]
+    }
+  ]
+}

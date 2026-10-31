@@ -11,11 +11,13 @@ import {
   skillStatusLabel,
   type CatalogFamily,
   type CatalogSkill,
+  type DiscordSkillState,
   type SkillFamily,
   type SkillsCatalogTab,
 } from '../core/skills-catalog';
 import { Button, PageHeader, Toggle } from './DesignSystem';
 import { Icon } from './Icon';
+import { submitSecretForm } from './secret-form';
 import { RiskBadge } from './RiskBadge';
 import { PrivacyConfigurationSummary } from './PrivacyConfigurations';
 
@@ -24,6 +26,8 @@ type SkillsCatalogViewProps = {
   loading?: boolean;
   busy?: boolean;
   error?: string;
+  loadError?: string;
+  onRetry?: () => void;
   initialTab?: SkillsCatalogTab;
   initialFamily?: SkillFamily;
   onOpenPrivacy?: () => void;
@@ -32,11 +36,6 @@ type SkillsCatalogViewProps = {
   onOverrideToggle: (skill: CatalogSkill, enabled: boolean) => void;
   googleConnection?: ReactNode;
   prerequisites?: SkillPrerequisites;
-  agentRuntime?: {
-    modeEnabled: boolean;
-    available: boolean;
-    reason: string | null;
-  };
 };
 
 type GoogleOAuthStatus = {
@@ -55,9 +54,23 @@ type SkillPrerequisites = {
 const skillStatusLabels = {
   installed: 'Ativa',
   available: 'Desativada',
+  blocked: 'Bloqueada',
   configuration_required: 'Não configurada',
   unavailable: 'Indisponível',
 } as const;
+
+function discordAvailabilityMessage(state?: DiscordSkillState): string {
+  switch (state) {
+    case 'not_configured':
+      return 'Cadastre um webhook para liberar esta habilidade.';
+    case 'active':
+      return 'Ativa e oferecida ao agente em todas as conversas no modo agente. Cada envio exige aprovação.';
+    case 'blocked':
+      return 'Bloqueada porque a habilidade está desativada. Ative-a para oferecê-la ao agente.';
+    default:
+      return 'Não foi possível verificar o estado do Discord.';
+  }
+}
 
 function statusClass(status: CatalogFamily['status']): string {
   return `skills-family-status--${status}`;
@@ -68,6 +81,8 @@ export function SkillsCatalogView({
   loading = false,
   busy = false,
   error = '',
+  loadError = '',
+  onRetry,
   initialTab = 'pessoal',
   initialFamily,
   onFamilyToggle,
@@ -76,7 +91,6 @@ export function SkillsCatalogView({
   onOpenPrivacy,
   googleConnection,
   prerequisites = { folderAvailable: true, appCount: 0, googleConnected: null },
-  agentRuntime,
 }: SkillsCatalogViewProps) {
   const [query, setQuery] = useState('');
   const [tab, setTab] = useState<SkillsCatalogTab>(initialTab);
@@ -123,12 +137,21 @@ export function SkillsCatalogView({
         </div>
       )}
 
+      {loadError && !loading && (
+        <div className="error-banner" role="alert">
+          <p>{loadError}</p>
+          <Button type="button" onClick={onRetry} disabled={!onRetry}>
+            Tentar de novo
+          </Button>
+        </div>
+      )}
+
       {loading ? (
         <div className="skills-catalog-loading" role="status" aria-live="polite">
           <span className="skills-loading-indicator" aria-hidden="true" />
           Carregando habilidades…
         </div>
-      ) : (
+      ) : loadError ? null : (
         <>
           <section className="skills-installed" aria-labelledby="skills-installed-heading">
             <div className="skills-catalog-section-heading">
@@ -243,7 +266,6 @@ export function SkillsCatalogView({
                     family={selected}
                     busy={busy}
                     prerequisites={prerequisites}
-                    agentRuntime={agentRuntime}
                     headingRef={detailsHeadingRef}
                     onBack={closeFamily}
                     onToggle={(enabled) => onFamilyToggle(selected.family, enabled)}
@@ -329,7 +351,8 @@ function SkillFamilyCard({
   onToggle: (enabled: boolean) => void;
 }) {
   const eligible = family.skills.filter(
-    (skill) => skill.status === 'available' || skill.status === 'installed',
+    (skill) =>
+      skill.status === 'available' || skill.status === 'blocked' || skill.status === 'installed',
   );
   const allEnabled = eligible.length > 0 && eligible.every((skill) => skill.enabled);
   const target = familyEnableTarget(family.skills);
@@ -386,7 +409,6 @@ function SkillFamilyDetails({
   family,
   busy,
   prerequisites,
-  agentRuntime,
   headingRef,
   onBack,
   onToggle,
@@ -398,7 +420,6 @@ function SkillFamilyDetails({
   family: CatalogFamily;
   busy: boolean;
   prerequisites: SkillPrerequisites;
-  agentRuntime?: SkillsCatalogViewProps['agentRuntime'];
   headingRef: React.RefObject<HTMLHeadingElement | null>;
   onBack: () => void;
   onToggle: (enabled: boolean) => void;
@@ -408,7 +429,8 @@ function SkillFamilyDetails({
   googleConnection?: ReactNode;
 }) {
   const eligible = family.skills.filter(
-    (skill) => skill.status === 'available' || skill.status === 'installed',
+    (skill) =>
+      skill.status === 'available' || skill.status === 'blocked' || skill.status === 'installed',
   );
   const allEnabled = eligible.length > 0 && eligible.every((skill) => skill.enabled);
   const hasConfigurationRequirement = family.skills.some((skill) => skill.configurationRequired);
@@ -560,21 +582,23 @@ function SkillFamilyDetails({
                 )}
               </div>
               <p>{skill.description}</p>
-              {skill.id === 'discord.send' && (
+              {skill.status === 'unavailable' && skill.statusReason && (
                 <p className="skills-tool-exposure" role="status">
-                  <strong>Disponibilidade no agente:</strong>{' '}
-                  {skill.configurationRequired
-                    ? 'configure e teste um webhook válido para habilitar esta ferramenta.'
-                    : !skill.enabled
-                      ? 'habilidade desativada; ela não é enviada ao modelo.'
-                      : !agentRuntime
-                        ? 'o modo agente e o provedor desta conversa ainda não foram verificados.'
-                        : !agentRuntime.available
-                          ? `agente indisponível: ${agentRuntime.reason ?? 'verifique os requisitos do agente.'}`
-                          : !agentRuntime.modeEnabled
-                            ? 'habilidade ativa, mas não exposta: o modo agente está desligado nesta conversa.'
-                            : 'ferramenta disponível para esta conversa; cada envio ainda exige aprovação.'}
+                  Motivo: {skill.statusReason}
                 </p>
+              )}
+              {skill.id === 'discord.send' && (
+                <>
+                  <p className="skills-tool-exposure" role="status">
+                    <strong>Estado do Discord:</strong>{' '}
+                    {discordAvailabilityMessage(skill.discordState)}
+                  </p>
+                  {skill.discordState === 'not_configured' && onOpenPrivacy && (
+                    <Button variant="secondary" onClick={onOpenPrivacy}>
+                      Cadastrar webhook
+                    </Button>
+                  )}
+                </>
               )}
               {skill.examples.length > 0 && (
                 <ul aria-label={`Exemplos de pedidos para ${skill.name}`}>
@@ -609,21 +633,28 @@ function SkillFamilyDetails({
                 Bloqueio fixo: esta habilidade não pode ser liberada por um modo de permissão.
               </p>
             )}
-            {!skill.fixedBlocked && skill.status !== 'unavailable' && (
-              <details className="skill-advanced skills-override-settings">
-                <summary>Gerenciar</summary>
-                <p>
-                  Esta exceção permite usar menos confirmações que o modo global. O OdeKrai
-                  solicitará confirmação nativa antes de salvar.
-                </p>
-                <Toggle
-                  checked={skill.morePermissive}
-                  label={`${skill.morePermissive ? 'Remover' : 'Permitir'} modo mais permissivo para ${skill.name}`}
-                  disabled={busy}
-                  onClick={() => onOverrideToggle(skill, !skill.morePermissive)}
-                />
-              </details>
+            {skill.id === 'discord.send' && skill.discordState === 'active' && (
+              <p className="skills-critical-approval-note" role="note">
+                Cada envio exige aprovação na janela nativa, em qualquer modo de permissão.
+              </p>
             )}
+            {!skill.fixedBlocked &&
+              skill.id !== 'discord.send' &&
+              skill.status !== 'unavailable' && (
+                <details className="skill-advanced skills-override-settings">
+                  <summary>Gerenciar</summary>
+                  <p>
+                    Esta exceção permite usar menos confirmações que o modo global. O OdeKrai
+                    solicitará confirmação nativa antes de salvar.
+                  </p>
+                  <Toggle
+                    checked={skill.morePermissive}
+                    label={`${skill.morePermissive ? 'Remover' : 'Permitir'} modo mais permissivo para ${skill.name}`}
+                    disabled={busy}
+                    onClick={() => onOverrideToggle(skill, !skill.morePermissive)}
+                  />
+                </details>
+              )}
           </article>
         ))}
       </section>
@@ -637,13 +668,14 @@ function SkillFamilyDetails({
 
 export function SkillsScreen({
   onOpenPrivacy,
-  agentRuntime,
+  initialFamily,
 }: {
   onOpenPrivacy: () => void;
-  agentRuntime: NonNullable<SkillsCatalogViewProps['agentRuntime']>;
+  initialFamily?: SkillFamily;
 }) {
   const [skills, setSkills] = useState<CatalogSkill[]>([]);
   const [error, setError] = useState('');
+  const [loadError, setLoadError] = useState('');
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [googleStatus, setGoogleStatus] = useState<GoogleOAuthStatus | null>(null);
@@ -655,7 +687,8 @@ export function SkillsScreen({
 
   const refresh = useCallback(async (silent = false) => {
     if (!isTauri()) {
-      setError('As habilidades só podem ser carregadas no aplicativo OdeKrai.');
+      setSkills([]);
+      setLoadError('As habilidades só podem ser carregadas no aplicativo OdeKrai.');
       setLoading(false);
       return;
     }
@@ -680,9 +713,11 @@ export function SkillsScreen({
         setGoogleStatus(null);
         setPrerequisites((current) => ({ ...current, googleConnected: null }));
       }
+      setLoadError('');
       setError('');
     } catch (cause) {
-      setError(String(cause));
+      setSkills([]);
+      setLoadError(`Não foi possível carregar as habilidades. ${String(cause)}`);
     } finally {
       setLoading(false);
     }
@@ -710,6 +745,8 @@ export function SkillsScreen({
       loading={loading}
       busy={busy}
       error={error}
+      loadError={loadError}
+      onRetry={() => void refresh()}
       onOpenPrivacy={onOpenPrivacy}
       googleConnection={
         googleStatus ? (
@@ -724,7 +761,7 @@ export function SkillsScreen({
         ) : undefined
       }
       prerequisites={prerequisites}
-      agentRuntime={agentRuntime}
+      initialFamily={initialFamily}
       onFamilyToggle={(family, enabled) =>
         void runCommand(() => setSkillGroupEnabledCommand(family, enabled, invoke))
       }
@@ -752,6 +789,24 @@ function GoogleCalendarConnection({
   const [clientSecret, setClientSecret] = useState('');
   const [scopes, setScopes] = useState('');
 
+  async function saveGoogleCredentials(): Promise<boolean> {
+    setBusy(true);
+    try {
+      const nextStatus = await invoke<GoogleOAuthStatus>('google_oauth_connect', {
+        clientId,
+        clientSecret: clientSecret || null,
+        scopes: scopes.trim().split(/\s+/),
+      });
+      onStatusChange(nextStatus);
+      return true;
+    } catch (cause) {
+      onError(String(cause));
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <section className="skills-google-connection" aria-labelledby="skills-google-heading">
       <div className="skills-google-heading">
@@ -776,19 +831,7 @@ function GoogleCalendarConnection({
         <form
           className="skills-google-fields"
           onSubmit={(event) => {
-            event.preventDefault();
-            setBusy(true);
-            void invoke<GoogleOAuthStatus>('google_oauth_connect', {
-              clientId,
-              clientSecret: clientSecret || null,
-              scopes: scopes.trim().split(/\s+/),
-            })
-              .then((nextStatus) => {
-                onStatusChange(nextStatus);
-                setClientSecret('');
-              })
-              .catch((cause) => onError(String(cause)))
-              .finally(() => setBusy(false));
+            void submitSecretForm(event, saveGoogleCredentials, () => setClientSecret(''));
           }}
         >
           <label htmlFor="google-client-id">Identificador do cliente Google</label>
@@ -801,10 +844,11 @@ function GoogleCalendarConnection({
           <label htmlFor="google-client-secret">Chave opcional do cliente Google</label>
           <input
             id="google-client-secret"
+            name="google-client-secret"
             type="password"
             value={clientSecret}
             onChange={(event) => setClientSecret(event.target.value)}
-            autoComplete="new-password"
+            autoComplete="off"
           />
           <label htmlFor="google-oauth-scopes">
             Acessos solicitados pelo recurso que você vai usar

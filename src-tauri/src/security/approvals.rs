@@ -12,6 +12,7 @@ pub(super) struct PendingAction {
     pub(super) risk: Risk,
     pub(super) summary: String,
     pub(super) preview: String,
+    pub(super) preview_image: Option<String>,
     pub(super) digest: String,
     pub(super) expires: Instant,
     pub(super) expires_at: u64,

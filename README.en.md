@@ -41,6 +41,12 @@ Skills start disabled and can be enabled on the Skills screen. Results from exte
 - The local audit log chains entries and blocks actions if a write or verification fails.
 - Rust validates skills, risks, paths, and permissions. The WebView displays state and relays user decisions.
 
+### Quick access and performance
+
+- **Home** brings together a starting message, suggestions based on available data, recent conversations, and a setup checklist. Suggestions fill the field for review; they are never sent automatically.
+- **Ctrl+K** opens the command palette in the focused window. The Activity panel opens on demand; Compact mode expands the existing mascot window and provides a quick command field.
+- **Performance** offers Automatic, On, and Off modes. Automatic activates when Windows requests reduced motion, with up to 8 GiB of RAM, or with up to 4 logical CPU cores; On reduces visual effects and mascot animation.
+
 ### Identity, mascot, and sounds
 
 The app provides a personal folder, user-approved `ODEKRAI.md` identity, editable memory notes, and a local profile. The mascot has 12 characters and animations associated with app states. It can appear in Island and Free modes, with its position saved. The app has configurable interface sounds and an option to minimize to the tray when the window closes.

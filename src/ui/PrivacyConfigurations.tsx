@@ -7,6 +7,8 @@ import { normalizeTrustedLinkDomain } from '../core/markdown';
 import { Button, SelectInput } from './DesignSystem';
 import { Icon } from './Icon';
 import { DiscordWebhooksSettings } from './DiscordWebhooksSettings';
+import { useConfirmation } from './ConfirmationProvider';
+import { submitSecretForm } from './secret-form';
 
 type Folder = { path: string; access: 'read_only' | 'read_write'; workspace: boolean };
 type AllowedApp = { id: string; name: string; path: string };
@@ -50,6 +52,7 @@ export function PrivacyConfigurations({
   settings: AppSettings;
   update: (settings: AppSettings) => void;
 }) {
+  const requestConfirmation = useConfirmation();
   const [folders, setFolders] = useState<Folder[]>([]);
   const [apps, setApps] = useState<AllowedApp[]>([]);
   const [access, setAccess] = useState<Folder['access']>('read_only');
@@ -80,6 +83,15 @@ export function PrivacyConfigurations({
       setError(String(cause));
     }
   }, []);
+
+  async function confirmAction(request: Parameters<typeof requestConfirmation>[0]) {
+    try {
+      return await requestConfirmation(request);
+    } catch {
+      setError('Não foi possível mostrar a confirmação. A ação não foi realizada.');
+      return false;
+    }
+  }
 
   useEffect(() => {
     void refresh();
@@ -185,10 +197,10 @@ export function PrivacyConfigurations({
     }
   }
 
-  async function addServer() {
+  async function addServer(): Promise<boolean> {
     if (!serverConfirmed) {
       setError('Confirme que este programa será executado com os privilégios da sua conta.');
-      return;
+      return false;
     }
     setBusy(true);
     try {
@@ -196,7 +208,7 @@ export function PrivacyConfigurations({
       const envNames = serverEnvNames
         .split('\n')
         .map((line) => line.trim())
-        .filter(Boolean);
+        .filter((line, index, names) => Boolean(line) && names.indexOf(line) === index);
       const server = await invoke<McpServer>('mcp_add_server', {
         name: serverName,
         command: serverCommand,
@@ -219,10 +231,11 @@ export function PrivacyConfigurations({
       setServerEnvNames('');
       setServerConfirmed(false);
       await refresh();
+      return true;
     } catch (cause) {
       setError(String(cause));
+      return false;
     } finally {
-      setServerSecrets({});
       setBusy(false);
     }
   }
@@ -232,9 +245,11 @@ export function PrivacyConfigurations({
       .map((part) => `"${part.replaceAll('"', '\\"')}"`)
       .join(' ');
     if (
-      !window.confirm(
-        `Este programa será executado no seu computador com os privilégios da sua conta.\n\nComando completo:\n${command}\n\nDeseja continuar?`,
-      )
+      !(await confirmAction({
+        title: 'Executar programa local?',
+        message: `Este programa será executado no seu computador com os privilégios da sua conta.\n\nComando completo:\n${command}\n\nDeseja continuar?`,
+        destructive: true,
+      }))
     )
       return;
     setServerStates((states) => ({ ...states, [server.id]: { label: 'Conectando…' } }));
@@ -252,22 +267,19 @@ export function PrivacyConfigurations({
     }
   }
 
-  async function saveServerSecret(server: McpServer, key: string) {
+  async function saveServerSecret(server: McpServer, key: string): Promise<boolean> {
     const value = serverSecrets[`${server.id}:${key}`];
-    if (!value) return;
+    if (!value) return false;
     setBusy(true);
     try {
       await invoke('mcp_set_secret', { serverId: server.id, key, value });
       setServerStates((states) => ({ ...states, [server.id]: { label: 'Parado' } }));
-      setServerSecrets((secrets) => {
-        const next = { ...secrets };
-        delete next[`${server.id}:${key}`];
-        return next;
-      });
       await refresh();
       setError('');
+      return true;
     } catch (cause) {
       setError(String(cause));
+      return false;
     } finally {
       setBusy(false);
     }
@@ -376,8 +388,7 @@ export function PrivacyConfigurations({
         <form
           className="mcp-server-form"
           onSubmit={(event) => {
-            event.preventDefault();
-            void addServer();
+            void submitSecretForm(event, addServer, () => setServerSecrets({}));
           }}
         >
           <div className="mcp-settings-grid">
@@ -420,8 +431,10 @@ export function PrivacyConfigurations({
                 <label key={key}>
                   {key} (opcional; salvo no Gerenciador de Credenciais)
                   <input
+                    id={`mcp-new-secret-${key}`}
+                    name={`mcp-new-secret-${key}`}
                     type="password"
-                    autoComplete="new-password"
+                    autoComplete="off"
                     value={serverSecrets[key] ?? ''}
                     onChange={(event) =>
                       setServerSecrets((secrets) => ({ ...secrets, [key]: event.target.value }))
@@ -486,8 +499,16 @@ export function PrivacyConfigurations({
                       className="mcp-env-field"
                       key={key}
                       onSubmit={(event) => {
-                        event.preventDefault();
-                        void saveServerSecret(server, key);
+                        void submitSecretForm(
+                          event,
+                          () => saveServerSecret(server, key),
+                          () =>
+                            setServerSecrets((secrets) => {
+                              const next = { ...secrets };
+                              delete next[`${server.id}:${key}`];
+                              return next;
+                            }),
+                        );
                       }}
                     >
                       <label htmlFor={`mcp-secret-${server.id}-${key}`}>
@@ -495,8 +516,9 @@ export function PrivacyConfigurations({
                       </label>
                       <input
                         id={`mcp-secret-${server.id}-${key}`}
+                        name={`mcp-secret-${server.id}-${key}`}
                         type="password"
-                        autoComplete="new-password"
+                        autoComplete="off"
                         value={serverSecrets[`${server.id}:${key}`] ?? ''}
                         onChange={(event) =>
                           setServerSecrets((secrets) => ({
@@ -539,14 +561,19 @@ export function PrivacyConfigurations({
                       variant="ghost"
                       disabled={busy}
                       onClick={() => {
-                        if (
-                          window.confirm(
-                            `Remover ${server.name} e apagar suas credenciais do Gerenciador de Credenciais?`,
+                        void (async () => {
+                          if (
+                            !(await confirmAction({
+                              title: 'Remover servidor?',
+                              message: `Remover ${server.name} e apagar suas credenciais do Gerenciador de Credenciais?`,
+                              destructive: true,
+                            }))
                           )
-                        )
-                          void invoke('mcp_remove_server', { serverId: server.id })
+                            return;
+                          await invoke('mcp_remove_server', { serverId: server.id })
                             .then(refresh)
                             .catch((cause) => setError(String(cause)));
+                        })();
                       }}
                     >
                       Remover

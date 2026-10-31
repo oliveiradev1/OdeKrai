@@ -1,6 +1,6 @@
 # Integração do mascote
 
-O runtime usa exclusivamente o componente React `PetSprite`, imagens PNG e animações CSS. O catálogo `assets/pets/kenney-mini-characters/pets.json` define IDs, nomes, arquivos e textos alternativos. A seleção é persistida no SQLite pelo backend Rust e aparece na Visão geral, no chat, na prévia do Assistente e nas janelas auxiliares.
+O runtime usa exclusivamente o componente React `PetSprite`, imagens PNG e animações CSS. O catálogo `assets/pets/kenney-mini-characters/pets.json` define IDs, nomes, arquivos e textos alternativos. A seleção é persistida no SQLite pelo backend Rust e aparece no Início, no chat, na prévia do Assistente e nas janelas auxiliares.
 
 ## Estados e movimento
 

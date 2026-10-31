@@ -3,5 +3,14 @@
   "identifier": "pet",
   "description": "Minimal event and window-drag permissions for the pet window.",
   "windows": ["pet"],
-  "permissions": ["core:event:default", "core:window:allow-start-dragging"]
+  "permissions": [
+    "core:event:default",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:window:allow-start-dragging",
+    "core:window:allow-is-visible",
+    "core:window:allow-is-minimized",
+    "core:window:allow-is-focused",
+    "core:window:allow-get-all-windows"
+  ]
 }

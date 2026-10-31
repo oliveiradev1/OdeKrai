@@ -9,6 +9,7 @@ export const SETTINGS_MENU = [
   { id: 'conectores', title: 'Conectores de IA' },
   { id: 'privacidade', title: 'Privacidade e permissões' },
   { id: 'atividade', title: 'Atividade' },
+  { id: 'nuvem', title: 'Nuvem' },
   { id: 'sobre', title: 'Sobre' },
 ] as const satisfies readonly { id: SettingsSection; title: string }[];
 
@@ -31,6 +32,18 @@ export const SETTINGS_INDEX: readonly SettingsIndexEntry[] = [
     keywords: ['fechar', 'bandeja'],
     section: 'geral',
     anchor: 'settings-window',
+  },
+  {
+    title: 'Modo Desempenho',
+    keywords: ['automático', 'hardware', 'baixo consumo', 'movimento reduzido'],
+    section: 'geral',
+    anchor: 'settings-performance',
+  },
+  {
+    title: 'Novidades de novas versões',
+    keywords: ['atualizações', 'notas de versão', 'novidades'],
+    section: 'geral',
+    anchor: 'settings-updates',
   },
   {
     title: 'Aparência e movimento',
@@ -169,6 +182,12 @@ export const SETTINGS_INDEX: readonly SettingsIndexEntry[] = [
     keywords: ['auditoria', 'eventos', 'log'],
     section: 'atividade',
     anchor: 'activity-log',
+  },
+  {
+    title: 'Execução na nuvem e ShardCloud',
+    keywords: ['nuvem', 'cloud', 'shardcloud', 'VM', 'hospedagem', 'execução remota'],
+    section: 'nuvem',
+    anchor: 'cloud-shardcloud-heading',
   },
   {
     title: 'Informações do aplicativo',

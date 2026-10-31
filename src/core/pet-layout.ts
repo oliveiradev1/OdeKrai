@@ -10,10 +10,10 @@ export function petWindowLayout(
 ): PetWindowLayout {
   const dimensions = freeMode
     ? expanded
-      ? { width: 380, height: 210 }
+      ? { width: 380, height: 330 }
       : { width: 128, height: 128 }
     : expanded
-      ? { width: 420, height: 220 }
+      ? { width: 420, height: 330 }
       : { width: 280, height: 104 };
   return {
     width: Math.min(420, Math.round(dimensions.width * scale)),

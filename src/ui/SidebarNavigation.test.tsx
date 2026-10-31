@@ -21,7 +21,7 @@ describe('SidebarNavigation', () => {
 
   it('mostra os cinco destinos principais na ordem acordada, sem cabeçalhos antigos', () => {
     expect(navigationItems.map(({ label }) => label)).toEqual([
-      'Visão geral',
+      'Início',
       'Conversas',
       'Agenda',
       'Habilidades',
@@ -51,9 +51,9 @@ describe('SidebarNavigation', () => {
         compact
       />,
     );
-    expect(markup).toContain('title="Visão geral"');
+    expect(markup).toContain('title="Início"');
     expect(markup).toContain('aria-label="Conversas"');
-    expect(markup).not.toContain('>Visão geral</span>');
+    expect(markup).not.toContain('>Início</span>');
   });
 
   it('fixa o cartão do perfil no rodapé mesmo quando a lista de navegação rola', () => {

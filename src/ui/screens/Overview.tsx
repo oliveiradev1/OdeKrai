@@ -1,159 +1,178 @@
-import { initials, type ProfileData } from '../Profile';
-import { Button } from '../DesignSystem';
-import { Icon } from '../Icon';
+import { useRef, type FormEvent } from 'react';
+import type { ConversationSummary } from '../../core/chat';
+import {
+  applyHomeSuggestion,
+  submitHomeMessage,
+  type HomeChecklistItem,
+  type HomeSuggestion,
+} from '../../core/home';
+import { MessageComposer } from '../MessageComposer';
+import type { ProfileData } from '../Profile';
 import { PetSprite } from '../PetSprite';
-import type { ProviderSettings } from '../../core/settings';
-import type { Section } from './types';
+import type { PetAnimationState } from '../../core/pets';
+import { normalizeProfileData } from '../../core/identity';
 
 export function Overview({
-  onChat,
-  onOpen,
-  provider,
+  draft,
+  setDraft,
+  busy,
   keyReady,
   profile,
   selectedPet,
-  needsIdentity,
-  onConfigureIdentity,
-  onDismissIdentity,
+  petState,
+  reduceMotion,
+  reduceMascot,
+  suggestions,
+  conversations,
+  checklist,
+  pendingApprovalCount,
+  skillsLoadError,
+  onStartConversation,
+  onSendMessage,
+  onResumeConversation,
+  onResolveChecklistItem,
+  onOpenApprovals,
+  onRetrySkills,
 }: {
-  onChat: () => void;
-  onOpen: (section: Section) => void;
-  provider: ProviderSettings;
+  draft: string;
+  setDraft: (value: string) => void;
+  busy: boolean;
   keyReady: boolean;
   profile: ProfileData;
   selectedPet: string;
-  needsIdentity: boolean;
-  onConfigureIdentity: () => void;
-  onDismissIdentity: () => void;
+  petState: PetAnimationState;
+  reduceMotion: boolean;
+  reduceMascot: boolean;
+  suggestions: HomeSuggestion[];
+  conversations: ConversationSummary[];
+  checklist: HomeChecklistItem[];
+  pendingApprovalCount: number;
+  skillsLoadError?: string;
+  onStartConversation: () => void;
+  onSendMessage: (text: string) => Promise<boolean>;
+  onResumeConversation: (id: string) => void;
+  onResolveChecklistItem: (item: HomeChecklistItem) => void;
+  onOpenApprovals: () => void;
+  onRetrySkills?: () => void;
 }) {
-  const today = new Intl.DateTimeFormat('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' })
-    .format(new Date())
-    .toLocaleUpperCase('pt-BR');
+  const composerRef = useRef<HTMLTextAreaElement>(null);
+  const recentConversations = conversations.slice(0, 3);
+  const safeProfile = normalizeProfileData(profile);
+  const name = safeProfile.nickname.trim() || safeProfile.displayName.trim();
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    await submitHomeMessage(draft, busy, onStartConversation, onSendMessage, keyReady);
+  }
+
+  function selectSuggestion(suggestion: HomeSuggestion) {
+    applyHomeSuggestion(suggestion, setDraft);
+    window.requestAnimationFrame(() => composerRef.current?.focus());
+  }
+
   return (
-    <div className="page overview-page">
-      <div className="welcome-row">
-        <div>
-          <span className="eyebrow">{today}</span>
-          <h1>
-            {profile.displayName
-              ? `Olá, ${profile.displayName}. Vamos dar forma às suas ideias.`
-              : 'Um espaço para dar forma às suas ideias.'}
-          </h1>
-          <p>Um lugar para pensar, criar e conversar com a IA que você escolher.</p>
-        </div>
-        <div className="welcome-mark">
-          {profile.avatarDataUrl ? (
-            <img src={profile.avatarDataUrl} alt="Avatar do perfil" />
-          ) : (
-            <span>{initials(profile.displayName)}</span>
-          )}
-          <i />
-        </div>
-      </div>
-      {needsIdentity && (
-        <section className="identity-setup-card" aria-label="Configuração de identidade">
-          <div>
-            <strong>Configurar identidade</strong>
-            <p>Defina seu nome e as preferências usadas pelo OdeKrai.</p>
-          </div>
-          <Button type="button" variant="secondary" onClick={onConfigureIdentity}>
-            Configurar
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            aria-label="Dispensar cartão de configuração de identidade"
-            onClick={onDismissIdentity}
-          >
-            Dispensar
-          </Button>
-        </section>
-      )}
-      <section className="hero-card">
-        <div className="hero-pet-space">
-          <PetSprite estado="idle" petId={selectedPet} />
-        </div>
-        <div className="hero-content">
-          <span className="pill-label">
-            <i /> OdeKrai
-          </span>
-          <h2>
-            Uma mente curiosa.
-            <br />
-            <em>Seu jeito de fazer.</em>
-          </h2>
-          <p>
-            Conecte seu provedor de IA e comece uma conversa. Sua chave fica no Gerenciador de
-            Credenciais do Windows.
-          </p>
-          <button className="primary-button" onClick={onChat}>
-            Iniciar conversa <Icon name="external-link" />
+    <main className="page overview-page">
+      {skillsLoadError && (
+        <div className="error-banner" role="alert">
+          <p>{skillsLoadError}</p>
+          <button type="button" className="secondary-button" onClick={onRetrySkills}>
+            Tentar de novo
           </button>
         </div>
-        <div className="hero-footer">
-          <span>
-            <i /> AMBIENTE LOCAL
-          </span>
-          <span>FEITO PARA ACOMPANHAR</span>
-        </div>
+      )}
+      {pendingApprovalCount > 0 && (
+        <button
+          className="home-approval-banner"
+          type="button"
+          onClick={onOpenApprovals}
+          aria-label={`${pendingApprovalCount} ${pendingApprovalCount === 1 ? 'aprovação pendente' : 'aprovações pendentes'}; abrir janela de aprovação`}
+        >
+          <span aria-hidden="true">{pendingApprovalCount}</span>
+          {pendingApprovalCount === 1
+            ? 'Ação aguardando sua aprovação'
+            : 'Ações aguardando sua aprovação'}
+          <span className="home-approval-open">Abrir aprovações</span>
+        </button>
+      )}
+
+      <section className="home-focus" aria-labelledby="home-title">
+        <PetSprite
+          estado={petState}
+          petId={selectedPet}
+          reduceMotion={reduceMotion}
+          staticImage={reduceMascot}
+          className="home-pet"
+        />
+        <h1 id="home-title">O que vamos fazer hoje?</h1>
+        <p className="home-greeting">{name ? `Olá, ${name}.` : 'Olá.'}</p>
+        <MessageComposer
+          draft={draft}
+          setDraft={setDraft}
+          busy={busy}
+          canSend={keyReady}
+          onSubmit={submit}
+          textareaRef={composerRef}
+          className="composer home-message-composer"
+          sendButtonClassName="primary-button home-send-button"
+        />
+        {suggestions.length > 0 && (
+          <div className="home-suggestions" aria-label="Sugestões baseadas no que está disponível">
+            {suggestions.map((suggestion) => (
+              <button
+                key={suggestion.id}
+                type="button"
+                className="home-suggestion"
+                onClick={() => selectSuggestion(suggestion)}
+                title="Preencher a mensagem para você revisar"
+              >
+                {suggestion.label}
+              </button>
+            ))}
+          </div>
+        )}
       </section>
-      <div className="section-title">
-        <div>
-          <span className="eyebrow">PONTO DE PARTIDA</span>
-          <h3>Conheça o OdeKrai</h3>
-        </div>
-        <button className="text-button" onClick={() => onOpen('settings')}>
-          Personalizar <Icon name="external-link" />
-        </button>
+
+      <div className="home-panels home-panels--centered">
+        {checklist.length > 0 && (
+          <section className="home-checklist" aria-labelledby="home-checklist-title">
+            <h2 id="home-checklist-title">Para começar</h2>
+            <ul>
+              {checklist.map((item) => (
+                <li key={item.id}>
+                  <div>
+                    <strong>{item.title}</strong>
+                    <p>{item.detail}</p>
+                  </div>
+                  <button type="button" onClick={() => onResolveChecklistItem(item)}>
+                    Resolver
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+        <section className="home-resume" aria-labelledby="home-resume-title">
+          <h2 id="home-resume-title">Retomar</h2>
+          {recentConversations.length > 0 ? (
+            <ul className="home-resume-grid">
+              {recentConversations.map((conversation) => (
+                <li key={conversation.id}>
+                  <button
+                    type="button"
+                    onClick={() => onResumeConversation(conversation.id)}
+                    aria-label={`Retomar ${conversation.title}`}
+                  >
+                    <strong>{conversation.title}</strong>
+                    {conversation.preview && <span>{conversation.preview}</span>}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="home-resume-empty">As conversas recentes aparecerão aqui.</p>
+          )}
+        </section>
       </div>
-      <div className="cards-grid">
-        <button className="feature-card provider-card" onClick={() => onOpen('providers')}>
-          <div className="card-icon red-icon">
-            <Icon name="connectors" />
-          </div>
-          <div className="feature-copy">
-            <span className="eyebrow">INTELIGÊNCIA</span>
-            <h4>{keyReady ? 'Provedor configurado' : 'Escolha sua IA'}</h4>
-            <p>
-              {keyReady
-                ? `${provider.name} · ${provider.model}`
-                : 'Conecte uma IA para habilitar conversas.'}
-            </p>
-          </div>
-          <span className="card-arrow">
-            <Icon name="external-link" />
-          </span>
-        </button>
-        <button className="feature-card companion-card" onClick={() => onOpen('companion')}>
-          <div className="card-icon neutral-icon">
-            <Icon name="pet" />
-          </div>
-          <div className="feature-copy">
-            <span className="eyebrow">PERSONALIZAÇÃO</span>
-            <h4>Seu espaço de presença</h4>
-            <p>Conheça o OdeKrai e configure seu pet.</p>
-          </div>
-          <span className="card-arrow">
-            <Icon name="external-link" />
-          </span>
-        </button>
-      </div>
-      <div className="privacy-note">
-        <Icon name="shield" />
-        <p>
-          <strong>Privacidade desde o primeiro passo.</strong> Preferências são salvas localmente. O
-          conteúdo da conversa é enviado apenas ao provedor que você configurar.
-        </p>
-        <button onClick={() => onOpen('settings')}>
-          Saiba mais <Icon name="external-link" />
-        </button>
-      </div>
-      <div className="home-footer">
-        <span>
-          OdeKrai <b>·</b> VERSÃO 0.1.0
-        </span>
-        <span>UM COMPANHEIRO PARA O SEU DIA A DIA</span>
-      </div>
-    </div>
+    </main>
   );
 }

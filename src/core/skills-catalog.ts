@@ -1,11 +1,14 @@
-export type SkillStatus = 'installed' | 'available' | 'configuration_required' | 'unavailable';
+export type SkillStatus =
+  'installed' | 'available' | 'blocked' | 'configuration_required' | 'unavailable';
+export type DiscordSkillState = 'not_configured' | 'active' | 'blocked';
 export type SkillCategory = 'local' | 'integration';
 export type SkillRisk =
   | 'leitura'
   | 'escrita_reversivel'
   | 'comunicacao_externa'
   | 'destrutivo_financeiro'
-  | 'execucao_de_codigo';
+  | 'execucao_de_codigo'
+  | 'captura_sensivel';
 export type SkillFamily =
   | 'arquivos'
   | 'abrir_aplicativos'
@@ -15,6 +18,7 @@ export type SkillFamily =
   | 'web'
   | 'computador'
   | 'codigo'
+  | 'nuvem'
   | 'integracoes_mcp';
 export type SkillOrigin = { kind: 'builtin' } | { kind: 'mcp'; server: string };
 export type SkillsCatalogTab = 'pessoal' | 'publico';
@@ -38,7 +42,9 @@ export type CatalogSkill = {
   fixedBlocked: boolean;
   category: SkillCategory;
   status: SkillStatus;
+  statusReason?: string | null;
   configurationRequired: boolean;
+  discordState?: DiscordSkillState;
   family: SkillFamily;
   icon: string;
   examples: string[];
@@ -81,6 +87,7 @@ export const skillFamilyPresentation: Record<
     description: 'Controles e informações disponíveis neste computador.',
   },
   codigo: { name: 'Código', description: 'Execução assistida de tarefas de código.' },
+  nuvem: { name: 'Nuvem', description: 'Consulta e gerenciamento aprovado das VMs conectadas.' },
   integracoes_mcp: {
     name: 'Integrações MCP',
     description: 'Ferramentas fornecidas por servidores MCP cadastrados.',
@@ -103,6 +110,7 @@ const riskRank: Record<SkillRisk, number> = {
   comunicacao_externa: 2,
   execucao_de_codigo: 3,
   destrutivo_financeiro: 4,
+  captura_sensivel: 5,
 };
 
 export async function setSkillEnabledCommand(
@@ -191,7 +199,8 @@ export function groupSkillFamilies(skills: CatalogSkill[]): CatalogFamily[] {
 
 export function familyEnableTarget(skills: CatalogSkill[]): boolean | undefined {
   const eligible = skills.filter(
-    (skill) => skill.status === 'available' || skill.status === 'installed',
+    (skill) =>
+      skill.status === 'available' || skill.status === 'blocked' || skill.status === 'installed',
   );
   if (eligible.length === 0) return undefined;
   return !eligible.every((skill) => skill.enabled);

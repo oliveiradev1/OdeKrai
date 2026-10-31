@@ -34,7 +34,7 @@ use approvals::{
 };
 use audit::verify_audit_path;
 use dispatch::*;
-pub use kill_switch::{init_shortcut, load_halted, on_global_shortcut};
+pub use kill_switch::{handle_global_shortcut, init_shortcut, load_halted};
 use workspace::*;
 
 #[cfg(debug_assertions)]
@@ -47,6 +47,65 @@ pub async fn submit_simulated_action(
 ) -> Result<ActionResult, String> {
     crate::require_main(&caller)?;
     dispatch::submit_simulated_action_inner(app, state, request).await
+}
+
+#[tauri::command]
+pub async fn undo_agent_action(
+    app: tauri::AppHandle,
+    caller: tauri::WebviewWindow,
+    state: State<'_, SecurityState>,
+    descriptor: crate::history::UndoDescriptor,
+    confirm_modified: bool,
+) -> Result<ActionResult, String> {
+    crate::require_main(&caller)?;
+    if !matches!(
+        descriptor.skill_id.as_str(),
+        "wallpaper.restore" | "display.restore_brightness" | "theme.restore" | "files.restore"
+    ) || descriptor.state_id.is_empty()
+        || descriptor.state_id.len() > 128
+        || descriptor.state_id.chars().any(char::is_control)
+    {
+        return Err("Este resultado não possui uma restauração disponível.".into());
+    }
+    let is_file_restore = descriptor.skill_id == "files.restore";
+    let state_id = descriptor.state_id.clone();
+    let action = SimulatedAction::Productivity {
+        skill_id: descriptor.skill_id.clone(),
+        params: if is_file_restore {
+            let path = descriptor
+                .path
+                .as_deref()
+                .ok_or("O cartão não identifica o arquivo para restaurar.")?;
+            let (root, normalized) = skills::resolve_action_target(
+                &app,
+                &SimulatedAction::Productivity {
+                    skill_id: "files.restore".into(),
+                    params: serde_json::json!({"path":path,"state_id":state_id.clone(),"confirm_modified":confirm_modified}),
+                },
+                true,
+            )?;
+            let SimulatedAction::Productivity { params, .. } = normalized else {
+                unreachable!()
+            };
+            let normalized_path = params["path"]
+                .as_str()
+                .ok_or("Caminho de restauração inválido.")?;
+            let (_, changed) = workspace::inspect_file_undo(&root, &state_id, normalized_path)?;
+            if changed && !confirm_modified {
+                return Ok(ActionResult { id: state_id, status: "confirmation_required".into(), message: "O arquivo foi alterado depois da ação. Confirme se quer restaurar mesmo assim; a versão atual será preservada em .history.".into(), result: None, undo_descriptor: None, confirmation_required: true });
+            }
+            serde_json::json!({"path":normalized_path,"state_id":state_id.clone(),"confirm_modified":confirm_modified})
+        } else {
+            serde_json::json!({"history_id": state_id.clone()})
+        },
+    };
+    let result =
+        dispatch::submit_simulated_action_inner(app.clone(), state, ActionRequest { action })
+            .await?;
+    if result.status == "completed" {
+        crate::history::clear_undo_descriptor_for_state(&app, &state_id)?;
+    }
+    Ok(result)
 }
 
 #[tauri::command]
@@ -66,6 +125,19 @@ pub fn get_pending_approval_count(
 ) -> Result<usize, String> {
     crate::require_main(&caller)?;
     dispatch::get_pending_approval_count_inner(state)
+}
+
+#[tauri::command]
+pub fn show_pending_approval_window(
+    app: tauri::AppHandle,
+    caller: tauri::WebviewWindow,
+    state: State<'_, SecurityState>,
+) -> Result<(), String> {
+    crate::require_main(&caller)?;
+    if dispatch::get_pending_approval_count_inner(state)? == 0 {
+        return Err("Não há aprovações pendentes.".into());
+    }
+    dispatch::open_approval(&app)
 }
 
 #[tauri::command]
@@ -124,6 +196,10 @@ pub struct SecurityState {
     rate: Mutex<HashMap<String, VecDeque<Instant>>>,
     audit_lock: Mutex<()>,
     shortcut_error: Mutex<Option<String>>,
+    quick_shortcut_error: Mutex<Option<String>>,
+    active_kill_shortcut_id: Mutex<Option<u32>>,
+    active_quick_shortcut_id: Mutex<Option<u32>>,
+    quick_focus_requested: AtomicBool,
     pub(crate) approval_broker: approvals::ApprovalBroker,
     pub(crate) agent_runs: tokio::sync::Mutex<HashMap<String, tokio_util::sync::CancellationToken>>,
 }
@@ -136,6 +212,10 @@ impl SecurityState {
             rate: Mutex::new(HashMap::new()),
             audit_lock: Mutex::new(()),
             shortcut_error: Mutex::new(None),
+            quick_shortcut_error: Mutex::new(None),
+            active_kill_shortcut_id: Mutex::new(None),
+            active_quick_shortcut_id: Mutex::new(None),
+            quick_focus_requested: AtomicBool::new(false),
             approval_broker: approvals::ApprovalBroker::new(
                 MAX_PENDING,
                 Duration::from_secs(DEFAULT_APPROVAL_TTL),
@@ -221,6 +301,10 @@ pub struct ActionResult {
     pub status: String,
     pub message: String,
     pub result: Option<String>,
+    #[serde(default)]
+    pub undo_descriptor: Option<crate::history::UndoDescriptor>,
+    #[serde(default)]
+    pub confirmation_required: bool,
 }
 
 pub(crate) fn audit_provider_fallback(
@@ -280,6 +364,7 @@ pub struct PendingView {
     pub origin: String,
     pub summary: String,
     pub preview: String,
+    pub preview_image: Option<String>,
     pub full_preview: bool,
     pub expires_at: u64,
     pub display_hash: String,
@@ -352,7 +437,7 @@ pub(crate) fn database(app: &tauri::AppHandle) -> Result<Connection, String> {
         .map_err(|_| "Não foi possível preparar os dados do aplicativo.".to_string())?;
     let db = Connection::open(dir.join("permissions.sqlite3"))
         .map_err(|_| "Não foi possível abrir as configurações de segurança.".to_string())?;
-    let schema = format!("PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS permission_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS tool_overrides (tool TEXT PRIMARY KEY, more_permissive INTEGER NOT NULL CHECK(more_permissive IN (0,1))); CREATE TABLE IF NOT EXISTS skill_settings (skill_id TEXT PRIMARY KEY, enabled INTEGER NOT NULL CHECK(enabled IN (0,1))); CREATE TABLE IF NOT EXISTS allowed_folders (path TEXT PRIMARY KEY, access TEXT NOT NULL CHECK(access IN ('read_only','read_write'))); CREATE TABLE IF NOT EXISTS trusted_external_domains (domain TEXT PRIMARY KEY); CREATE TABLE IF NOT EXISTS allowed_apps (app_id TEXT PRIMARY KEY, name TEXT NOT NULL, path TEXT NOT NULL); CREATE TABLE IF NOT EXISTS discord_webhooks (id TEXT PRIMARY KEY, name TEXT NOT NULL, last_sent INTEGER NOT NULL DEFAULT 0); CREATE TABLE IF NOT EXISTS mcp_servers (id TEXT PRIMARY KEY, name TEXT NOT NULL, command TEXT NOT NULL, args_json TEXT NOT NULL, env_names_json TEXT NOT NULL, enabled INTEGER NOT NULL CHECK(enabled IN (0,1))); INSERT OR IGNORE INTO permission_settings(key,value) VALUES ('mode','sempre_perguntar'),('shortcut','Ctrl+Shift+F12'),('halted','false'),('approval_ttl_seconds','{DEFAULT_APPROVAL_TTL}'),('agent_max_turns','8'),('agent_max_duration_seconds','120'),('agent_max_tokens','16000'),('agent_max_external_actions','2');");
+    let schema = format!("PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS permission_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS tool_overrides (tool TEXT PRIMARY KEY, more_permissive INTEGER NOT NULL CHECK(more_permissive IN (0,1))); CREATE TABLE IF NOT EXISTS skill_settings (skill_id TEXT PRIMARY KEY, enabled INTEGER NOT NULL CHECK(enabled IN (0,1))); CREATE TABLE IF NOT EXISTS allowed_folders (path TEXT PRIMARY KEY, access TEXT NOT NULL CHECK(access IN ('read_only','read_write'))); CREATE TABLE IF NOT EXISTS trusted_external_domains (domain TEXT PRIMARY KEY); CREATE TABLE IF NOT EXISTS allowed_apps (app_id TEXT PRIMARY KEY, name TEXT NOT NULL, path TEXT NOT NULL); CREATE TABLE IF NOT EXISTS discord_webhooks (id TEXT PRIMARY KEY, name TEXT NOT NULL, last_sent INTEGER NOT NULL DEFAULT 0); CREATE TABLE IF NOT EXISTS mcp_servers (id TEXT PRIMARY KEY, name TEXT NOT NULL, command TEXT NOT NULL, args_json TEXT NOT NULL, env_names_json TEXT NOT NULL, enabled INTEGER NOT NULL CHECK(enabled IN (0,1))); INSERT OR IGNORE INTO permission_settings(key,value) VALUES ('mode','sempre_perguntar'),('shortcut','Ctrl+Shift+F12'),('island_quick_shortcut_enabled','false'),('island_quick_shortcut','Ctrl+Alt+Space'),('shardcloud_monthly_budget_cents',''),('halted','false'),('approval_ttl_seconds','{DEFAULT_APPROVAL_TTL}'),('agent_max_turns','8'),('agent_max_duration_seconds','120'),('agent_max_tokens','16000'),('agent_max_external_actions','2');");
     db.execute_batch(&schema)
         .map_err(|_| "Não foi possível preparar as configurações de segurança.".to_string())?;
     Ok(db)
@@ -648,7 +733,7 @@ fn known_tool(tool: &str) -> bool {
 }
 
 #[tauri::command]
-pub fn set_kill_shortcut(
+pub async fn set_kill_shortcut(
     app: tauri::AppHandle,
     caller: tauri::WebviewWindow,
     shortcut: String,
@@ -657,13 +742,17 @@ pub fn set_kill_shortcut(
     if shortcut.len() > 80 || shortcut.trim() != shortcut || !shortcut.contains('+') {
         return Err("Formato de atalho inválido.".into());
     }
+    let parsed = shortcut
+        .parse::<tauri_plugin_global_shortcut::Shortcut>()
+        .map_err(|_| "Formato de atalho inválido.".to_string())?;
+    let parsed_id = parsed.id();
     let previous = db_setting(&app, "shortcut")?;
     if previous == shortcut {
         return Ok(());
     }
     let manager = app.global_shortcut();
     let _ = manager.unregister(previous.as_str());
-    if let Err(error) = manager.register(shortcut.as_str()) {
+    if let Err(error) = manager.register(parsed) {
         let _ = manager.register(previous.as_str());
         let message = format!("O atalho está em conflito ou não pôde ser registrado: {error}");
         *app.state::<SecurityState>()
@@ -681,8 +770,63 @@ pub fn set_kill_shortcut(
         .shortcut_error
         .lock()
         .map_err(|_| "Estado do atalho indisponível.")? = None;
+    *app.state::<SecurityState>()
+        .active_kill_shortcut_id
+        .lock()
+        .map_err(|_| "Estado do atalho indisponível.")? = Some(parsed_id);
     let _ = app.emit("permission-settings-updated", ());
     Ok(())
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IslandQuickShortcutSettings {
+    shortcut: String,
+    enabled: bool,
+    error: Option<String>,
+}
+
+#[tauri::command]
+pub async fn get_island_quick_shortcut(
+    app: tauri::AppHandle,
+    caller: tauri::WebviewWindow,
+) -> Result<IslandQuickShortcutSettings, String> {
+    super::require_main(&caller)?;
+    let state = app.state::<SecurityState>();
+    let error = state
+        .quick_shortcut_error
+        .lock()
+        .map_err(|_| "Estado do atalho indisponível.")?
+        .clone();
+    Ok(IslandQuickShortcutSettings {
+        shortcut: db_setting(&app, "island_quick_shortcut")
+            .unwrap_or_else(|_| "Ctrl+Alt+Space".into()),
+        enabled: db_setting(&app, "island_quick_shortcut_enabled")
+            .is_ok_and(|value| value == "true"),
+        error,
+    })
+}
+
+#[tauri::command]
+pub async fn set_island_quick_shortcut(
+    app: tauri::AppHandle,
+    caller: tauri::WebviewWindow,
+    shortcut: String,
+    enabled: bool,
+) -> Result<(), String> {
+    super::require_main(&caller)?;
+    kill_switch::update_quick_shortcut(&app, &shortcut, enabled).await?;
+    let _ = app.emit("island-quick-shortcut-updated", ());
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn take_pet_quick_focus_request(
+    caller: tauri::WebviewWindow,
+    state: State<'_, SecurityState>,
+) -> Result<bool, String> {
+    super::require_caller(&caller, &["pet"])?;
+    Ok(kill_switch::consume_quick_focus_request(&state))
 }
 
 #[tauri::command]
@@ -918,6 +1062,7 @@ mod tests {
                 risk: Risk::EscritaReversivel,
                 summary: String::new(),
                 preview: String::new(),
+                preview_image: None,
                 digest: expected.clone(),
                 expires: Instant::now() + Duration::from_secs(30),
                 expires_at: 0,

@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Local, TimeZone, Utc};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -25,6 +25,68 @@ pub(crate) struct Reminder {
     pub when: String,
     pub note: String,
     pub status: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct UpcomingReminder {
+    pub title: String,
+    pub when_local: String,
+    pub status: String,
+}
+
+const UPCOMING_LIMIT: usize = 20;
+
+fn upcoming_at<Tz: TimeZone>(
+    connection: &Connection,
+    now: DateTime<Utc>,
+    window_hours: u32,
+    timezone: Tz,
+) -> Result<Vec<UpcomingReminder>, String> {
+    if !(1..=168).contains(&window_hours) {
+        return Err("A janela deve estar entre 1 e 168 horas.".into());
+    }
+    let end = now + chrono::Duration::hours(i64::from(window_hours));
+    let mut statement = connection.prepare("SELECT title,due_at,status FROM reminders WHERE status IN ('pending','notification_error') AND due_at>?1 AND due_at<=?2 ORDER BY due_at LIMIT ?3")
+        .map_err(|_| "Não foi possível consultar os próximos lembretes.".to_string())?;
+    let rows = statement
+        .query_map(
+            params![now.timestamp(), end.timestamp(), UPCOMING_LIMIT as i64],
+            |row| {
+                let title: String = row.get(0)?;
+                let timestamp: i64 = row.get(1)?;
+                let status: String = row.get(2)?;
+                let title = title.chars().take(100).collect::<String>();
+                let when = timezone
+                    .timestamp_opt(timestamp, 0)
+                    .single()
+                    .map(|value| value.to_rfc3339())
+                    .unwrap_or_default();
+                Ok(UpcomingReminder {
+                    title,
+                    when_local: when,
+                    status,
+                })
+            },
+        )
+        .map_err(|_| "Não foi possível consultar os próximos lembretes.".to_string())?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|_| "Não foi possível ler os próximos lembretes.".to_string())
+}
+
+#[tauri::command]
+pub async fn get_upcoming_reminders(
+    app: tauri::AppHandle,
+    caller: tauri::WebviewWindow,
+    window_hours: u32,
+) -> Result<Vec<UpcomingReminder>, String> {
+    crate::require_main(&caller)?;
+    let enabled = crate::security::skills::is_skill_enabled(&app, "reminder.list")?;
+    if !crate::security::skills::skill_exposed_to_agent("reminder.list", enabled, false) {
+        return Ok(Vec::new());
+    }
+    let connection = open(&database_path(&app)?)?;
+    upcoming_at(&connection, Utc::now(), window_hours, Local)
 }
 
 fn database_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -173,6 +235,11 @@ fn list(connection: &Connection) -> Result<Vec<Reminder>, String> {
         );
     }
     Ok(reminders)
+}
+
+pub(crate) fn pending_count(app: &tauri::AppHandle) -> Result<usize, String> {
+    let connection = open(&database_path(app)?)?;
+    Ok(list(&connection)?.len())
 }
 
 fn cancel(connection: &Connection, id: &str) -> Result<(), String> {
@@ -404,5 +471,47 @@ mod tests {
             0
         );
         assert_eq!(list(&connection).unwrap()[0].id, reminder.id);
+    }
+
+    #[test]
+    fn upcoming_uses_local_timezone_rolls_over_midnight_and_hides_notes() {
+        let connection = Connection::open_in_memory().unwrap();
+        init(&connection).unwrap();
+        create(
+            &connection,
+            "Próximo",
+            "2026-10-31T01:30:00Z",
+            "nota privada",
+        )
+        .unwrap();
+        let now = DateTime::parse_from_rfc3339("2026-10-31T01:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let timezone = chrono::FixedOffset::west_opt(3 * 3600).unwrap();
+        let rows = upcoming_at(&connection, now, 24, timezone).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].when_local.starts_with("2026-10-30T22:30:00-03:00"));
+        assert!(!serde_json::to_string(&rows)
+            .unwrap()
+            .contains("nota privada"));
+    }
+
+    #[test]
+    fn upcoming_excludes_past_orders_and_limits_to_twenty() {
+        let connection = Connection::open_in_memory().unwrap();
+        init(&connection).unwrap();
+        create(&connection, "Passado", "2026-10-30T10:59:00Z", "").unwrap();
+        for index in 1..=21 {
+            let due = 1_793_360_000 + index * 60;
+            connection.execute("INSERT INTO reminders(id,title,when_iso,due_at,note,status) VALUES(?1,?2,'',?3,'','pending')", params![format!("r{index}"), format!("Item {index}"), due]).unwrap();
+        }
+        let now = DateTime::from_timestamp(1_793_360_000, 0).unwrap();
+        let rows = upcoming_at(&connection, now, 24, Utc).unwrap();
+        assert_eq!(rows.len(), 20);
+        assert!(rows
+            .windows(2)
+            .all(|pair| pair[0].when_local < pair[1].when_local));
+        assert!(!rows.iter().any(|reminder| reminder.title == "Passado"));
+        assert!(upcoming_at(&connection, now, 0, Utc).is_err());
     }
 }

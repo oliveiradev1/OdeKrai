@@ -5,12 +5,22 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type ComponentType,
   type FormEvent,
 } from 'react';
 import { resolveConversationSelection } from '../core/chat';
+import { setActionCardUndoError } from '../core/agent-card';
 import type { ChatMessage } from '../core/provider-messages';
 import type { AgentActionCardData } from './AgentControls';
+import {
+  ActivityPanelTrigger,
+  ActivitySidePanel,
+  shouldLoadPanelAudit,
+  toggleActivityPanel,
+  type ActivityAuditSummary,
+  type UpcomingReminder,
+} from './ActivitySidePanel';
 import { Channel, invoke, isTauri } from '@tauri-apps/api/core';
 import { emit, listen } from '@tauri-apps/api/event';
 import {
@@ -22,9 +32,32 @@ import {
 } from '../core/sounds';
 import { AI_PROVIDERS, type AiProvider } from '../core/providers';
 import { stopLocalSpeech } from '../core/speech';
+import {
+  createHomeChecklist,
+  createHomeSuggestions,
+  getTodayBounds,
+  type HomeEvent,
+} from '../core/home';
+import { loadFirstUseProgress, shouldAutoOpenFirstUse } from '../core/first-use';
+import { usePerformanceMode } from './usePerformanceMode';
+import { decideReleasePrompt, RELEASE_NOTES_LAST_SEEN_KEY } from '../core/release-notes';
+import { releaseNotesManifest } from '../core/release-notes-manifest';
+import {
+  islandReviewDestination,
+  islandSuggestions,
+  summarizeIslandResponse,
+  type IslandQuickRequest,
+  type IslandReviewState,
+} from '../core/island-quick';
+import type { CatalogSkill } from '../core/skills-catalog';
 const Overview = lazy(() =>
   import('./screens/Overview').then((module) => ({ default: withScreenBoundary(module.Overview) })),
 );
+const DevDesignSystemGallery = import.meta.env.DEV
+  ? lazy(() =>
+      import('./DesignSystemGallery').then((module) => ({ default: module.DesignSystemGallery })),
+    )
+  : null;
 const AssistantScreen = lazy(() =>
   import('./screens/Assistant').then((module) => ({
     default: withScreenBoundary(module.AssistantScreen),
@@ -70,12 +103,12 @@ const ActivityScreen = lazy(() =>
     default: withScreenBoundary(module.ActivityScreen),
   })),
 );
-import { ApprovalWindow, isApprovalWindow } from './SecurityCenter';
+import { ApprovalWindow, isApprovalWindow, SecurityCenter } from './SecurityCenter';
+import type { AuditEntry } from './SecurityCenter';
 import { SkillsScreen } from './SkillsScreen';
-import { PETS } from '../core/pets';
+import { PETS, petAnimationForAssistantActivity, type PetAnimationState } from '../core/pets';
 import {
   navigationItems,
-  PendingApprovalIndicator,
   SidebarNavigation,
   SidebarProfileMenu,
   shouldShowStopAll,
@@ -85,16 +118,29 @@ import {
   setPrimaryProviderSettings,
   toggleProviderSettings,
 } from '../core/provider-directory';
-import { loadSettings } from '../core/settings';
+import { loadSettings, saveSettings, type ProviderSettings } from '../core/settings';
 import { useAppEffects } from './hooks/useAppEffects';
 import { externalLinkDomain, safeMarkdownUrl } from '../core/markdown';
+import { shouldAutomaticallyCheckForUpdates } from '../core/update-check';
 
 import { useAppState } from './hooks/useAppState';
 import { useNavigation } from './hooks/useNavigation';
 import { SettingsModal } from './SettingsModal';
+import { UpdateAvailableBanner, type UpdateCheckResult } from './UpdateAvailableBanner';
+import { FirstUseAssistant, type FirstUseStepContent } from './FirstUseAssistant';
+import { ReleaseNotesModal } from './ReleaseNotesModal';
+import { useConfirmation } from './ConfirmationProvider';
 import { resolveAgentReason, resolveConfigurationReason } from '../core/navigation';
 import { ScreenErrorBoundary } from './ScreenErrorBoundary';
 import { ResizeHandle } from './ResizeHandle';
+import { CommandPalette } from './CommandPalette';
+import {
+  buildPaletteItems,
+  dispatchPaletteAction,
+  updateRecentCommands,
+  type PaletteItem,
+} from '../core/command-palette';
+import type { SkillFamily } from '../core/skills-catalog';
 const screenLoading = (
   <div className="screen-loading" role="status">
     Carregando tela…
@@ -112,12 +158,35 @@ const withScreenBoundary = <Props extends object>(
   }
   return BoundedScreen;
 };
+const currentReleaseNotesUrl = `https://github.com/Anceryx/OdeKrai/blob/main/docs/releases/v${releaseNotesManifest.currentVersion}.md`;
 
 export function App() {
-  return isApprovalWindow() ? <ApprovalWindow /> : <MainApp />;
+  if (isApprovalWindow()) return <ApprovalWindow />;
+  if (
+    import.meta.env.DEV &&
+    location.pathname === '/__dev/design-system' &&
+    DevDesignSystemGallery
+  ) {
+    return (
+      <Suspense fallback={screenLoading}>
+        <DevDesignSystemGallery />
+      </Suspense>
+    );
+  }
+  return <MainApp />;
 }
 
 function MainApp() {
+  const confirm = useConfirmation();
+  const [hadSettingsAtStartup] = useState(() => {
+    try {
+      return Boolean(
+        localStorage.getItem('odekrai.settings.v2') || localStorage.getItem('odekrai.settings.v1'),
+      );
+    } catch {
+      return false;
+    }
+  });
   const appState = useAppState();
   const {
     section,
@@ -139,7 +208,56 @@ function MainApp() {
   const [agentErrorDetails, setAgentErrorDetails] = useState('');
   const [agentAwaitingApproval, setAgentAwaitingApproval] = useState(false);
   const [agentActionCards, setAgentActionCards] = useState<AgentActionCardData[]>([]);
+  const [assistantPetState, setAssistantPetState] = useState<PetAnimationState>('idle');
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const [recentCommands, setRecentCommands] = useState<string[]>([]);
+  const [requestedSkillFamily, setRequestedSkillFamily] = useState<{
+    family: SkillFamily;
+    requestId: number;
+  } | null>(null);
+  const skillFamilyRequestId = useRef(0);
+  const quickRequestHandler = useRef<(request: IslandQuickRequest) => void>(() => undefined);
+  const openConversationHandler = useRef<(id: string) => void>(() => undefined);
+  const reviewAlertHandler = useRef<(state: IslandReviewState) => void>(() => undefined);
+  const quickSuggestionsRef = useRef<ReturnType<typeof islandSuggestions>>([]);
+  const activeConversationRef = useRef<string | null>(null);
+  const [requestedSettingsEntry, setRequestedSettingsEntry] = useState<{
+    section: import('../core/navigation').SettingsSection;
+    anchor: string;
+    requestId: number;
+  } | null>(null);
+  const settingsEntryRequestId = useRef(0);
+  const [undoToast, setUndoToast] = useState<{ cardId: string } | null>(null);
+  const [firstUseOpen, setFirstUseOpen] = useState(false);
+  const [releaseNotesPending, setReleaseNotesPending] = useState(false);
+  const [releaseNotesOpen, setReleaseNotesOpen] = useState(false);
+  const [showAllReleaseNotes, setShowAllReleaseNotes] = useState(false);
+  const [availableUpdate, setAvailableUpdate] = useState<UpdateCheckResult | null>(null);
+  useEffect(() => {
+    if (!undoToast) return;
+    const timer = window.setTimeout(() => setUndoToast(null), 8000);
+    return () => window.clearTimeout(timer);
+  }, [undoToast]);
   const [pendingApprovalCount, setPendingApprovalCount] = useState(0);
+  const [activityPanelOpen, setActivityPanelOpen] = useState(false);
+  const activityPanelTriggerRef = useRef<HTMLButtonElement>(null);
+  const [activityAuditRecords, setActivityAuditRecords] = useState<AuditEntry[]>([]);
+  const [activityAuditVerified, setActivityAuditVerified] = useState<boolean | null>(null);
+  const [activityAuditLoading, setActivityAuditLoading] = useState(false);
+  const [activityAuditUnavailable, setActivityAuditUnavailable] = useState(false);
+  const activityAuditLoadedAt = useRef(0);
+  const [homeSkills, setHomeSkills] = useState<CatalogSkill[] | null>(null);
+  const [homeSkillsLoadError, setHomeSkillsLoadError] = useState('');
+  const [homeContextRetry, setHomeContextRetry] = useState(0);
+  const [todayEvents, setTodayEvents] = useState<HomeEvent[]>([]);
+  const [scheduledEvents, setScheduledEvents] = useState<HomeEvent[]>([]);
+  const [reminderCount, setReminderCount] = useState(0);
+  const [upcomingReminders, setUpcomingReminders] = useState<UpcomingReminder[]>([]);
+  const [upcomingRemindersLoading, setUpcomingRemindersLoading] = useState(false);
+  const [upcomingRemindersUnavailable, setUpcomingRemindersUnavailable] = useState(false);
+  const [scheduleUnavailable, setScheduleUnavailable] = useState(false);
+  const [reminderUnavailable, setReminderUnavailable] = useState(false);
+  const homeContextLoadedAt = useRef(0);
   const agentRunConversation = useRef<string | null>(null);
   const thinkingSoundGate = useRef(new SoundTriggerGate());
   const lastThinkingSoundKey = useRef<string | null>(null);
@@ -147,11 +265,10 @@ function MainApp() {
   const {
     settings,
     setSettings,
+    identityConfigured,
+    setIdentityConfigured,
     petVisible,
     setPetVisible,
-    identityConfigured,
-    identityCardDismissed,
-    setIdentityCardDismissed,
     permissionIndicator,
     profile,
     setProfile,
@@ -179,6 +296,7 @@ function MainApp() {
     toast,
     setToast,
     diagnostics,
+    dismissDiagnostic,
     dismissDiagnostics,
     reportDiagnostic,
     chatMode,
@@ -186,7 +304,66 @@ function MainApp() {
     request,
     companionStateTimer,
   } = appState;
+  const performanceStatus = usePerformanceMode(settings.performanceMode);
+  useEffect(() => {
+    if (!shouldAutomaticallyCheckForUpdates(settings.checkForUpdatesAutomatically, isTauri()))
+      return;
+    void invoke<UpdateCheckResult>('check_for_update')
+      .then((result) => {
+        setAvailableUpdate(result.check_succeeded && result.available_version ? result : null);
+      })
+      .catch(() => {
+        // A consulta automática não deve interromper a experiência do app.
+      });
+  }, [settings.checkForUpdatesAutomatically]);
+  const performanceStatusRef = useRef(performanceStatus);
+  useEffect(() => {
+    performanceStatusRef.current = performanceStatus;
+  }, [performanceStatus.enabled, performanceStatus.loading, performanceStatus.reason]);
+  useEffect(() => {
+    if (!isTauri()) return;
+    const storage = typeof localStorage === 'undefined' ? undefined : localStorage;
+    const progress = loadFirstUseProgress(storage);
+    if (!shouldAutoOpenFirstUse(progress)) return;
+    setFirstUseOpen(true);
+  }, []);
+  useEffect(() => {
+    if (!isTauri()) return;
+    const current = releaseNotesManifest.releases.find(
+      (release) => release.version === releaseNotesManifest.currentVersion,
+    );
+    if (!current) return;
+    try {
+      const previousVersion = localStorage.getItem(RELEASE_NOTES_LAST_SEEN_KEY);
+      const decision = decideReleasePrompt({
+        currentVersion: releaseNotesManifest.currentVersion,
+        previousVersion,
+        notesAvailable: true,
+        hasExistingPreferences: hadSettingsAtStartup,
+        enabled: settings.showReleaseNotes,
+      });
+      if (decision.markSeen && !decision.show) {
+        localStorage.setItem(RELEASE_NOTES_LAST_SEEN_KEY, releaseNotesManifest.currentVersion);
+      }
+      if (decision.show) setReleaseNotesPending(true);
+    } catch {
+      // Sem armazenamento local não é possível garantir a exibição única por versão.
+    }
+  }, []);
+  useEffect(() => {
+    if (!releaseNotesPending || firstUseOpen) return;
+    try {
+      localStorage.setItem(RELEASE_NOTES_LAST_SEEN_KEY, releaseNotesManifest.currentVersion);
+    } catch {
+      setReleaseNotesPending(false);
+      return;
+    }
+    setReleaseNotesPending(false);
+    setShowAllReleaseNotes(false);
+    setReleaseNotesOpen(true);
+  }, [firstUseOpen, releaseNotesPending]);
   const emitCompanionState = (payload: { type: 'activity'; state: string; message: string }) => {
+    setAssistantPetState(petAnimationForAssistantActivity(payload.state));
     void emit('companion-state', payload).catch(() =>
       reportDiagnostic('companion-state', 'Não foi possível atualizar o estado visual do pet.'),
     );
@@ -198,6 +375,52 @@ function MainApp() {
   const shownProviderName = usedProvider?.name ?? activeProvider.name;
   const shownProviderId = usedProviderId ?? settings.activeProviderId;
   const shownProviderModel = shownProviderSettings?.model ?? activeProvider.model;
+  const activeHomeSkills = useMemo(
+    () =>
+      (homeSkills ?? [])
+        .filter((skill) => skill.enabled && skill.status === 'installed')
+        .map(({ id, family, name }) => ({ id, family, name })),
+    [homeSkills],
+  );
+  const homeSuggestions = useMemo(
+    () =>
+      createHomeSuggestions({
+        activeSkills: activeHomeSkills,
+        agentAvailable: agentAvailability.available,
+        todayEvents,
+        reminderCount,
+        pendingApprovalCount,
+        recentConversations: conversations.slice(0, 5),
+      }),
+    [
+      activeHomeSkills,
+      agentAvailability.available,
+      todayEvents,
+      reminderCount,
+      pendingApprovalCount,
+      conversations,
+    ],
+  );
+  quickSuggestionsRef.current = islandSuggestions(homeSuggestions);
+  activeConversationRef.current = conversationId;
+  useEffect(() => {
+    if (isTauri()) void emit('pet-quick-suggestions', quickSuggestionsRef.current);
+  }, [homeSuggestions]);
+  const homeChecklist = useMemo(
+    () =>
+      createHomeChecklist({
+        providerReady: keySavedForSession,
+        workspaceAvailable: Boolean(agentAvailability.workspacePath),
+        agentAvailable: agentAvailability.available,
+        agentReason: agentAvailability.reason,
+      }),
+    [
+      keySavedForSession,
+      agentAvailability.available,
+      agentAvailability.reason,
+      agentAvailability.workspacePath,
+    ],
+  );
   useEffect(() => {
     if (isTauri())
       void invoke('set_microphone_opt_in', { enabled: settings.microphoneEnabled }).catch(() =>
@@ -265,6 +488,195 @@ function MainApp() {
   ]);
 
   useEffect(() => {
+    if (section !== 'overview' && !activityPanelOpen) return;
+    let disposed = false;
+    let stopSkillsUpdated: (() => void) | undefined;
+
+    const refreshHomeContext = async (force = false) => {
+      if (!force && Date.now() - homeContextLoadedAt.current < 30_000 && homeSkills !== null)
+        return;
+      setHomeSkills(null);
+      setTodayEvents([]);
+      setScheduledEvents([]);
+      setReminderCount(0);
+      setScheduleUnavailable(true);
+      setReminderUnavailable(true);
+      if (!isTauri()) {
+        setHomeSkills([]);
+        homeContextLoadedAt.current = Date.now();
+        return;
+      }
+      try {
+        const skills = await invoke<CatalogSkill[]>('get_skills');
+        if (disposed) return;
+        setHomeSkills(skills);
+        setHomeSkillsLoadError('');
+        const active = skills.filter((skill) => skill.enabled && skill.status === 'installed');
+        const canReadCalendar = active.some(
+          (skill) => skill.id === 'calendar.list_events' && skill.family === 'agenda_lembretes',
+        );
+        const canReadReminders = active.some(
+          (skill) => skill.id === 'reminder.list' && skill.family === 'agenda_lembretes',
+        );
+        const now = new Date();
+        const todayBounds = getTodayBounds(now);
+        const next24Hours = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+        const bounds = {
+          from: todayBounds.from,
+          to: new Date(
+            Math.max(new Date(todayBounds.to).getTime(), next24Hours.getTime()),
+          ).toISOString(),
+        };
+        const [events, reminders] = await Promise.allSettled([
+          canReadCalendar
+            ? invoke<HomeEvent[]>('calendar_list_events', bounds)
+            : Promise.resolve([] as HomeEvent[]),
+          canReadReminders ? invoke<number>('get_home_reminder_count') : Promise.resolve(0),
+        ]);
+        if (disposed) return;
+        const availableEvents = events.status === 'fulfilled' ? events.value : [];
+        const todayStart = new Date(todayBounds.from).getTime();
+        const todayEnd = new Date(todayBounds.to).getTime();
+        setTodayEvents(
+          availableEvents.filter((event) => {
+            const startsAt = new Date(event.start).getTime();
+            return startsAt >= todayStart && startsAt < todayEnd;
+          }),
+        );
+        setScheduledEvents(
+          availableEvents.filter((event) => {
+            const startsAt = new Date(event.start).getTime();
+            return startsAt >= now.getTime() && startsAt <= next24Hours.getTime();
+          }),
+        );
+        setReminderCount(reminders.status === 'fulfilled' ? reminders.value : 0);
+        setScheduleUnavailable(events.status === 'rejected' || !canReadCalendar);
+        setReminderUnavailable(reminders.status === 'rejected' || !canReadReminders);
+        homeContextLoadedAt.current = Date.now();
+      } catch {
+        if (!disposed) {
+          setHomeSkills(null);
+          setHomeSkillsLoadError(
+            'Não foi possível carregar as habilidades para atualizar o Início.',
+          );
+        }
+      }
+    };
+
+    void refreshHomeContext();
+    void listen('skills-updated', () => void refreshHomeContext(true))
+      .then((stop) => {
+        if (disposed) stop();
+        else stopSkillsUpdated = stop;
+      })
+      .catch(() => setToast('Não foi possível atualizar o contexto do Início.'));
+    const refreshOnFocus = () => void refreshHomeContext(true);
+    window.addEventListener('focus', refreshOnFocus);
+    return () => {
+      disposed = true;
+      stopSkillsUpdated?.();
+      window.removeEventListener('focus', refreshOnFocus);
+    };
+  }, [section, activityPanelOpen, homeContextRetry]);
+
+  useEffect(() => {
+    if (!activityPanelOpen || !isTauri() || homeSkills === null) {
+      setUpcomingReminders([]);
+      setUpcomingRemindersLoading(false);
+      return;
+    }
+    const enabled = homeSkills.some(
+      (skill) =>
+        skill.id === 'reminder.list' &&
+        skill.family === 'agenda_lembretes' &&
+        skill.enabled &&
+        skill.status === 'installed',
+    );
+    if (!enabled) {
+      setUpcomingReminders([]);
+      setUpcomingRemindersUnavailable(true);
+      return;
+    }
+    let disposed = false;
+    setUpcomingRemindersLoading(true);
+    setUpcomingRemindersUnavailable(false);
+    void invoke<UpcomingReminder[]>('get_upcoming_reminders', { windowHours: 24 })
+      .then((items) => {
+        if (!disposed) setUpcomingReminders(items);
+      })
+      .catch(() => {
+        if (!disposed) {
+          setUpcomingReminders([]);
+          setUpcomingRemindersUnavailable(true);
+        }
+      })
+      .finally(() => {
+        if (!disposed) setUpcomingRemindersLoading(false);
+      });
+    return () => {
+      disposed = true;
+    };
+  }, [activityPanelOpen, homeSkills]);
+
+  useEffect(() => {
+    if (
+      !shouldLoadPanelAudit(
+        activityPanelOpen ||
+          section === 'activity' ||
+          (settingsOpen && route.settingsSection === 'atividade'),
+      )
+    )
+      return;
+    if (Date.now() - activityAuditLoadedAt.current < 10_000) return;
+    let disposed = false;
+    setActivityAuditLoading(true);
+    setActivityAuditUnavailable(false);
+    void Promise.all([invoke<AuditEntry[]>('list_audit'), invoke<boolean>('verify_audit')])
+      .then(([entries, verified]) => {
+        if (!disposed) {
+          setActivityAuditRecords(entries);
+          setActivityAuditVerified(verified);
+          activityAuditLoadedAt.current = Date.now();
+        }
+      })
+      .catch(() => {
+        if (!disposed) {
+          setActivityAuditRecords([]);
+          setActivityAuditVerified(null);
+          setActivityAuditUnavailable(true);
+          activityAuditLoadedAt.current = Date.now();
+        }
+      })
+      .finally(() => {
+        if (!disposed) setActivityAuditLoading(false);
+      });
+    return () => {
+      disposed = true;
+    };
+  }, [activityPanelOpen, section, settingsOpen, route.settingsSection]);
+
+  const sharedAudit = useMemo(
+    () => ({
+      entries: activityAuditRecords,
+      verified: activityAuditVerified,
+      loading: activityAuditLoading,
+      unavailable: activityAuditUnavailable,
+    }),
+    [activityAuditRecords, activityAuditVerified, activityAuditLoading, activityAuditUnavailable],
+  );
+  const activityAudit = useMemo<ActivityAuditSummary[]>(
+    () =>
+      activityAuditRecords.slice(0, 20).map(({ id, timestamp, tool, status, decision }) => ({
+        id,
+        timestamp,
+        tool,
+        status,
+        decision,
+      })),
+    [activityAuditRecords],
+  );
+
+  useEffect(() => {
     const onShortcut = (event: KeyboardEvent) => {
       if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'b') return;
       const target = event.target;
@@ -325,6 +737,38 @@ function MainApp() {
   useEffect(() => {
     if (!isTauri()) return;
     let disposed = false;
+    const stops: Array<() => void> = [];
+    void Promise.all([
+      listen('pet-window-ready', () => {
+        void emit('pet-quick-suggestions', quickSuggestionsRef.current);
+        void emit('performance-mode-updated', performanceStatusRef.current).catch(() => undefined);
+      }),
+      listen<IslandQuickRequest>('island-quick-command', ({ payload }) => {
+        quickRequestHandler.current(payload);
+      }),
+      listen<string>('pet-open-conversation', ({ payload }) => {
+        void invoke('show_main_window')
+          .then(() => openConversationHandler.current(payload))
+          .catch(() => setToast('Não foi possível abrir essa conversa no OdeKrai.'));
+      }),
+      listen<IslandReviewState>('pet-review-alert', ({ payload }) => {
+        reviewAlertHandler.current(payload);
+      }),
+    ])
+      .then((off) => {
+        if (disposed) off.forEach((stop) => stop());
+        else stops.push(...off);
+      })
+      .catch(() => setToast('Não foi possível conectar os comandos rápidos da ilha.'));
+    return () => {
+      disposed = true;
+      stops.forEach((stop) => stop());
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    let disposed = false;
     let unlisten: (() => void) | undefined;
     const refresh = () => {
       void invoke<number>('get_pending_approval_count')
@@ -352,6 +796,44 @@ function MainApp() {
       unlisten?.();
     };
   }, []);
+
+  useEffect(() => {
+    if (section !== 'skills') setRequestedSkillFamily(null);
+  }, [section]);
+
+  useEffect(() => {
+    let unlistenHalted: (() => void) | undefined;
+    let unlistenResumed: (() => void) | undefined;
+    let disposed = false;
+    void Promise.all([
+      listen('security-halted', () => setAssistantPetState('paused')),
+      listen('security-resumed', () => setAssistantPetState('idle')),
+    ])
+      .then(([halted, resumed]) => {
+        if (disposed) {
+          halted();
+          resumed();
+        } else {
+          unlistenHalted = halted;
+          unlistenResumed = resumed;
+        }
+      })
+      .catch(() =>
+        reportDiagnostic(
+          'pet-security-state',
+          'Não foi possível acompanhar a parada de emergência do mascote.',
+        ),
+      );
+    return () => {
+      disposed = true;
+      unlistenHalted?.();
+      unlistenResumed?.();
+    };
+  }, [reportDiagnostic]);
+
+  useEffect(() => {
+    if (permissionIndicator?.halted) setAssistantPetState('paused');
+  }, [permissionIndicator?.halted]);
 
   async function choosePet(petId: string) {
     if (!PETS.some((pet) => pet.id === petId)) return;
@@ -396,6 +878,69 @@ function MainApp() {
     void playSound('notification', normalizeSoundPreferences(settings.companion.sounds));
   }, [diagnostics.length, settings.companion.sounds]);
   const currentNav = useMemo(() => navigationItems.find((item) => item.id === section), [section]);
+  const paletteItems = useMemo(
+    () => buildPaletteItems({ conversations, currentConversationId: conversationId, agentEnabled }),
+    [conversations, conversationId, agentEnabled],
+  );
+
+  useEffect(() => {
+    const onShortcut = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'k') return;
+      event.preventDefault();
+      setCommandPaletteOpen((open) => !open);
+    };
+    window.addEventListener('keydown', onShortcut);
+    return () => window.removeEventListener('keydown', onShortcut);
+  }, []);
+
+  async function executePaletteItem(item: PaletteItem) {
+    setRecentCommands((recent) => updateRecentCommands(recent, item.id));
+    setCommandPaletteOpen(false);
+    dispatchPaletteAction(item.action, {
+      page: (page) => {
+        navigate(page);
+        if (page === 'chat') setChatMode(true);
+      },
+      settings: (section, anchor) => {
+        if (anchor) {
+          settingsEntryRequestId.current += 1;
+          setRequestedSettingsEntry({ section, anchor, requestId: settingsEntryRequestId.current });
+        }
+        selectSettingsSection(section);
+      },
+      newConversation: startHomeConversation,
+      conversation: (id) => openConversation(id),
+      agentMode: (enabled) => void setConversationAgentMode(enabled),
+      skillFamily: (family) => {
+        skillFamilyRequestId.current += 1;
+        setRequestedSkillFamily({ family, requestId: skillFamilyRequestId.current });
+        navigate('skills');
+      },
+      pet: (id) => void choosePet(id),
+      permissionMode: (mode) => {
+        try {
+          // This is the same native-confirmation command used by SecurityCenter.
+          void invoke('set_permission_mode', { mode }).catch((cause: unknown) => {
+            setToast(typeof cause === 'string' ? cause : 'O modo não foi alterado.');
+          });
+        } catch (cause) {
+          setToast(typeof cause === 'string' ? cause : 'O modo não foi alterado.');
+        }
+      },
+      stopAll: () => void stopAll(),
+      mute: () => {
+        stopLocalSpeech();
+        setSettings((current) => ({
+          ...current,
+          companion: {
+            ...current.companion,
+            sounds: { ...current.companion.sounds, enabled: false },
+          },
+        }));
+        setToast('O pet foi silenciado.');
+      },
+    });
+  }
 
   function selectProvider(provider: AiProvider) {
     setSelectedProviderId(provider.id);
@@ -410,6 +955,19 @@ function MainApp() {
   function setProviderEnabled(providerId: string, enabled: boolean) {
     setSettings((current) => toggleProviderSettings(current, providerId, enabled));
     if (!enabled && settings.activeProviderId === providerId) setKeySavedForSession(false);
+  }
+
+  function saveProviderSettings(provider: ProviderSettings) {
+    setSettings((current) => ({
+      ...current,
+      providers: { ...current.providers, [provider.providerId]: provider },
+    }));
+    if (provider.providerId === settings.activeProviderId)
+      setKeySavedForSession(provider.providerId !== 'local');
+  }
+
+  function handleCredentialRemoved(providerId: string) {
+    if (settings.activeProviderId === providerId) setKeySavedForSession(false);
   }
 
   async function setConversationAgentMode(enabled: boolean) {
@@ -450,6 +1008,10 @@ function MainApp() {
     return Boolean(available);
   }
 
+  useEffect(() => {
+    void hasConfiguredChatProvider().catch(() => setKeySavedForSession(false));
+  }, [settings.activeProviderId, settings.fallbackProviderIds, settings.providers]);
+
   async function beginChat() {
     if (!isTauri() || !(await hasConfiguredChatProvider())) {
       navigate('providers');
@@ -459,34 +1021,84 @@ function MainApp() {
     setChatMode(true);
   }
 
+  function startHomeConversation() {
+    setConversationId(null);
+    setMessages([]);
+    setAgentActionCards([]);
+    setAgentEnabled(agentAvailability.available);
+    setError('');
+    setAgentErrorDetails('');
+    setLastFailedPrompt('');
+    setChatMode(true);
+    navigate('chat');
+  }
+
+  function sendHomeFirstMessage(text: string) {
+    return sendMessage(text, false, {
+      newConversation: true,
+      agentEnabled: agentAvailability.available,
+    });
+  }
+
+  function reportUndoFailure(actionId: string, error: unknown) {
+    const message =
+      typeof error === 'string'
+        ? error
+        : error instanceof Error
+          ? error.message
+          : 'Não foi possível desfazer a ação.';
+    setAgentActionCards((items) => setActionCardUndoError(items, actionId, message));
+    setUndoToast(null);
+  }
+
   async function sendMessage(
     rawText: string,
     reuseLastUserMessage = false,
-    imageBase64?: string,
+    options: {
+      newConversation?: boolean;
+      agentEnabled?: boolean;
+      conversationId?: string;
+      onResponse?: (text: string) => void;
+    } = {},
   ): Promise<boolean> {
     const text = rawText.trim();
     if (!text || busy) return false;
-    if (agentEnabled && !agentAvailability.available) {
+    const isNewConversation = options.newConversation ?? !conversationId;
+    const useAgent = options.agentEnabled ?? agentEnabled;
+    if (useAgent && !agentAvailability.available) {
       setError(
         `Modo agente indisponível: ${agentAvailability.reason ?? 'verifique as configurações do agente.'}`,
       );
       setLastFailedPrompt('');
       return false;
     }
-    if (imageBase64 && (!agentEnabled || !agentAvailability.available)) {
-      setError('Ative o agente antes de enviar uma imagem para análise.');
-      return false;
-    }
-    if (!isTauri() || !(await hasConfiguredChatProvider())) {
+    if (!isTauri()) {
       setError('Configure um provedor de IA em Conectores para enviar mensagens.');
       setLastFailedPrompt('');
       return false;
     }
-    const activeId = conversationId ?? crypto.randomUUID();
+    let hasProvider = false;
+    try {
+      hasProvider = await hasConfiguredChatProvider();
+    } catch {
+      setError('Não foi possível verificar a credencial do provedor.');
+      setLastFailedPrompt('');
+      return false;
+    }
+    if (!hasProvider) {
+      setError('Configure um provedor de IA em Conectores para enviar mensagens.');
+      setLastFailedPrompt('');
+      return false;
+    }
+    const activeId =
+      options.conversationId ?? (isNewConversation ? crypto.randomUUID() : conversationId!);
     const sentAt = Math.floor(Date.now() / 1000);
     const next = reuseLastUserMessage
       ? messages
-      : [...messages, { role: 'user' as const, content: text, created_at: sentAt }];
+      : [
+          ...(isNewConversation ? [] : messages),
+          { role: 'user' as const, content: text, created_at: sentAt },
+        ];
     setMessages(next);
     setDraft('');
     setError('');
@@ -530,18 +1142,20 @@ function MainApp() {
           model: activeProvider.model,
           providerTargets: agentProviderTargets,
         });
-        if (!conversationId && !agentEnabled && agentAvailability.available) {
+        if (isNewConversation && !useAgent && agentAvailability.available) {
           await invoke('set_conversation_agent_mode', {
             conversationId: activeId,
             enabled: false,
           });
         }
-        setConversations((items) =>
-          items.map((item) => (item.id === activeId ? { ...item, preview: text } : item)),
-        );
+        setConversations((items) => {
+          const existing = items.find((item) => item.id === activeId);
+          if (!existing) return items;
+          return [{ ...existing, preview: text }, ...items.filter((item) => item.id !== activeId)];
+        });
       }
       setConversationId(activeId);
-      if (!conversationId)
+      if (isNewConversation)
         setConversations((items) => [
           {
             id: activeId,
@@ -550,11 +1164,11 @@ function MainApp() {
             created_at: sentAt,
             provider_id: provider.id,
             model: activeProvider.model,
-            agent_enabled: agentEnabled && agentAvailability.available,
+            agent_enabled: useAgent && agentAvailability.available,
           },
           ...items,
         ]);
-      if (agentEnabled && agentAvailability.available) {
+      if (useAgent && agentAvailability.available) {
         const onEvent = new Channel<{
           type:
             | 'step'
@@ -569,6 +1183,8 @@ function MainApp() {
           id?: string;
           name?: string;
           auditId?: string | null;
+          preview?: string;
+          expiresAt?: number;
           isError?: boolean;
           content?: string;
           kind?: string;
@@ -585,9 +1201,33 @@ function MainApp() {
               const next = items.filter((item) => item.id !== event.card!.id);
               return [...next, event.card!].slice(-100);
             });
+            if (event.card.status === 'Concluída' && event.card.undoDescriptor) {
+              setUndoToast({ cardId: event.card.id });
+            }
             setAgentAwaitingApproval(event.card.status === 'Aguardando aprovação');
           } else if (event.type === 'awaitingApproval') {
             setAgentAwaitingApproval(true);
+            if (event.preview || event.expiresAt) {
+              setAgentActionCards((items) => {
+                let index = -1;
+                for (let cursor = items.length - 1; cursor >= 0; cursor -= 1) {
+                  if (items[cursor].status === 'Aguardando aprovação') {
+                    index = cursor;
+                    break;
+                  }
+                }
+                if (index < 0) return items;
+                return items.map((item, itemIndex) =>
+                  itemIndex === index
+                    ? {
+                        ...item,
+                        preview: item.preview || event.preview,
+                        approvalExpiresAt: item.approvalExpiresAt || event.expiresAt,
+                      }
+                    : item,
+                );
+              });
+            }
             void playSound('approval_needed', normalizeSoundPreferences(settings.companion.sounds));
             emitCompanionState({
               type: 'activity',
@@ -647,10 +1287,10 @@ function MainApp() {
         const answer = await invoke<string>('agent_run', {
           conversationId: activeId,
           message: text,
-          imageBase64: imageBase64 ?? null,
           dailyTokenLimit: settings.dailyTokenLimit,
           onEvent,
         });
+        options.onResponse?.(answer);
         setMessages([
           ...next,
           { role: 'assistant', content: answer, created_at: Math.floor(Date.now() / 1000) },
@@ -710,6 +1350,7 @@ function MainApp() {
           onChunk,
         },
       );
+      options.onResponse?.(answer.content);
       await invoke('append_conversation_message', {
         conversationId: activeId,
         role: 'assistant',
@@ -771,7 +1412,7 @@ function MainApp() {
           cause.toLocaleLowerCase('pt-BR').includes('cancel'));
       if (!stopped) {
         setMessages(next);
-        setLastFailedPrompt(imageBase64 ? '' : text);
+        setLastFailedPrompt(text);
         setError(
           typeof cause === 'string'
             ? cause
@@ -800,10 +1441,82 @@ function MainApp() {
     }
   }
 
-  function submitMessage(event: FormEvent) {
+  quickRequestHandler.current = (request) => {
+    let summary = '';
+    void (async () => {
+      const success = await sendMessage(request.text, false, {
+        newConversation: true,
+        agentEnabled: agentAvailability.available,
+        conversationId: request.conversationId,
+        onResponse: (response) => {
+          summary = summarizeIslandResponse(response);
+        },
+      });
+      if (!summary) {
+        summary = success
+          ? 'A conversa foi concluída. Abra no OdeKrai para ver a resposta completa.'
+          : 'Não foi possível concluir. Revise a conversa no OdeKrai.';
+      }
+      void emit('pet-quick-result', {
+        requestId: request.requestId,
+        conversationId: request.conversationId,
+        title: request.text.slice(0, 80),
+        summary,
+        success,
+      });
+    })();
+  };
+
+  function submitMessage(event: FormEvent): Promise<boolean> {
     event.preventDefault();
-    void sendMessage(draft);
+    return sendMessage(draft);
   }
+
+  function openConversation(id: string) {
+    if (busy) return;
+    const selectedId = resolveConversationSelection(conversations, id);
+    if (!selectedId) return;
+    setConversationId(selectedId);
+    setConversations((items) => {
+      const selected = items.find((item) => item.id === selectedId);
+      return selected ? [selected, ...items.filter((item) => item.id !== selectedId)] : items;
+    });
+    setError('');
+    setChatMode(true);
+    navigate('chat');
+    void Promise.all([
+      invoke<ChatMessage[]>('load_conversation', { conversationId: selectedId }),
+      invoke<boolean>('get_conversation_agent_mode', { conversationId: selectedId }),
+      invoke<AgentActionCardData[]>('load_agent_action_cards', { conversationId: selectedId }),
+    ])
+      .then(([loaded, enabled, cards]) => {
+        setMessages(loaded);
+        setAgentEnabled(enabled);
+        setAgentActionCards(cards);
+      })
+      .catch(() => setError('Não foi possível abrir a conversa.'));
+  }
+
+  openConversationHandler.current = openConversation;
+  reviewAlertHandler.current = (state) => {
+    void (async () => {
+      try {
+        await invoke('show_main_window');
+        const destination = islandReviewDestination(state, Boolean(activeConversationRef.current));
+        if (destination === 'approval-window') {
+          await invoke('show_pending_approval_window');
+        } else if (destination === 'calendar') {
+          navigate('calendar');
+        } else if (destination === 'conversation' && activeConversationRef.current) {
+          openConversationHandler.current(activeConversationRef.current);
+        } else {
+          navigate('chat');
+        }
+      } catch {
+        setToast('Não foi possível abrir o local para revisar este alerta.');
+      }
+    })();
+  };
 
   function cancelRequest() {
     if (agentRunConversation.current) {
@@ -819,6 +1532,7 @@ function MainApp() {
   }
 
   async function stopAll() {
+    setAssistantPetState('paused');
     stopLocalSpeech();
     try {
       await invoke('halt_all');
@@ -828,7 +1542,20 @@ function MainApp() {
   }
 
   async function deleteConversation(id: string) {
-    if (busy || !window.confirm('Apagar esta conversa e suas mensagens?')) return;
+    if (busy) return;
+    try {
+      if (
+        !(await confirm({
+          title: 'Apagar conversa?',
+          message: 'Apagar esta conversa e suas mensagens?',
+          destructive: true,
+        }))
+      )
+        return;
+    } catch {
+      setToast('Não foi possível mostrar a confirmação. A conversa não foi apagada.');
+      return;
+    }
     try {
       await invoke('delete_conversation', { conversationId: id });
       setConversations((items) => items.filter((item) => item.id !== id));
@@ -881,9 +1608,16 @@ function MainApp() {
     if (!url || !domain) return;
     const needsConfirmation = !settings.trustedLinkDomains.includes(domain);
     if (needsConfirmation) {
-      const accepted = window.confirm(
-        `Este link abrirá ${domain} no navegador padrão.\n\n${url}\n\nAbrir e lembrar este domínio?`,
-      );
+      let accepted = false;
+      try {
+        accepted = await confirm({
+          title: 'Abrir link externo?',
+          message: `Este link abrirá ${domain} no navegador padrão.\n\n${url}\n\nAbrir e lembrar este domínio?`,
+        });
+      } catch {
+        setToast('Não foi possível mostrar a confirmação. O link não foi aberto.');
+        return;
+      }
       if (!accepted) return;
     }
     try {
@@ -901,9 +1635,118 @@ function MainApp() {
     }
   }
 
+  async function openUpdateRelease() {
+    if (!availableUpdate?.release_url) return;
+    try {
+      await invoke('open_update_release', { url: availableUpdate.release_url });
+    } catch {
+      setToast('Não foi possível abrir a página oficial da release.');
+    }
+  }
+
+  const firstUseSteps: FirstUseStepContent[] = [
+    {
+      id: 0,
+      title: 'Conecte um provedor',
+      description:
+        'Escolha um provedor, salve a chave no Gerenciador de Credenciais do Windows e teste a conexão quando quiser.',
+      complete:
+        (keySavedForSession || settings.activeProviderId === 'local') &&
+        settings.providers[settings.activeProviderId]?.lastTest?.status === 'passed',
+      content: (
+        <Suspense fallback={screenLoading}>
+          <ProvidersScreen
+            settings={settings}
+            selectedId={selectedProviderId}
+            onSelect={selectProvider}
+            onSetPrimary={setPrimaryProvider}
+            onToggleEnabled={setProviderEnabled}
+            onSave={saveProviderSettings}
+            onChat={beginChat}
+            onCredentialRemoved={handleCredentialRemoved}
+            initialTab="free"
+            onboardingMode
+          />
+        </Suspense>
+      ),
+    },
+    {
+      id: 1,
+      title: 'Escolha a pasta do OdeKrai',
+      description:
+        'Use o fluxo existente para criar uma pasta nova, localizar a atual ou escolher uma pasta existente.',
+      complete: identityConfigured === true,
+      content: (
+        <Suspense fallback={screenLoading}>
+          <IdentityScreen
+            initialName={profile.displayName}
+            initialNickname={profile.nickname}
+            profileValue={profile}
+            onProfileChange={setProfile}
+            onStatus={(status) => setIdentityConfigured(status.configured)}
+            embedded
+          />
+        </Suspense>
+      ),
+    },
+    {
+      id: 2,
+      title: 'Escolha seu mascote',
+      description:
+        'A grade mostra os mascotes disponíveis pelo nome. Você pode trocar a escolha depois.',
+      complete: PETS.some((pet) => pet.id === selectedPet),
+      content: (
+        <Suspense fallback={screenLoading}>
+          <AssistantScreen
+            settings={settings}
+            update={setSettings}
+            petVisible={petVisible}
+            onPetVisibilityChange={setPetVisible}
+            onError={setToast}
+            selectedPet={selectedPet}
+            onSelectPet={(petId) => void choosePet(petId)}
+            embedded
+          />
+        </Suspense>
+      ),
+    },
+    {
+      id: 3,
+      title: 'Revise as permissões',
+      description:
+        'O padrão é “Sempre perguntar”. “Controle total” mantém bloqueios fixos e só pode ser ativado após a confirmação nativa do Windows.',
+      complete: Boolean(
+        permissionIndicator &&
+        ['sempre_perguntar', 'aprovar_por_mim', 'controle_total'].includes(
+          permissionIndicator.mode,
+        ),
+      ),
+      content: (
+        <SecurityCenter
+          page="permissions"
+          embedded
+          appSettings={settings}
+          updateAppSettings={setSettings}
+        />
+      ),
+    },
+  ];
+
+  const currentActivityAction =
+    [...agentActionCards]
+      .reverse()
+      .find(
+        (action) => action.status === 'Executando' || action.status === 'Aguardando aprovação',
+      ) ?? null;
+
   return (
     <div
-      className={`app-shell ${settings.reduceMotion ? 'reduce-motion' : ''} ${chatMode ? 'chat-mode' : ''}`}
+      className={`app-shell ${settings.reduceMotion ? 'reduce-motion' : ''} ${chatMode ? 'chat-mode' : ''} ${activityPanelOpen ? 'has-activity-panel' : ''}`}
+      style={
+        {
+          '--activity-sidebar-width': `${settings.layout.sidebarCollapsed ? 72 : settings.layout.sidebarWidth}px`,
+        } as CSSProperties
+      }
     >
       <aside
         className={`sidebar ${settings.layout.sidebarCollapsed ? 'sidebar-collapsed' : ''}`}
@@ -937,7 +1780,7 @@ function MainApp() {
           onMyProfile={() => navigate('agent')}
           onSettings={() => navigate('settings')}
           onPermissions={() => navigate('permissions')}
-          onHelp={() => void openResponseLink('https://github.com/Anceryx/OdeKrai/tree/main/docs')}
+          onHelp={() => setFirstUseOpen(true)}
           onAbout={() => selectSettingsSection('sobre')}
         />
       </aside>
@@ -971,9 +1814,11 @@ function MainApp() {
             </strong>
           </div>
           <div className="top-actions">
-            <PendingApprovalIndicator
+            <ActivityPanelTrigger
               count={pendingApprovalCount}
-              onOpen={() => navigate('activity')}
+              expanded={activityPanelOpen}
+              buttonRef={activityPanelTriggerRef}
+              onClick={() => setActivityPanelOpen(toggleActivityPanel)}
             />
             {shouldShowStopAll(busy, agentRunning) && (
               <button type="button" className="stop-all-button" onClick={() => void stopAll()}>
@@ -1017,6 +1862,13 @@ function MainApp() {
             )}
           </div>
         </header>
+        {availableUpdate && (
+          <UpdateAvailableBanner
+            update={availableUpdate}
+            onOpen={() => void openUpdateRelease()}
+            onDismiss={() => setAvailableUpdate(null)}
+          />
+        )}
         {diagnostics.length > 0 && (
           <aside className="diagnostic-banner" aria-label="Diagnóstico" role="status">
             <div className="diagnostic-banner-heading">
@@ -1026,14 +1878,23 @@ function MainApp() {
               </button>
             </div>
             {diagnostics.map((item) => (
-              <div className="diagnostic-item" key={`${item.command}-${item.message}`}>
-                <p>
-                  <code>{item.command}</code>: {item.message}
-                  {item.count > 1 ? ` (${item.count} ocorrências)` : ''}
-                </p>
+              <div className="diagnostic-item" key={item.key}>
+                <div className="diagnostic-item-heading">
+                  <p>
+                    {item.message}
+                    {item.count > 1 ? ` x${item.count}` : ''}
+                  </p>
+                  <button
+                    type="button"
+                    aria-label={`Fechar aviso: ${item.message}`}
+                    onClick={() => dismissDiagnostic(item.key)}
+                  >
+                    ×
+                  </button>
+                </div>
                 {item.details && (
                   <details>
-                    <summary>Detalhes</summary>
+                    <summary>Detalhes técnicos</summary>
                     <code>{item.details}</code>
                   </details>
                 )}
@@ -1059,26 +1920,7 @@ function MainApp() {
               messages={messages}
               conversations={conversations}
               conversationId={conversationId}
-              onConversation={(id) => {
-                if (busy) return;
-                const selectedId = resolveConversationSelection(conversations, id);
-                if (!selectedId) return;
-                setConversationId(selectedId);
-                setError('');
-                void Promise.all([
-                  invoke<ChatMessage[]>('load_conversation', { conversationId: selectedId }),
-                  invoke<boolean>('get_conversation_agent_mode', { conversationId: selectedId }),
-                  invoke<AgentActionCardData[]>('load_agent_action_cards', {
-                    conversationId: selectedId,
-                  }),
-                ])
-                  .then(([loaded, enabled, cards]) => {
-                    setMessages(loaded);
-                    setAgentEnabled(enabled);
-                    setAgentActionCards(cards);
-                  })
-                  .catch(() => setError('Não foi possível abrir a conversa.'));
-              }}
+              onConversation={openConversation}
               onNewConversation={() => {
                 if (!busy) {
                   setConversationId(null);
@@ -1106,6 +1948,18 @@ function MainApp() {
               providerModel={shownProviderModel}
               providerId={shownProviderId}
               microphoneEnabled={settings.microphoneEnabled}
+              onMicrophonePreferenceChange={async (enabled) => {
+                const nextSettings = { ...settings, microphoneEnabled: enabled };
+                if (!saveSettings(nextSettings))
+                  throw new Error('Não foi possível salvar a preferência.');
+                try {
+                  if (isTauri()) await invoke('set_microphone_opt_in', { enabled });
+                } catch (error) {
+                  saveSettings(settings);
+                  throw error;
+                }
+                setSettings(nextSettings);
+              }}
               readRepliesAutomatically={settings.readRepliesAutomatically}
               speechVoiceURI={settings.speechVoiceURI}
               speechRate={settings.speechRate}
@@ -1130,6 +1984,9 @@ function MainApp() {
               onOpenLink={(url) => void openResponseLink(url)}
               providerConfigured={keySavedForSession}
               assistantUsesMascot={settings.useMascotAsAssistantAvatar}
+              petState={assistantPetState}
+              reduceMotion={settings.reduceMotion}
+              reduceMascot={settings.reduceMascot}
               onFixConfiguration={() => {
                 navigate(resolveConfigurationReason(error));
                 setChatMode(false);
@@ -1149,7 +2006,78 @@ function MainApp() {
               agentRunning={agentRunning}
               agentAwaitingApproval={agentAwaitingApproval}
               agentActionCards={agentActionCards}
-              onAnalyzeCapture={(prompt, imageBase64) => sendMessage(prompt, false, imageBase64)}
+              onReviewApproval={() =>
+                void invoke('show_pending_approval_window').catch(() =>
+                  setToast('Não foi possível abrir a janela de aprovação.'),
+                )
+              }
+              onConfigureDiscord={() => {
+                settingsEntryRequestId.current += 1;
+                setRequestedSettingsEntry({
+                  section: 'privacidade',
+                  anchor: 'discord-integration-heading',
+                  requestId: settingsEntryRequestId.current,
+                });
+                selectSettingsSection('privacidade');
+              }}
+              onUndo={(action) => {
+                const descriptor = action.undoDescriptor;
+                if (!descriptor) return;
+                const requestUndo = (confirmModified: boolean) =>
+                  invoke<{ message: string; confirmationRequired: boolean; status: string }>(
+                    'undo_agent_action',
+                    { descriptor, confirmModified },
+                  )
+                    .then(async (result) => {
+                      if (result.confirmationRequired) {
+                        try {
+                          if (
+                            await confirm({
+                              title: 'Confirmar restauração?',
+                              message: result.message,
+                              destructive: true,
+                            })
+                          )
+                            requestUndo(true);
+                        } catch {
+                          setToast(
+                            'Não foi possível mostrar a confirmação. O arquivo não foi restaurado.',
+                          );
+                        }
+                        return;
+                      }
+                      setAgentActionCards((items) =>
+                        items.map((item) =>
+                          item.id === action.id
+                            ? {
+                                ...item,
+                                undoDescriptor: null,
+                                undoError: null,
+                                resultSummary: `${item.resultSummary ?? ''}\n${result.message}`,
+                              }
+                            : item,
+                        ),
+                      );
+                      setUndoToast(null);
+                      setToast(result.message);
+                    })
+                    .catch((error) => reportUndoFailure(action.id, error));
+                void requestUndo(false);
+              }}
+              onOpenArtifact={(path) =>
+                void invoke('open_agent_artifact', { path }).catch((error) =>
+                  setToast(
+                    error instanceof Error ? error.message : 'Não foi possível abrir o arquivo.',
+                  ),
+                )
+              }
+              onRevealArtifact={(path) =>
+                void invoke('reveal_agent_artifact', { path }).catch((error) =>
+                  setToast(
+                    error instanceof Error ? error.message : 'Não foi possível mostrar o arquivo.',
+                  ),
+                )
+              }
               onToggleAgent={(enabled) => void setConversationAgentMode(enabled)}
               onStopAgent={cancelRequest}
               onConfigureAgent={() => {
@@ -1162,15 +2090,30 @@ function MainApp() {
             <div className="content-scroll">
               {section === 'overview' && (
                 <Overview
-                  onChat={beginChat}
-                  onOpen={(target) => navigate(target)}
-                  provider={activeProvider}
+                  draft={draft}
+                  setDraft={setDraft}
+                  busy={busy}
                   keyReady={keySavedForSession}
                   profile={profile}
                   selectedPet={selectedPet}
-                  needsIdentity={identityConfigured === false && !identityCardDismissed}
-                  onConfigureIdentity={() => navigate('agent')}
-                  onDismissIdentity={() => setIdentityCardDismissed(true)}
+                  petState={assistantPetState}
+                  reduceMotion={settings.reduceMotion}
+                  reduceMascot={settings.reduceMascot}
+                  suggestions={homeSuggestions}
+                  conversations={conversations.slice(0, 3)}
+                  checklist={homeChecklist}
+                  pendingApprovalCount={pendingApprovalCount}
+                  skillsLoadError={homeSkillsLoadError}
+                  onStartConversation={startHomeConversation}
+                  onSendMessage={sendHomeFirstMessage}
+                  onResumeConversation={openConversation}
+                  onResolveChecklistItem={(item) => navigate(item.destination)}
+                  onOpenApprovals={() =>
+                    void invoke('show_pending_approval_window').catch(() =>
+                      setToast('Não foi possível abrir a janela de aprovação.'),
+                    )
+                  }
+                  onRetrySkills={() => setHomeContextRetry((retry) => retry + 1)}
                 />
               )}
               {section === 'providers' && (
@@ -1180,30 +2123,25 @@ function MainApp() {
                   onSelect={selectProvider}
                   onSetPrimary={setPrimaryProvider}
                   onToggleEnabled={setProviderEnabled}
-                  onSave={(provider) => {
-                    setSettings((current) => ({
-                      ...current,
-                      providers: { ...current.providers, [provider.providerId]: provider },
-                    }));
-                    if (provider.providerId === settings.activeProviderId)
-                      setKeySavedForSession(provider.providerId !== 'local');
-                  }}
+                  onSave={saveProviderSettings}
                   onChat={beginChat}
-                  onCredentialRemoved={(providerId) => {
-                    if (settings.activeProviderId === providerId) setKeySavedForSession(false);
-                  }}
+                  onCredentialRemoved={handleCredentialRemoved}
                 />
               )}
               {section === 'computer' && <ComputerScreen />}
-              {section === 'calendar' && <CalendarScreen />}
+              {section === 'calendar' && (
+                <CalendarScreen
+                  selectedPet={selectedPet}
+                  petState={assistantPetState}
+                  reduceMotion={settings.reduceMotion}
+                  reduceMascot={settings.reduceMascot}
+                />
+              )}
               {section === 'skills' && (
                 <SkillsScreen
+                  key={requestedSkillFamily?.requestId ?? 'all-families'}
+                  initialFamily={requestedSkillFamily?.family}
                   onOpenPrivacy={() => navigate('permissions')}
-                  agentRuntime={{
-                    modeEnabled: agentEnabled,
-                    available: agentAvailability.available,
-                    reason: agentAvailability.reason,
-                  }}
                 />
               )}
               {section === 'companion' && (
@@ -1222,10 +2160,11 @@ function MainApp() {
                   settings={settings}
                   update={setSettings}
                   onOpenPermissions={() => navigate('permissions')}
+                  performanceStatus={performanceStatus}
                 />
               )}
               {section === 'permissions' && <PermissionsScreen />}
-              {section === 'activity' && <ActivityScreen />}
+              {section === 'activity' && <ActivityScreen sharedAudit={sharedAudit} />}
               {section === 'agent' && (
                 <IdentityScreen
                   initialName={profile.displayName}
@@ -1239,11 +2178,123 @@ function MainApp() {
           )}
         </Suspense>
       </main>
+      <ActivitySidePanel
+        open={activityPanelOpen}
+        triggerRef={activityPanelTriggerRef}
+        pendingApprovalCount={pendingApprovalCount}
+        running={agentRunning}
+        awaitingApproval={agentAwaitingApproval}
+        currentAction={currentActivityAction}
+        events={scheduledEvents}
+        reminderCount={reminderCount}
+        reminders={upcomingReminders}
+        remindersLoading={upcomingRemindersLoading}
+        upcomingReminderUnavailable={upcomingRemindersUnavailable}
+        scheduleUnavailable={scheduleUnavailable}
+        reminderUnavailable={reminderUnavailable}
+        actions={agentActionCards}
+        artifactHistoryAvailable={Boolean(conversationId)}
+        audit={activityAudit}
+        scheduleLoading={homeSkills === null}
+        auditLoading={activityAuditLoading}
+        auditUnavailable={activityAuditUnavailable}
+        onClose={() => setActivityPanelOpen(false)}
+        onStop={cancelRequest}
+        onReview={() =>
+          void invoke('show_pending_approval_window').catch(() =>
+            setToast('Não foi possível abrir a janela de aprovação.'),
+          )
+        }
+        onOpenArtifact={(path) =>
+          void invoke('open_agent_artifact', { path }).catch(() =>
+            setToast('Não foi possível abrir o arquivo.'),
+          )
+        }
+        onRevealArtifact={(path) =>
+          void invoke('reveal_agent_artifact', { path }).catch(() =>
+            setToast('Não foi possível mostrar o arquivo.'),
+          )
+        }
+        onViewAll={() => {
+          setActivityPanelOpen(false);
+          setChatMode(false);
+          navigate('activity');
+        }}
+      />
       {toast && (
         <div className="toast" role="status">
           {toast}
         </div>
       )}
+      {undoToast && (
+        <div className="toast" role="status">
+          Ação reversível concluída.
+          <button
+            type="button"
+            onClick={() => {
+              const action = agentActionCards.find((item) => item.id === undoToast.cardId);
+              if (!action?.undoDescriptor) return;
+              const requestUndo = (confirmModified: boolean) =>
+                invoke<{ message: string; confirmationRequired: boolean; status: string }>(
+                  'undo_agent_action',
+                  { descriptor: action.undoDescriptor, confirmModified },
+                )
+                  .then(async (result) => {
+                    if (result.confirmationRequired) {
+                      try {
+                        if (
+                          await confirm({
+                            title: 'Confirmar restauração?',
+                            message: result.message,
+                            destructive: true,
+                          })
+                        )
+                          requestUndo(true);
+                      } catch {
+                        setToast(
+                          'Não foi possível mostrar a confirmação. O arquivo não foi restaurado.',
+                        );
+                      }
+                      return;
+                    }
+                    setAgentActionCards((items) =>
+                      items.map((item) =>
+                        item.id === action.id
+                          ? {
+                              ...item,
+                              undoDescriptor: null,
+                              undoError: null,
+                              resultSummary: `${item.resultSummary ?? ''}\n${result.message}`,
+                            }
+                          : item,
+                      ),
+                    );
+                    setUndoToast(null);
+                    setToast(result.message);
+                  })
+                  .catch((error) => reportUndoFailure(action.id, error));
+              void requestUndo(false);
+            }}
+          >
+            Desfazer
+          </button>
+        </div>
+      )}
+      <FirstUseAssistant
+        open={firstUseOpen}
+        steps={firstUseSteps}
+        onClose={() => setFirstUseOpen(false)}
+        onOpenDocumentation={() =>
+          void openResponseLink('https://github.com/Anceryx/OdeKrai/tree/main/docs')
+        }
+      />
+      <ReleaseNotesModal
+        open={releaseNotesOpen}
+        showAllVersions={showAllReleaseNotes}
+        onShowAllVersions={() => setShowAllReleaseNotes(true)}
+        onShowCurrent={() => setShowAllReleaseNotes(false)}
+        onClose={() => setReleaseNotesOpen(false)}
+      />
       <SettingsModal
         open={settingsOpen}
         section={route.settingsSection ?? 'geral'}
@@ -1251,6 +2302,7 @@ function MainApp() {
         onSelectSection={selectSettingsSection}
         settings={settings}
         update={setSettings}
+        performanceStatus={performanceStatus}
         profile={profile}
         setProfile={setProfile}
         petVisible={petVisible}
@@ -1262,6 +2314,20 @@ function MainApp() {
         onOpenPage={(page) => navigate(page)}
         onOpenActivityFullPage={() => openLegacyScreen('activity')}
         onAgentStatus={() => reportDiagnostic('agent_home_status', '')}
+        releaseNotesUrl={currentReleaseNotesUrl}
+        onOpenReleaseNotes={() => void openResponseLink(currentReleaseNotesUrl)}
+        onUpdateFound={(result) =>
+          setAvailableUpdate(result.check_succeeded && result.available_version ? result : null)
+        }
+        sharedAudit={sharedAudit}
+        requestedEntry={requestedSettingsEntry}
+      />
+      <CommandPalette
+        open={commandPaletteOpen}
+        items={paletteItems}
+        recentIds={recentCommands}
+        onClose={() => setCommandPaletteOpen(false)}
+        onExecute={(item) => void executePaletteItem(item)}
       />
     </div>
   );

@@ -1,4 +1,5 @@
 import { normalizeSoundPreferences } from './sounds';
+import type { PerformanceMode } from './performance';
 import {
   AI_PROVIDERS,
   providerById,
@@ -20,7 +21,11 @@ export type ProviderSettings = {
 export type AppSettings = {
   language: 'pt-BR' | 'en';
   reduceMotion: boolean;
+  reduceMascot: boolean;
   useMascotAsAssistantAvatar: boolean;
+  showReleaseNotes: boolean;
+  checkForUpdatesAutomatically: boolean;
+  performanceMode: PerformanceMode;
   microphoneEnabled: boolean;
   readRepliesAutomatically: boolean;
   speechVoiceURI: string;
@@ -82,7 +87,11 @@ export function activeProviderSettings(settings: AppSettings): ProviderSettings 
 export const defaultSettings: AppSettings = {
   language: 'pt-BR',
   reduceMotion: false,
+  reduceMascot: false,
   useMascotAsAssistantAvatar: false,
+  showReleaseNotes: true,
+  checkForUpdatesAutomatically: true,
+  performanceMode: 'automatic',
   microphoneEnabled: false,
   readRepliesAutomatically: false,
   speechVoiceURI: '',
@@ -253,10 +262,22 @@ export function loadSettingsWithWarnings(): { settings: AppSettings; warnings: s
       settings: {
         ...defaultSettings,
         ...migrated,
+        reduceMascot: value.reduceMascot === true,
         useMascotAsAssistantAvatar:
           typeof value.useMascotAsAssistantAvatar === 'boolean'
             ? value.useMascotAsAssistantAvatar
             : false,
+        showReleaseNotes:
+          typeof value.showReleaseNotes === 'boolean'
+            ? value.showReleaseNotes
+            : defaultSettings.showReleaseNotes,
+        checkForUpdatesAutomatically:
+          typeof value.checkForUpdatesAutomatically === 'boolean'
+            ? value.checkForUpdatesAutomatically
+            : defaultSettings.checkForUpdatesAutomatically,
+        performanceMode: ['automatic', 'enabled', 'disabled'].includes(value.performanceMode)
+          ? (value.performanceMode as PerformanceMode)
+          : defaultSettings.performanceMode,
         microphoneEnabled: value.microphoneEnabled === true,
         readRepliesAutomatically: value.readRepliesAutomatically === true,
         speechVoiceURI:

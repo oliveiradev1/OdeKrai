@@ -16,7 +16,7 @@ export function focusableElements(dialog: HTMLElement): HTMLElement[] {
 }
 
 export function focusInitialElement(dialog: HTMLElement): void {
-  const preferred = dialog.querySelector<HTMLElement>('[autofocus]');
+  const preferred = dialog.querySelector<HTMLElement>('[autofocus], [data-autofocus]');
   const focusable = focusableElements(dialog);
   (preferred && focusable.includes(preferred) ? preferred : (focusable[0] ?? dialog)).focus();
 }

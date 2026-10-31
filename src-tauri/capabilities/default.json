@@ -5,6 +5,11 @@
   "windows": ["main"],
   "permissions": [
     "core:default",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:window:allow-is-visible",
+    "core:window:allow-is-minimized",
+    "core:window:allow-is-focused",
     "dialog:allow-open",
     {
       "identifier": "opener:allow-open-url",
@@ -35,11 +40,21 @@
         { "url": "https://docs.fireworks.ai/**" },
         { "url": "https://ai.azure.com/**" },
         { "url": "https://learn.microsoft.com/**" },
+        {
+          "url": "https://support.microsoft.com/pt-br/windows/hardware/input-devices/manage-the-language-and-keyboard-input-layout-settings-in-windows"
+        },
         { "url": "https://console.aws.amazon.com/**" },
         { "url": "https://signin.aws.amazon.com/**" },
         { "url": "https://docs.aws.amazon.com/**" },
         { "url": "https://console.cloud.google.com/**" },
-        { "url": "https://docs.cloud.google.com/**" }
+        { "url": "https://docs.cloud.google.com/**" },
+        { "url": "https://magalu.cloud/**" },
+        { "url": "https://www.locaweb.com.br/**" },
+        { "url": "https://aws.amazon.com/**" },
+        { "url": "https://cloud.google.com/**" },
+        { "url": "https://azure.microsoft.com/**" },
+        { "url": "https://www.oracle.com/**" },
+        { "url": "https://shardcloud.app/**" }
       ]
     }
   ]

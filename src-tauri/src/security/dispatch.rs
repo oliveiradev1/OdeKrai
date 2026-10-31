@@ -77,8 +77,9 @@ pub(super) fn action_metadata(
     };
     let tool_name = match action {
         SimulatedAction::Productivity { skill_id, .. } => match skill_id.as_str() {
-            "files.write" | "files.append" | "files.mkdir" | "files.copy" | "files.move"
-            | "files.rename" | "files.delete" | "files.apply_plan" => skill_id,
+            "plan.propose" | "screen.capture" => skill_id,
+            "files.write" | "files.append" | "files.restore" | "files.mkdir" | "files.copy"
+            | "files.move" | "files.rename" | "files.delete" | "files.apply_plan" => skill_id,
             "calendar.create_event" => "calendar.create_event",
             "google.calendar.create_event"
             | "google.calendar.update_event"
@@ -95,6 +96,11 @@ pub(super) fn action_metadata(
             | "memory.propose_note" => skill_id,
             "mail.draft" => "mail.draft",
             "discord.send" => "discord.send",
+            "shardcloud.vm_list"
+            | "shardcloud.vm_details"
+            | "shardcloud.vm_start"
+            | "shardcloud.vm_stop"
+            | "shardcloud.vm_exec" => skill_id,
             "code.delegate" => "code.delegate",
             "web.fetch" => "web.fetch",
             "system.open_url"
@@ -125,14 +131,20 @@ pub(super) fn action_metadata(
         },
         _ => tool.name(),
     };
-    (tool_name, tool.risk(action), workspace_action, fixed)
+    let policy_scope = workspace_action
+        || matches!(action, SimulatedAction::Productivity { skill_id, .. }
+            if matches!(skill_id.as_str(), "shardcloud.vm_list" | "shardcloud.vm_details"));
+    (tool_name, tool.risk(action), policy_scope, fixed)
 }
 
 fn is_workspace_skill(skill_id: &str) -> bool {
     skill_id.starts_with("files.")
         || matches!(
             skill_id,
-            "calendar.create_event"
+            // A proposta não acessa pasta; o contexto permite apenas sua leitura inofensiva.
+            "plan.propose"
+                | "screen.capture"
+                | "calendar.create_event"
                 | "doc.create_markdown"
                 | "doc.create_text"
                 | "sheet.create_csv"
@@ -146,7 +158,18 @@ fn is_workspace_skill(skill_id: &str) -> bool {
 }
 
 fn require_batch_approval(action: &SimulatedAction, decision: Decision) -> Decision {
-    if matches!(action, SimulatedAction::Productivity { skill_id, .. } if matches!(skill_id.as_str(), "power.lock" | "power.sleep"))
+    if matches!(action, SimulatedAction::Productivity { skill_id, .. } if matches!(skill_id.as_str(), "shardcloud.vm_start" | "shardcloud.vm_stop" | "shardcloud.vm_exec"))
+        && matches!(decision, Decision::Allow(_))
+    {
+        Decision::AskUser(
+            if matches!(action, SimulatedAction::Productivity { skill_id, .. } if skill_id == "shardcloud.vm_exec")
+            {
+                "shardcloud_vm_exec_requires_approval"
+            } else {
+                "shardcloud_power_action_requires_approval"
+            },
+        )
+    } else if matches!(action, SimulatedAction::Productivity { skill_id, .. } if matches!(skill_id.as_str(), "power.lock" | "power.sleep"))
         && matches!(decision, Decision::Allow(_))
     {
         Decision::AskUser(
@@ -168,6 +191,70 @@ fn require_batch_approval(action: &SimulatedAction, decision: Decision) -> Decis
     } else {
         decision
     }
+}
+
+fn approval_granted_and_running(
+    decision: &ApprovalDecision,
+    halted: bool,
+    cancelled: bool,
+) -> bool {
+    matches!(decision, ApprovalDecision::Aprovada) && !halted && !cancelled
+}
+
+fn discord_webhook_missing(action: &SimulatedAction, error: &str) -> bool {
+    matches!(
+        action,
+        SimulatedAction::Productivity { skill_id, .. }
+            if skill_id == "discord.send" && error == crate::discord::WEBHOOK_NOT_REGISTERED
+    )
+}
+
+fn configuration_missing_audit(
+    action: &SimulatedAction,
+    error: &str,
+) -> Option<(&'static str, &'static str)> {
+    discord_webhook_missing(action, error).then_some(("configuration", "discord_webhook_missing"))
+}
+
+fn undo_descriptor_for_action(
+    action: &SimulatedAction,
+    state_id: &str,
+) -> Option<crate::history::UndoDescriptor> {
+    let (skill_id, path, label) = match action {
+        SimulatedAction::Productivity { skill_id, params } => match skill_id.as_str() {
+            "wallpaper.set" => (
+                "wallpaper.restore",
+                None,
+                "Restaurar o papel de parede anterior",
+            ),
+            "display.set_brightness" => (
+                "display.restore_brightness",
+                None,
+                "Restaurar o brilho anterior",
+            ),
+            "theme.set" => ("theme.restore", None, "Restaurar o tema anterior"),
+            "files.write" | "files.append" => (
+                "files.restore",
+                params.get("path").and_then(serde_json::Value::as_str),
+                "Restaurar a versão anterior do arquivo",
+            ),
+            "files.rename" | "files.move" => (
+                "files.restore",
+                params
+                    .get("destination")
+                    .and_then(serde_json::Value::as_str),
+                "Desfazer a renomeação do arquivo",
+            ),
+            _ => return None,
+        },
+        _ => return None,
+    };
+    Some(crate::history::UndoDescriptor {
+        skill_id: skill_id.into(),
+        state_id: state_id.into(),
+        path: path.map(str::to_owned),
+        label: label.into(),
+    })
 }
 
 fn enforce_power_lock_origin(
@@ -286,6 +373,50 @@ mod explicit_approval_tests {
     }
 
     #[test]
+    fn discord_webhook_absence_is_configuration_pending_not_a_denial() {
+        let action = SimulatedAction::Productivity {
+            skill_id: "discord.send".into(),
+            params: json!({"webhook_id":"discord-123456789012345678","text":"mensagem"}),
+        };
+        assert!(discord_webhook_missing(
+            &action,
+            crate::discord::WEBHOOK_NOT_REGISTERED
+        ));
+        assert_eq!(
+            configuration_missing_audit(&action, crate::discord::WEBHOOK_NOT_REGISTERED),
+            Some(("configuration", "discord_webhook_missing"))
+        );
+        assert!(!discord_webhook_missing(
+            &action,
+            "Ação bloqueada pela política."
+        ));
+    }
+
+    #[test]
+    fn discord_always_requires_approval_in_policy_and_dispatch_modes() {
+        let action = SimulatedAction::Productivity {
+            skill_id: "discord.send".into(),
+            params: json!({"webhook_id":"discord-123456789012345678","text":"mensagem"}),
+        };
+        let (tool, risk, inside, fixed) = action_metadata(&action);
+        for mode in [
+            Mode::SemprePerguntar,
+            Mode::AprovarPorMim,
+            Mode::ControleTotal,
+        ] {
+            let policy_decision = policy::decide(mode, risk, &Origin::User, inside, fixed, true);
+            assert!(matches!(&policy_decision, Decision::AskUser(_)), "{mode:?}");
+            assert!(
+                matches!(
+                    require_batch_approval(&action, policy_decision),
+                    Decision::AskUser(_)
+                ),
+                "{mode:?}, tool={tool}"
+            );
+        }
+    }
+
+    #[test]
     fn discord_message_from_untrusted_content_still_requires_user_approval() {
         let action = SimulatedAction::Productivity {
             skill_id: "discord.send".into(),
@@ -332,6 +463,108 @@ mod explicit_approval_tests {
             Decision::AskUser("memory_proposal_requires_approval")
         ));
     }
+
+    #[test]
+    fn shardcloud_power_actions_always_ask_and_a_denial_cannot_execute() {
+        for skill_id in [
+            "shardcloud.vm_start",
+            "shardcloud.vm_stop",
+            "shardcloud.vm_exec",
+        ] {
+            let action = SimulatedAction::Productivity {
+                skill_id: skill_id.into(),
+                params: json!({"vm_name":"Produção", "vm_id":"123e4567-e89b-12d3-a456-426614174000", "commands":["uname -a"]}),
+            };
+            let (tool, risk, inside, fixed) = action_metadata(&action);
+            assert_eq!(
+                risk,
+                if skill_id == "shardcloud.vm_exec" {
+                    Risk::ExecucaoDeCodigo
+                } else {
+                    Risk::EscritaReversivel
+                },
+                "{skill_id}"
+            );
+            assert!(!inside, "{skill_id}");
+            for mode in [
+                Mode::SemprePerguntar,
+                Mode::AprovarPorMim,
+                Mode::ControleTotal,
+            ] {
+                let decision = policy::decide(mode, risk, &Origin::User, inside, fixed, true);
+                assert!(
+                    matches!(
+                        require_batch_approval(&action, decision),
+                        Decision::AskUser(_)
+                    ),
+                    "{mode:?}, {tool}"
+                );
+            }
+            if skill_id == "shardcloud.vm_exec" {
+                let external = Origin::ExternalContent("página externa".into());
+                assert!(matches!(
+                    policy::decide_with_taint(
+                        Mode::ControleTotal,
+                        risk,
+                        &external,
+                        inside,
+                        fixed,
+                        true,
+                        true
+                    ),
+                    Decision::AskUser(_)
+                ));
+            }
+            assert_eq!(
+                require_batch_approval(&action, Decision::Allow("mode_total")),
+                Decision::AskUser(if skill_id == "shardcloud.vm_exec" {
+                    "shardcloud_vm_exec_requires_approval"
+                } else {
+                    "shardcloud_power_action_requires_approval"
+                })
+            );
+            let mut network_calls = 0;
+            if approval_granted_and_running(
+                &ApprovalDecision::Negada("user_denied".into()),
+                false,
+                false,
+            ) {
+                network_calls += 1;
+            }
+            if approval_granted_and_running(&ApprovalDecision::Cancelada, false, false) {
+                network_calls += 1;
+            }
+            assert_eq!(network_calls, 0, "{skill_id}");
+            assert!(!approval_granted_and_running(
+                &ApprovalDecision::Expirada,
+                false,
+                false
+            ));
+            assert!(!approval_granted_and_running(
+                &ApprovalDecision::Cancelada,
+                false,
+                false
+            ));
+            assert!(!approval_granted_and_running(
+                &ApprovalDecision::Aprovada,
+                true,
+                false
+            ));
+            assert!(!approval_granted_and_running(
+                &ApprovalDecision::Aprovada,
+                false,
+                true
+            ));
+            assert!(approval_granted_and_running(
+                &ApprovalDecision::Aprovada,
+                false,
+                false
+            ));
+            let audit = audit_params(&action);
+            assert!(audit.contains("params_sha256"));
+            assert!(!audit.contains("token"));
+        }
+    }
 }
 
 pub(super) fn summary(action: &SimulatedAction) -> String {
@@ -358,6 +591,25 @@ pub(super) fn summary(action: &SimulatedAction) -> String {
             amount_cents,
             currency,
         } => format!("Pagamento bloqueado: {currency} {amount_cents}"),
+        SimulatedAction::Productivity { skill_id, params }
+            if matches!(
+                skill_id.as_str(),
+                "shardcloud.vm_start" | "shardcloud.vm_stop"
+            ) =>
+        {
+            crate::shardcloud::preview_skill(skill_id, params).unwrap_or_else(|_| skill_id.clone())
+        }
+        SimulatedAction::Productivity { skill_id, params } if skill_id == "shardcloud.vm_exec" => {
+            let count = params
+                .get("commands")
+                .and_then(serde_json::Value::as_array)
+                .map_or(0, Vec::len);
+            let name = params
+                .get("vm_name")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("VM");
+            format!("Executar {count} comando(s) na VM {}", clipped(name, 120))
+        }
         SimulatedAction::Productivity { skill_id, params } => format!(
             "{skill_id}: {}",
             params
@@ -503,6 +755,40 @@ pub(super) fn preview_for(
     tool_for(&action).preview(&action, &workspace)
 }
 
+pub(super) fn preview_for_with_image(
+    app: &tauri::AppHandle,
+    action: &SimulatedAction,
+) -> Result<(String, Option<String>), String> {
+    let SimulatedAction::Productivity { skill_id, params } = action else {
+        return preview_for(app, action).map(|text| (text, None));
+    };
+    if skill_id != "screen.capture" {
+        return preview_for(app, action).map(|text| (text, None));
+    }
+
+    let path = params
+        .get("path")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("Informe o nome do arquivo de captura.")?;
+    let capture_id = params
+        .get("_capture_id")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("A captura temporária não tem um identificador válido.")?;
+    let (workspace, _) = super::skills::resolve_action_target(app, action, true)?;
+    let destination = super::workspace::safe_target(&workspace, path)?;
+    if destination.exists() {
+        return Err("Já existe um arquivo com esse nome na pasta de trabalho.".into());
+    }
+    let image = crate::screen_capture::prepare_agent_capture(capture_id)?;
+    Ok((
+        format!(
+            "Prévia reduzida da tela virtual inteira. O arquivo JPEG só será criado após aprovação em:\n{}",
+            destination.display()
+        ),
+        Some(image),
+    ))
+}
+
 pub(super) fn append_audit(
     app: &tauri::AppHandle,
     state: &SecurityState,
@@ -620,6 +906,7 @@ async fn execute_action_with_timeout(
     timeout: Duration,
     origin: &Origin,
     cancel: &tokio_util::sync::CancellationToken,
+    operation_id: &str,
     on_output: &mut (dyn FnMut(String) + Send),
 ) -> Result<String, String> {
     let workspace_action = match action {
@@ -648,7 +935,15 @@ async fn execute_action_with_timeout(
     let tool = tool_for(&action);
     tokio::time::timeout(
         timeout,
-        tool.execute_with_app(&action, &workspace, app, origin, cancel, on_output),
+        tool.execute_with_app(
+            &action,
+            &workspace,
+            app,
+            origin,
+            cancel,
+            operation_id,
+            on_output,
+        ),
     )
     .await
     .map_err(|_| "A ferramenta excedeu o tempo limite.".to_string())?
@@ -659,7 +954,7 @@ pub(super) async fn submit_simulated_action_inner(
     state: State<'_, SecurityState>,
     request: ActionRequest,
 ) -> Result<ActionResult, String> {
-    let mut on_approval = |_| {};
+    let mut on_approval = |_, _, _| {};
     let mut on_output = |_| {};
     let tool = tool_for(&request.action);
     submit_agent_action(
@@ -687,9 +982,18 @@ pub(super) async fn submit_agent_action(
     timeout: Duration,
     rate_limit_per_minute: usize,
     cancel: &tokio_util::sync::CancellationToken,
-    on_approval: &mut (dyn FnMut(String) + Send),
+    on_approval: &mut (dyn FnMut(String, String, u64) + Send),
     on_output: &mut (dyn FnMut(String) + Send),
 ) -> Result<ActionResult, String> {
+    let _capture_cleanup = match &action {
+        SimulatedAction::Productivity { skill_id, params } if skill_id == "screen.capture" => {
+            params
+                .get("_capture_id")
+                .and_then(serde_json::Value::as_str)
+                .map(|id| crate::screen_capture::PreparedCaptureCleanup::for_id(id.to_owned()))
+        }
+        _ => None,
+    };
     let domain_requires_approval = match &action {
         SimulatedAction::Productivity { skill_id, params }
             if skill_id == "web.fetch" || skill_id == "system.open_url" =>
@@ -722,12 +1026,33 @@ pub(super) async fn submit_agent_action(
         return Err("A execução foi parada antes da ação.".into());
     }
     let (tool, risk, inside, fixed) = action_metadata(&action);
+    let fixed = if matches!(&action, SimulatedAction::Productivity { skill_id, .. } if skill_id == "files.restore")
+        && !matches!(&origin, Origin::User)
+    {
+        Some("file_restore_user_origin_required")
+    } else {
+        fixed
+    };
     let fixed = enforce_power_lock_origin(&action, &origin, tainted, fixed);
     let id = id();
     let params = audit_params(&action);
-    let preview = match validate_action(&action).and_then(|_| preview_for(app, &action)) {
+    let (preview, preview_image) = match validate_action(&action)
+        .and_then(|_| crate::shardcloud::validate_action_against_catalog(app, &action))
+        .and_then(|_| preview_for_with_image(app, &action))
+    {
         Ok(preview) => preview,
         Err(error) => {
+            let config_missing = configuration_missing_audit(&action, &error);
+            let (decision, rule, status, message) = if config_missing.is_some() {
+                (
+                    "configuration",
+                    "discord_webhook_missing",
+                    "configuration_pending",
+                    "Falta cadastrar um webhook do Discord.".to_string(),
+                )
+            } else {
+                ("deny", "target_validation_failed", "denied", error.clone())
+            };
             record(
                 app,
                 state,
@@ -735,19 +1060,21 @@ pub(super) async fn submit_agent_action(
                 tool,
                 risk,
                 &origin,
-                "deny",
-                "target_validation_failed",
+                decision,
+                rule,
                 "not_required",
                 0,
                 params,
-                "denied",
+                status,
                 Some(error.clone()),
             )?;
             return Ok(ActionResult {
                 id,
-                status: "denied".into(),
-                message: error,
+                status: status.into(),
+                message,
                 result: None,
+                undo_descriptor: None,
+                confirmation_required: false,
             });
         }
     };
@@ -789,6 +1116,8 @@ pub(super) async fn submit_agent_action(
             status: "denied".into(),
             message: format!("Ação bloqueada pela regra {rule}."),
             result: None,
+            undo_descriptor: None,
+            confirmation_required: false,
         });
     }
     if !allowed_rate_with_limit(state, tool, rate_limit_per_minute)? {
@@ -812,6 +1141,8 @@ pub(super) async fn submit_agent_action(
             status: "denied".into(),
             message: "Limite de frequência da habilidade atingido.".into(),
             result: None,
+            undo_descriptor: None,
+            confirmation_required: false,
         });
     }
     if let Decision::Allow(rule) = decision {
@@ -831,8 +1162,16 @@ pub(super) async fn submit_agent_action(
             None,
         )?;
         let result =
-            execute_action_with_timeout(&action, app, timeout, &origin, cancel, on_output).await;
+            execute_action_with_timeout(&action, app, timeout, &origin, cancel, &id, on_output)
+                .await;
         let error = result.as_ref().err().cloned();
+        let config_missing = error
+            .as_deref()
+            .and_then(|error| configuration_missing_audit(&action, error));
+        let undo_descriptor = result
+            .as_ref()
+            .ok()
+            .and_then(|_| undo_descriptor_for_action(&action, &id));
         record(
             app,
             state,
@@ -840,12 +1179,18 @@ pub(super) async fn submit_agent_action(
             tool,
             risk,
             &origin,
-            "allow",
-            rule,
+            if config_missing.is_some() {
+                "configuration"
+            } else {
+                "allow"
+            },
+            config_missing.map_or(rule, |(_, rule)| rule),
             "not_required",
             0,
             params,
-            if error.is_some() {
+            if config_missing.is_some() {
+                "configuration_pending"
+            } else if error.is_some() {
                 "failed"
             } else {
                 "completed"
@@ -854,14 +1199,22 @@ pub(super) async fn submit_agent_action(
         )?;
         return Ok(ActionResult {
             id,
-            status: if error.is_some() {
+            status: if config_missing.is_some() {
+                "configuration_pending"
+            } else if error.is_some() {
                 "failed"
             } else {
                 "completed"
             }
             .into(),
-            message: error.unwrap_or_else(|| "Ação concluída.".into()),
+            message: if config_missing.is_some() {
+                "Falta cadastrar um webhook do Discord.".into()
+            } else {
+                error.unwrap_or_else(|| "Ação concluída.".into())
+            },
             result: result.ok(),
+            undo_descriptor,
+            confirmation_required: false,
         });
     }
     let ttl = db_setting(app, "approval_ttl_seconds")?
@@ -880,6 +1233,7 @@ pub(super) async fn submit_agent_action(
     let digest = ticket.hash.clone();
     let created_at = Instant::now();
     let expires_at = now_secs() + ttl;
+    let card_preview = preview.clone();
     let capacity = lock_pending(state).map(|mut pending| {
         if !queue_has_capacity(&pending) {
             false
@@ -891,6 +1245,7 @@ pub(super) async fn submit_agent_action(
                 risk,
                 summary: summary(&action),
                 preview,
+                preview_image,
                 digest: digest.clone(),
                 expires: created_at + approval_ttl,
                 expires_at,
@@ -927,6 +1282,8 @@ pub(super) async fn submit_agent_action(
             status: "denied".into(),
             message: "Fila de aprovação cheia; a ação foi negada.".into(),
             result: None,
+            undo_descriptor: None,
+            confirmation_required: false,
         });
     }
     if let Err(error) = open_approval(app) {
@@ -969,7 +1326,7 @@ pub(super) async fn submit_agent_action(
     let _ = app.emit("approval-updated", ());
     let _ = app.emit("companion-state", serde_json::json!({"type":"activity","state":"awaiting_approval","message":"Aguardando aprovação"}));
     let _ = crate::pet_alerts::enqueue_approval(app, &ticket_id);
-    on_approval(ticket_id.clone());
+    on_approval(ticket_id.clone(), card_preview, expires_at);
     let result = state.approval_broker.wait(ticket, cancel).await;
     let _ = crate::pet_alerts::resolve_approval(app, &ticket_id);
     if let Ok(mut pending) = lock_pending(state) {
@@ -978,7 +1335,13 @@ pub(super) async fn submit_agent_action(
     let _ = app.emit("approval-updated", ());
     let latency = created_at.elapsed().as_millis() as u64;
     match result {
-        ApprovalDecision::Aprovada if !state.is_halted() && !cancel.is_cancelled() => {
+        decision @ ApprovalDecision::Aprovada
+            if approval_granted_and_running(
+                &decision,
+                state.is_halted(),
+                cancel.is_cancelled(),
+            ) =>
+        {
             if let SimulatedAction::Productivity { skill_id, params } = &action {
                 if skill_id == "web.fetch" || skill_id == "system.open_url" {
                     let domain = if skill_id == "system.open_url" {
@@ -1011,10 +1374,18 @@ pub(super) async fn submit_agent_action(
                 "started",
                 None,
             )?;
-            let execution =
-                execute_action_with_timeout(&action, app, timeout, &origin, cancel, on_output)
-                    .await;
+            let execution = execute_action_with_timeout(
+                &action, app, timeout, &origin, cancel, &ticket_id, on_output,
+            )
+            .await;
             let error = execution.as_ref().err().cloned();
+            let config_missing = error
+                .as_deref()
+                .and_then(|error| configuration_missing_audit(&action, error));
+            let undo_descriptor = execution
+                .as_ref()
+                .ok()
+                .and_then(|_| undo_descriptor_for_action(&action, &ticket_id));
             record(
                 app,
                 state,
@@ -1022,12 +1393,18 @@ pub(super) async fn submit_agent_action(
                 tool,
                 risk,
                 &origin,
-                "allow",
-                rule,
+                if config_missing.is_some() {
+                    "configuration"
+                } else {
+                    "allow"
+                },
+                config_missing.map_or(rule, |(_, rule)| rule),
                 "approved_once",
                 latency,
                 params,
-                if error.is_some() {
+                if config_missing.is_some() {
+                    "configuration_pending"
+                } else if error.is_some() {
                     "failed"
                 } else {
                     "completed"
@@ -1036,14 +1413,22 @@ pub(super) async fn submit_agent_action(
             )?;
             Ok(ActionResult {
                 id: ticket_id,
-                status: if error.is_some() {
+                status: if config_missing.is_some() {
+                    "configuration_pending"
+                } else if error.is_some() {
                     "failed"
                 } else {
                     "completed"
                 }
                 .into(),
-                message: error.unwrap_or_else(|| "Ação aprovada e concluída.".into()),
+                message: if config_missing.is_some() {
+                    "Falta cadastrar um webhook do Discord.".into()
+                } else {
+                    error.unwrap_or_else(|| "Ação aprovada e concluída.".into())
+                },
                 result: execution.ok(),
+                undo_descriptor,
+                confirmation_required: false,
             })
         }
         decision => {
@@ -1081,6 +1466,8 @@ pub(super) async fn submit_agent_action(
                 status: "denied".into(),
                 message: detail.into(),
                 result: None,
+                undo_descriptor: None,
+                confirmation_required: false,
             })
         }
     }
@@ -1211,6 +1598,7 @@ pub(super) async fn get_pending_approval_inner(
         summary: item.summary.clone(),
         full_preview: item.preview.chars().count() > 4_000,
         preview: clipped(&item.preview, 4_000),
+        preview_image: item.preview_image.clone(),
         expires_at: item.expires_at,
         display_hash: item.digest.clone(),
     }))
@@ -1239,7 +1627,12 @@ pub(super) fn get_full_approval_preview_inner(
     if !display_hash_matches(&item.action, &item.digest, &display_hash) {
         return Err("Os parâmetros mudaram; a prévia foi bloqueada.".into());
     }
-    let preview = preview_for(&app, &item.action)?;
+    let preview = if matches!(&item.action, SimulatedAction::Productivity { skill_id, .. } if skill_id == "screen.capture")
+    {
+        item.preview.clone()
+    } else {
+        preview_for(&app, &item.action)?
+    };
     if preview.len() > 16 * 1024 {
         return Err("A prévia excede o limite de 16 KiB.".into());
     }
@@ -1288,6 +1681,8 @@ pub(super) async fn approval_respond_inner(
             status: "decision_sent".into(),
             message: "Decisão encaminhada à execução segura.".into(),
             result: None,
+            undo_descriptor: None,
+            confirmation_required: false,
         });
     }
     Err("A aprovação não está mais disponível ou já foi resolvida.".into())

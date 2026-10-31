@@ -1,21 +1,110 @@
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use image::{imageops::FilterType, DynamicImage, ImageFormat, Limits};
-use serde::Serialize;
-use std::io::Cursor;
-use tauri::Manager;
+use std::{
+    collections::HashMap,
+    io::Cursor,
+    path::{Path, PathBuf},
+    sync::{Mutex, OnceLock},
+};
 
 pub(crate) const MAX_SCREENSHOT_BYTES: usize = 512 * 1024;
 const MAX_SOURCE_IMAGE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_SCREENSHOT_PIXELS: u64 = 40_000_000;
 const MAX_DIMENSION: u32 = 1280;
+const MAX_APPROVAL_THUMBNAIL_BYTES: usize = 16 * 1024;
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct ScreenshotPreview {
-    pub data_url: String,
-    pub destination: String,
-    pub width: u32,
-    pub height: u32,
+static PREPARED_AGENT_CAPTURES: OnceLock<Mutex<HashMap<String, Vec<u8>>>> = OnceLock::new();
+static CAPTURE_ID_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+pub(crate) fn new_agent_capture_id() -> String {
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    format!(
+        "cap-{timestamp}-{}",
+        CAPTURE_ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    )
+}
+
+pub(crate) struct PreparedCaptureCleanup(String);
+
+impl PreparedCaptureCleanup {
+    pub(crate) fn for_id(id: String) -> Self {
+        Self(id)
+    }
+}
+
+impl Drop for PreparedCaptureCleanup {
+    fn drop(&mut self) {
+        discard_agent_capture(&self.0);
+    }
+}
+
+pub(crate) fn prepare_agent_capture(capture_id: &str) -> Result<String, String> {
+    let source = capture_virtual_screen()?;
+    let (jpeg, _, _) = normalize_image(&source)?;
+    let thumbnail = approval_thumbnail(&jpeg)?;
+    let cache = PREPARED_AGENT_CAPTURES.get_or_init(|| Mutex::new(HashMap::new()));
+    cache
+        .lock()
+        .map_err(|_| "Não foi possível preparar a prévia da captura.".to_string())?
+        .insert(capture_id.to_owned(), jpeg);
+    Ok(format!(
+        "data:image/jpeg;base64,{}",
+        STANDARD.encode(thumbnail)
+    ))
+}
+
+fn approval_thumbnail(jpeg: &[u8]) -> Result<Vec<u8>, String> {
+    let image = image::load_from_memory(jpeg)
+        .map_err(|_| "Não foi possível preparar a prévia reduzida da captura.")?;
+    let mut thumbnail = image.resize(320, 180, FilterType::Lanczos3);
+    for quality in [48, 38, 28, 18] {
+        let bytes = encode_jpeg(&thumbnail, quality)?;
+        if bytes.len() <= MAX_APPROVAL_THUMBNAIL_BYTES {
+            return Ok(bytes);
+        }
+        thumbnail = thumbnail.resize(240, 135, FilterType::Lanczos3);
+    }
+    Err("A prévia reduzida excede o limite permitido.".into())
+}
+
+pub(crate) fn save_prepared_agent_capture(
+    capture_id: &str,
+    destination: &Path,
+) -> Result<PathBuf, String> {
+    let cache = PREPARED_AGENT_CAPTURES.get_or_init(|| Mutex::new(HashMap::new()));
+    let bytes = cache
+        .lock()
+        .map_err(|_| "Não foi possível ler a captura aprovada.".to_string())?
+        .remove(capture_id)
+        .ok_or("A captura temporária expirou; tire um novo print.")?;
+    use std::fs::OpenOptions;
+    use std::io::Write;
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(destination)
+        .map_err(|_| "Não foi possível criar o arquivo de captura na pasta de trabalho.")?;
+    if file
+        .write_all(&bytes)
+        .and_then(|()| file.sync_all())
+        .is_err()
+    {
+        drop(file);
+        let _ = std::fs::remove_file(destination);
+        return Err("Não foi possível salvar a captura aprovada.".into());
+    }
+    Ok(destination.to_path_buf())
+}
+
+pub(crate) fn discard_agent_capture(capture_id: &str) {
+    if let Some(cache) = PREPARED_AGENT_CAPTURES.get() {
+        if let Ok(mut cache) = cache.lock() {
+            cache.remove(capture_id);
+        }
+    }
 }
 
 pub(crate) fn normalize_image(bytes: &[u8]) -> Result<(Vec<u8>, u32, u32), String> {
@@ -66,57 +155,6 @@ fn encode_jpeg(image: &DynamicImage, quality: u8) -> Result<Vec<u8>, String> {
         .encode_image(image)
         .map_err(|_| "Não foi possível preparar a captura.")?;
     Ok(output.into_inner())
-}
-
-#[tauri::command]
-pub(crate) fn capture_screen_preview(
-    app: tauri::AppHandle,
-    caller: tauri::WebviewWindow,
-) -> Result<ScreenshotPreview, String> {
-    crate::require_main(&caller)?;
-    let bytes = capture_virtual_screen()?;
-    let (jpeg, width, height) = normalize_image(&bytes)?;
-    let destination = screenshot_directory(&app)?;
-    Ok(ScreenshotPreview {
-        data_url: format!("data:image/jpeg;base64,{}", STANDARD.encode(jpeg)),
-        destination: destination.to_string_lossy().into_owned(),
-        width,
-        height,
-    })
-}
-
-#[tauri::command]
-pub(crate) fn save_screen_capture(
-    app: tauri::AppHandle,
-    caller: tauri::WebviewWindow,
-    image_base64: String,
-) -> Result<String, String> {
-    crate::require_main(&caller)?;
-    if image_base64.len() > MAX_SCREENSHOT_BYTES * 2 {
-        return Err("A captura excede o limite de 512 KiB.".into());
-    }
-    let input = STANDARD
-        .decode(image_base64)
-        .map_err(|_| "A captura temporária é inválida.")?;
-    let (jpeg, _, _) = normalize_image(&input)?;
-    let directory = screenshot_directory(&app)?;
-    std::fs::create_dir_all(&directory)
-        .map_err(|_| "Não foi possível criar a pasta local de capturas.")?;
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|_| "Não foi possível nomear a captura.")?
-        .as_nanos();
-    let path = directory.join(format!("captura-{timestamp}.jpg"));
-    std::fs::write(&path, jpeg).map_err(|_| "Não foi possível salvar a captura local.")?;
-    Ok(path.to_string_lossy().into_owned())
-}
-
-fn screenshot_directory(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
-    Ok(app
-        .path()
-        .app_data_dir()
-        .map_err(|_| "Não foi possível localizar os dados locais do OdeKrai.")?
-        .join("screenshots"))
 }
 
 #[cfg(windows)]
@@ -263,5 +301,49 @@ mod tests {
     fn rejects_invalid_and_excessively_large_image_input() {
         assert!(normalize_image(b"not an image").is_err());
         assert!(normalize_image(&vec![0; MAX_SOURCE_IMAGE_BYTES + 1]).is_err());
+    }
+
+    #[test]
+    fn approved_capture_is_saved_only_to_the_requested_workspace_target() {
+        let id = new_agent_capture_id();
+        let root = std::env::temp_dir().join(format!("odekrai-screen-approved-{id}"));
+        std::fs::create_dir_all(&root).unwrap();
+        let destination = root.join("captura.jpg");
+        let jpeg = normalize_image(&test_image(16, 9)).unwrap().0;
+        PREPARED_AGENT_CAPTURES
+            .get_or_init(|| Mutex::new(HashMap::new()))
+            .lock()
+            .unwrap()
+            .insert(id.clone(), jpeg.clone());
+
+        let saved = save_prepared_agent_capture(&id, &destination).unwrap();
+
+        assert_eq!(saved, destination);
+        assert_eq!(std::fs::read(&saved).unwrap(), jpeg);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rejected_capture_is_discarded_without_creating_a_file() {
+        let id = new_agent_capture_id();
+        let root = std::env::temp_dir().join(format!("odekrai-screen-rejected-{id}"));
+        std::fs::create_dir_all(&root).unwrap();
+        let destination = root.join("captura.jpg");
+        PREPARED_AGENT_CAPTURES
+            .get_or_init(|| Mutex::new(HashMap::new()))
+            .lock()
+            .unwrap()
+            .insert(id.clone(), b"prepared bytes".to_vec());
+
+        drop(PreparedCaptureCleanup::for_id(id.clone()));
+
+        assert!(!destination.exists());
+        assert!(!PREPARED_AGENT_CAPTURES
+            .get()
+            .unwrap()
+            .lock()
+            .unwrap()
+            .contains_key(&id));
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

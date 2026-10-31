@@ -211,23 +211,7 @@ pub(crate) fn execute(skill_id: &str, params: &Value) -> Result<String, String> 
     execute_with(&mut NativeAdapter, skill_id, params)
 }
 
-pub(crate) fn execute_managed(
-    skill_id: &str,
-    params: &Value,
-    db: &Connection,
-    allowed_roots: &[PathBuf],
-    origin: &str,
-) -> Result<String, String> {
-    execute_managed_with(
-        &mut NativeAdapter,
-        skill_id,
-        params,
-        db,
-        allowed_roots,
-        origin,
-    )
-}
-
+#[cfg(test)]
 pub(crate) fn execute_managed_with<A: SystemAdapter>(
     adapter: &mut A,
     skill_id: &str,
@@ -236,12 +220,37 @@ pub(crate) fn execute_managed_with<A: SystemAdapter>(
     allowed_roots: &[PathBuf],
     origin: &str,
 ) -> Result<String, String> {
+    execute_managed_with_id(adapter, skill_id, args, db, allowed_roots, origin, "")
+}
+
+pub(crate) fn execute_managed_with_id<A: SystemAdapter>(
+    adapter: &mut A,
+    skill_id: &str,
+    args: &Value,
+    db: &Connection,
+    allowed_roots: &[PathBuf],
+    origin: &str,
+    operation_id: &str,
+) -> Result<String, String> {
     db.execute_batch("CREATE TABLE IF NOT EXISTS wallpaper_history (id INTEGER PRIMARY KEY, previous_path TEXT, created_at INTEGER NOT NULL, origin TEXT NOT NULL, restored_at INTEGER)")
         .map_err(|_| "Não foi possível preparar o histórico do papel de parede.".to_string())?;
     db.execute_batch("CREATE TABLE IF NOT EXISTS brightness_history (id INTEGER PRIMARY KEY, previous_value INTEGER NOT NULL, created_at INTEGER NOT NULL, origin TEXT NOT NULL, restored_at INTEGER)")
         .map_err(|_| "Não foi possível preparar o histórico do brilho.".to_string())?;
     db.execute_batch("CREATE TABLE IF NOT EXISTS theme_history (id INTEGER PRIMARY KEY, apps_type INTEGER, apps_data BLOB, system_type INTEGER, system_data BLOB, created_at INTEGER NOT NULL, origin TEXT NOT NULL, restored_at INTEGER)")
         .map_err(|_| "Não foi possível preparar o histórico do tema.".to_string())?;
+    for table in ["wallpaper_history", "brightness_history", "theme_history"] {
+        let has_operation_id: bool = db
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name='operation_id')",
+                [table],
+                |row| row.get(0),
+            )
+            .map_err(|_| "Não foi possível verificar o histórico de desfazer.".to_string())?;
+        if !has_operation_id {
+            db.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN operation_id TEXT"))
+                .map_err(|_| "Não foi possível atualizar o histórico de desfazer.".to_string())?;
+        }
+    }
     match skill_id {
         "wallpaper.set" => {
             let raw = args["path"]
@@ -250,29 +259,45 @@ pub(crate) fn execute_managed_with<A: SystemAdapter>(
             let path = validate_wallpaper_path(raw, allowed_roots)?;
             let previous = adapter.wallpaper()?;
             db.execute(
-                "INSERT INTO wallpaper_history(previous_path,created_at,origin) VALUES (?1,?2,?3)",
-                params![previous, unix_seconds(), origin],
+                "INSERT INTO wallpaper_history(previous_path,created_at,origin,operation_id) VALUES (?1,?2,?3,?4)",
+                params![previous, unix_seconds(), origin, operation_id],
             )
             .map_err(|_| "Não foi possível guardar o papel de parede anterior.".to_string())?;
-            adapter.set_wallpaper(Some(&path.to_string_lossy()))?;
+            if let Err(error) = adapter.set_wallpaper(Some(&path.to_string_lossy())) {
+                let _ = db.execute("UPDATE wallpaper_history SET restored_at=?1 WHERE operation_id=?2 AND restored_at IS NULL", params![unix_seconds(), operation_id]);
+                return Err(error);
+            }
             Ok("Papel de parede alterado. Use wallpaper.restore para desfazer.".into())
         }
         "wallpaper.restore" => {
-            let previous: Option<Option<String>> = db
-                .query_row(
+            let history_id = args.get("history_id").and_then(Value::as_str);
+            let previous: Option<Option<String>> = if let Some(history_id) = history_id {
+                db.query_row(
+                    "SELECT previous_path FROM wallpaper_history WHERE operation_id=?1 AND restored_at IS NULL",
+                    [history_id],
+                    |row| row.get(0),
+                ).optional()
+            } else {
+                db.query_row(
                     "SELECT previous_path FROM wallpaper_history WHERE restored_at IS NULL ORDER BY id DESC LIMIT 1",
                     [],
                     |row| row.get(0),
-                )
-                .optional()
+                ).optional()
+            }
                 .map_err(|_| "Não foi possível consultar o papel de parede anterior.".to_string())?;
             let previous = previous.ok_or("Não há papel de parede anterior para restaurar.")?;
             adapter.set_wallpaper(previous.as_deref())?;
-            db.execute(
-                "UPDATE wallpaper_history SET restored_at=?1 WHERE id=(SELECT id FROM wallpaper_history WHERE restored_at IS NULL ORDER BY id DESC LIMIT 1)",
-                [unix_seconds()],
-            )
+            let updated = if let Some(history_id) = history_id {
+                db.execute("UPDATE wallpaper_history SET restored_at=?1 WHERE operation_id=?2 AND restored_at IS NULL", params![unix_seconds(), history_id])
+            } else {
+                db.execute("UPDATE wallpaper_history SET restored_at=?1 WHERE id=(SELECT id FROM wallpaper_history WHERE restored_at IS NULL ORDER BY id DESC LIMIT 1)", [unix_seconds()])
+            }
             .map_err(|_| "Não foi possível registrar a restauração do papel de parede.".to_string())?;
+            if updated == 0 {
+                return Err(
+                    "O estado anterior do papel de parede não está mais disponível.".into(),
+                );
+            }
             Ok("Papel de parede anterior restaurado.".into())
         }
         "display.get_brightness" => execute_with(adapter, skill_id, args),
@@ -284,20 +309,29 @@ pub(crate) fn execute_managed_with<A: SystemAdapter>(
                 return Err("O brilho precisa estar entre 0 e 100.".into());
             }
             let previous = adapter.brightness()?.ok_or(UNSUPPORTED_BRIGHTNESS)?;
-            db.execute("INSERT INTO brightness_history(previous_value,created_at,origin) VALUES (?1,?2,?3)", params![previous, unix_seconds(), origin])
+            db.execute("INSERT INTO brightness_history(previous_value,created_at,origin,operation_id) VALUES (?1,?2,?3,?4)", params![previous, unix_seconds(), origin, operation_id])
                 .map_err(|_| "Não foi possível guardar o brilho anterior.".to_string())?;
-            adapter.set_brightness(value as u8)?;
+            if let Err(error) = adapter.set_brightness(value as u8) {
+                let _ = db.execute("UPDATE brightness_history SET restored_at=?1 WHERE operation_id=?2 AND restored_at IS NULL", params![unix_seconds(), operation_id]);
+                return Err(error);
+            }
             Ok(format!(
                 "Brilho definido para {value}%. Use display.restore_brightness para desfazer."
             ))
         }
         "display.restore_brightness" => {
-            let previous: Option<i64> = db.query_row("SELECT previous_value FROM brightness_history WHERE restored_at IS NULL ORDER BY id DESC LIMIT 1", [], |row| row.get(0)).optional()
+            let history_id = args.get("history_id").and_then(Value::as_str);
+            let previous: Option<i64> = if let Some(history_id) = history_id {
+                db.query_row("SELECT previous_value FROM brightness_history WHERE operation_id=?1 AND restored_at IS NULL", [history_id], |row| row.get(0)).optional()
+            } else { db.query_row("SELECT previous_value FROM brightness_history WHERE restored_at IS NULL ORDER BY id DESC LIMIT 1", [], |row| row.get(0)).optional() }
                 .map_err(|_| "Não foi possível consultar o brilho anterior.".to_string())?;
             let previous = previous.ok_or("Não há brilho anterior para restaurar.")?;
             adapter.set_brightness(previous as u8)?;
-            db.execute("UPDATE brightness_history SET restored_at=?1 WHERE id=(SELECT id FROM brightness_history WHERE restored_at IS NULL ORDER BY id DESC LIMIT 1)", [unix_seconds()])
+            let updated = if let Some(history_id) = history_id { db.execute("UPDATE brightness_history SET restored_at=?1 WHERE operation_id=?2 AND restored_at IS NULL", params![unix_seconds(), history_id]) } else { db.execute("UPDATE brightness_history SET restored_at=?1 WHERE id=(SELECT id FROM brightness_history WHERE restored_at IS NULL ORDER BY id DESC LIMIT 1)", [unix_seconds()]) }
                 .map_err(|_| "Não foi possível registrar a restauração do brilho.".to_string())?;
+            if updated == 0 {
+                return Err("O estado anterior do brilho não está mais disponível.".into());
+            }
             Ok("Brilho anterior restaurado.".into())
         }
         "theme.set" => {
@@ -310,16 +344,17 @@ pub(crate) fn execute_managed_with<A: SystemAdapter>(
                 _ => return Err("O tema precisa ser claro ou escuro.".into()),
             };
             let previous = adapter.theme_values()?;
-            db.execute("INSERT INTO theme_history(apps_type,apps_data,system_type,system_data,created_at,origin) VALUES (?1,?2,?3,?4,?5,?6)", params![previous.apps_use_light_theme.as_ref().map(|value| value.kind as i64), previous.apps_use_light_theme.as_ref().map(|value| value.data.as_slice()), previous.system_uses_light_theme.as_ref().map(|value| value.kind as i64), previous.system_uses_light_theme.as_ref().map(|value| value.data.as_slice()), unix_seconds(), origin])
+            db.execute("INSERT INTO theme_history(apps_type,apps_data,system_type,system_data,created_at,origin,operation_id) VALUES (?1,?2,?3,?4,?5,?6,?7)", params![previous.apps_use_light_theme.as_ref().map(|value| value.kind as i64), previous.apps_use_light_theme.as_ref().map(|value| value.data.as_slice()), previous.system_uses_light_theme.as_ref().map(|value| value.kind as i64), previous.system_uses_light_theme.as_ref().map(|value| value.data.as_slice()), unix_seconds(), origin, operation_id])
                 .map_err(|_| "Não foi possível guardar o tema anterior.".to_string())?;
             if let Err(error) = adapter.set_theme(light) {
-                db.execute("UPDATE theme_history SET restored_at=?1 WHERE id=(SELECT MAX(id) FROM theme_history)", [unix_seconds()]).map_err(|_| "Não foi possível registrar a falha ao alterar o tema.".to_string())?;
+                db.execute("UPDATE theme_history SET restored_at=?1 WHERE operation_id=?2 AND restored_at IS NULL", params![unix_seconds(), operation_id]).map_err(|_| "Não foi possível registrar a falha ao alterar o tema.".to_string())?;
                 return Err(error);
             }
             Ok("Tema alterado; o Windows foi avisado para atualizar os aplicativos. Use theme.restore para desfazer.".into())
         }
         "theme.restore" => {
-            let row: ThemeHistoryRow = db.query_row("SELECT apps_type,apps_data,system_type,system_data FROM theme_history WHERE restored_at IS NULL ORDER BY id DESC LIMIT 1", [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))).optional()
+            let history_id = args.get("history_id").and_then(Value::as_str);
+            let row: ThemeHistoryRow = if let Some(history_id) = history_id { db.query_row("SELECT apps_type,apps_data,system_type,system_data FROM theme_history WHERE operation_id=?1 AND restored_at IS NULL", [history_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))).optional() } else { db.query_row("SELECT apps_type,apps_data,system_type,system_data FROM theme_history WHERE restored_at IS NULL ORDER BY id DESC LIMIT 1", [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))).optional() }
                 .map_err(|_| "Não foi possível consultar o tema anterior.".to_string())?;
             let (apps_type, apps_data, system_type, system_data) =
                 row.ok_or("Não há tema anterior para restaurar.")?;
@@ -328,8 +363,11 @@ pub(crate) fn execute_managed_with<A: SystemAdapter>(
                 system_uses_light_theme: registry_value_from_db(system_type, system_data)?,
             };
             adapter.restore_theme(&snapshot)?;
-            db.execute("UPDATE theme_history SET restored_at=?1 WHERE id=(SELECT id FROM theme_history WHERE restored_at IS NULL ORDER BY id DESC LIMIT 1)", [unix_seconds()])
+            let updated = if let Some(history_id) = history_id { db.execute("UPDATE theme_history SET restored_at=?1 WHERE operation_id=?2 AND restored_at IS NULL", params![unix_seconds(), history_id]) } else { db.execute("UPDATE theme_history SET restored_at=?1 WHERE id=(SELECT id FROM theme_history WHERE restored_at IS NULL ORDER BY id DESC LIMIT 1)", [unix_seconds()]) }
                 .map_err(|_| "Não foi possível registrar a restauração do tema.".to_string())?;
+            if updated == 0 {
+                return Err("O estado anterior do tema não está mais disponível.".into());
+            }
             Ok("Tema anterior restaurado.".into())
         }
         _ => execute_with(adapter, skill_id, args),
@@ -405,7 +443,7 @@ fn unix_seconds() -> i64 {
 }
 
 #[cfg(windows)]
-struct NativeAdapter;
+pub(crate) struct NativeAdapter;
 
 #[cfg(windows)]
 impl SystemAdapter for NativeAdapter {
@@ -986,7 +1024,7 @@ where
 }
 
 #[cfg(not(windows))]
-struct NativeAdapter;
+pub(crate) struct NativeAdapter;
 
 #[cfg(not(windows))]
 impl SystemAdapter for NativeAdapter {
@@ -1112,6 +1150,120 @@ mod tests {
             })
             .unwrap();
         assert!(restored.is_some());
+        let _ = std::fs::remove_dir_all(folder);
+    }
+
+    #[test]
+    fn undo_uses_the_requested_operation_id_and_reports_missing_state_without_native_effects() {
+        let folder = std::env::temp_dir().join(format!(
+            "odekrai-undo-sim-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&folder).unwrap();
+        let image = folder.join("new.png");
+        std::fs::write(&image, b"\x89PNG\r\n\x1a\ncontent").unwrap();
+        let db = Connection::open_in_memory().unwrap();
+        let original_theme = ThemeSnapshot {
+            apps_use_light_theme: Some(RegistryValue {
+                kind: REG_DWORD_VALUE,
+                data: 1_u32.to_le_bytes().to_vec(),
+            }),
+            system_uses_light_theme: Some(RegistryValue {
+                kind: REG_DWORD_VALUE,
+                data: 1_u32.to_le_bytes().to_vec(),
+            }),
+        };
+        let mut sim = SimulatedAdapter {
+            current_wallpaper: Some("old-wallpaper.png".into()),
+            brightness: Some(27),
+            theme: original_theme.clone(),
+            ..Default::default()
+        };
+        execute_managed_with_id(
+            &mut sim,
+            "wallpaper.set",
+            &json!({"path": image}),
+            &db,
+            std::slice::from_ref(&folder),
+            "user",
+            "wall-op",
+        )
+        .unwrap();
+        execute_managed_with_id(
+            &mut sim,
+            "display.set_brightness",
+            &json!({"brightness": 81}),
+            &db,
+            &[],
+            "user",
+            "brightness-op",
+        )
+        .unwrap();
+        execute_managed_with_id(
+            &mut sim,
+            "theme.set",
+            &json!({"mode":"escuro"}),
+            &db,
+            &[],
+            "user",
+            "theme-op",
+        )
+        .unwrap();
+
+        execute_managed_with_id(
+            &mut sim,
+            "wallpaper.restore",
+            &json!({"history_id":"wall-op"}),
+            &db,
+            &[],
+            "user",
+            "undo-wall",
+        )
+        .unwrap();
+        execute_managed_with_id(
+            &mut sim,
+            "display.restore_brightness",
+            &json!({"history_id":"brightness-op"}),
+            &db,
+            &[],
+            "user",
+            "undo-brightness",
+        )
+        .unwrap();
+        execute_managed_with_id(
+            &mut sim,
+            "theme.restore",
+            &json!({"history_id":"theme-op"}),
+            &db,
+            &[],
+            "user",
+            "undo-theme",
+        )
+        .unwrap();
+        assert_eq!(sim.current_wallpaper.as_deref(), Some("old-wallpaper.png"));
+        assert_eq!(sim.brightness, Some(27));
+        assert_eq!(sim.theme, original_theme);
+        assert!(execute_managed_with_id(
+            &mut sim,
+            "display.restore_brightness",
+            &json!({"history_id":"missing"}),
+            &db,
+            &[],
+            "user",
+            "undo-missing"
+        )
+        .is_err());
+        let origin: String = db
+            .query_row(
+                "SELECT origin FROM brightness_history WHERE operation_id='brightness-op'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(origin, "user");
         let _ = std::fs::remove_dir_all(folder);
     }
 

@@ -41,6 +41,12 @@ As habilidades começam desativadas e podem ser habilitadas na tela Habilidades.
 - O registro de auditoria local encadeia entradas e bloqueia ações se uma gravação ou verificação falhar.
 - O Rust valida habilidades, riscos, caminhos e permissões. O WebView apresenta o estado e encaminha decisões do usuário.
 
+### Acesso rápido e desempenho
+
+- **Início** reúne uma mensagem inicial, sugestões baseadas nos dados disponíveis, conversas recentes e um checklist de configuração. As sugestões preenchem o campo para revisão; não são enviadas automaticamente.
+- **Ctrl+K** abre a paleta de comandos na janela focada. O painel de Atividade abre sob demanda; o modo Compacto expande a janela existente do mascote e oferece um campo de comando rápido.
+- **Desempenho** tem os modos Automático, Ligado e Desligado. Automático ativa com movimento reduzido do Windows, até 8 GiB de RAM ou até 4 núcleos lógicos; Ligado reduz efeitos visuais e animações do mascote.
+
 ### Identidade, mascote e sons
 
 O aplicativo oferece uma pasta pessoal, identidade `ODEKRAI.md` aprovada pelo usuário, notas de memória editáveis e perfil local. O mascote tem 12 personagens e animações associadas aos estados do aplicativo. Pode aparecer nos modos Ilha e Livre, com posição persistida. Há sons de interface configuráveis e opção para minimizar para a bandeja ao fechar a janela.

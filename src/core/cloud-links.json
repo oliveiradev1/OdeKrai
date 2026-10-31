@@ -1,0 +1,33 @@
+{
+  "allowedDomains": [
+    "magalu.cloud",
+    "www.locaweb.com.br",
+    "aws.amazon.com",
+    "cloud.google.com",
+    "azure.microsoft.com",
+    "www.oracle.com",
+    "shardcloud.app"
+  ],
+  "categories": [
+    {
+      "title": "Nuvens brasileiras",
+      "services": [
+        { "name": "Magalu Cloud", "url": "https://magalu.cloud/" },
+        { "name": "Locaweb", "url": "https://www.locaweb.com.br/cloud/" }
+      ]
+    },
+    {
+      "title": "Nuvens internacionais",
+      "services": [
+        { "name": "Amazon Web Services", "url": "https://aws.amazon.com/" },
+        { "name": "Google Cloud", "url": "https://cloud.google.com/" },
+        { "name": "Microsoft Azure", "url": "https://azure.microsoft.com/" },
+        { "name": "Oracle Cloud", "url": "https://www.oracle.com/cloud/" }
+      ]
+    },
+    {
+      "title": "Hospedagem com API",
+      "services": [{ "name": "ShardCloud", "url": "https://shardcloud.app/pt-br/dash/vps" }]
+    }
+  ]
+}

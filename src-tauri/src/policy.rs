@@ -17,6 +17,7 @@ pub enum Risk {
     ComunicacaoExterna,
     DestrutivoFinanceiro,
     ExecucaoDeCodigo,
+    CapturaSensivel,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -57,8 +58,12 @@ pub fn decide(
     if origin.is_tainted() && risk != Risk::Leitura {
         return Decision::AskUser("origin_tainted");
     }
+    if risk == Risk::CapturaSensivel {
+        return Decision::AskUser("sensitive_capture_requires_approval");
+    }
     let base = match (mode, risk, inside_workspace) {
         (_, Risk::ExecucaoDeCodigo, _) => Decision::AskUser("code_execution_requires_approval"),
+        (_, Risk::CapturaSensivel, _) => Decision::AskUser("sensitive_capture_requires_approval"),
         (_, Risk::Leitura, true) => Decision::Allow("workspace_read"),
         (_, Risk::Leitura, false) => Decision::Deny("outside_workspace"),
         (Mode::SemprePerguntar, _, _) => Decision::AskUser("mode_always_ask"),
@@ -76,15 +81,17 @@ pub fn decide(
             Decision::AskUser("mode_total_outside_destructive_asks")
         }
         (Mode::ControleTotal, Risk::ComunicacaoExterna, _) => {
-            Decision::Allow("mode_total_external_communication")
+            Decision::AskUser("external_communication_requires_approval")
         }
         (Mode::ControleTotal, Risk::EscritaReversivel, false) => {
             Decision::AskUser("mode_total_outside_write_asks")
         }
         (Mode::ControleTotal, _, true) => Decision::Allow("mode_total_workspace"),
     };
-    let fixed_approval =
-        risk == Risk::ExecucaoDeCodigo || (risk == Risk::DestrutivoFinanceiro && !inside_workspace);
+    let fixed_approval = risk == Risk::ExecucaoDeCodigo
+        || risk == Risk::CapturaSensivel
+        || risk == Risk::ComunicacaoExterna
+        || (risk == Risk::DestrutivoFinanceiro && !inside_workspace);
     if permissive_override
         && !fixed_approval
         && !origin.is_tainted()
@@ -135,6 +142,7 @@ mod tests {
                 Risk::ComunicacaoExterna,
                 Risk::DestrutivoFinanceiro,
                 Risk::ExecucaoDeCodigo,
+                Risk::CapturaSensivel,
             ] {
                 for origin in [
                     Origin::User,
@@ -147,6 +155,8 @@ mod tests {
                             Decision::AskUser("code_execution_requires_approval")
                         } else if risk != Risk::Leitura && origin.is_tainted() {
                             Decision::AskUser("origin_tainted")
+                        } else if risk == Risk::CapturaSensivel {
+                            Decision::AskUser("sensitive_capture_requires_approval")
                         } else if risk == Risk::Leitura {
                             if inside {
                                 Decision::Allow("workspace_read")
@@ -174,7 +184,7 @@ mod tests {
                                     Decision::AskUser("mode_total_outside_destructive_asks")
                                 }
                                 (Mode::ControleTotal, Risk::ComunicacaoExterna, _) => {
-                                    Decision::Allow("mode_total_external_communication")
+                                    Decision::AskUser("external_communication_requires_approval")
                                 }
                                 (Mode::ControleTotal, Risk::EscritaReversivel, true) => {
                                     Decision::Allow("mode_total_workspace")
@@ -240,6 +250,30 @@ mod tests {
     }
 
     #[test]
+    fn external_communication_requires_approval_in_every_mode_even_with_override() {
+        for mode in [
+            Mode::SemprePerguntar,
+            Mode::AprovarPorMim,
+            Mode::ControleTotal,
+        ] {
+            assert!(
+                matches!(
+                    decide(
+                        mode,
+                        Risk::ComunicacaoExterna,
+                        &Origin::User,
+                        false,
+                        None,
+                        true,
+                    ),
+                    Decision::AskUser(_)
+                ),
+                "mode={mode:?}"
+            );
+        }
+    }
+
+    #[test]
     fn blocks_override_every_mode_and_tainted_actions_always_ask() {
         for mode in [
             Mode::SemprePerguntar,
@@ -282,7 +316,7 @@ mod tests {
                 None,
                 true
             ),
-            Decision::Allow("confirmed_tool_override")
+            Decision::AskUser("mode_always_ask")
         );
         assert_eq!(
             decide(
@@ -341,6 +375,42 @@ mod tests {
                     true,
                 ),
                 Decision::AskUser("code_execution_requires_approval")
+            );
+        }
+    }
+
+    #[test]
+    fn sensitive_capture_always_requires_approval_in_every_mode() {
+        for mode in [
+            Mode::SemprePerguntar,
+            Mode::AprovarPorMim,
+            Mode::ControleTotal,
+        ] {
+            assert_eq!(
+                decide(mode, Risk::CapturaSensivel, &Origin::User, true, None, true,),
+                Decision::AskUser("sensitive_capture_requires_approval")
+            );
+            assert_eq!(
+                decide(
+                    mode,
+                    Risk::CapturaSensivel,
+                    &Origin::User,
+                    false,
+                    None,
+                    true,
+                ),
+                Decision::AskUser("sensitive_capture_requires_approval")
+            );
+            assert_eq!(
+                decide(
+                    mode,
+                    Risk::CapturaSensivel,
+                    &Origin::ExternalContent("janela de conversa".into()),
+                    true,
+                    None,
+                    true,
+                ),
+                Decision::AskUser("origin_tainted")
             );
         }
     }

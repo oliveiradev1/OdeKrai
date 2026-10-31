@@ -21,6 +21,15 @@ pub(crate) struct PetAlertSnapshot {
     message: String,
     count: usize,
     pinned: bool,
+    alerts: Vec<PetAlertSummary>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PetAlertSummary {
+    alert_id: String,
+    state: String,
+    message: String,
 }
 
 #[derive(Default)]
@@ -38,6 +47,14 @@ fn snapshot(queue: &VecDeque<PetAlert>) -> PetAlertSnapshot {
             message: active.message.clone(),
             count: queue.len(),
             pinned: active.pinned,
+            alerts: queue
+                .iter()
+                .map(|alert| PetAlertSummary {
+                    alert_id: alert.id.clone(),
+                    state: alert.state.clone(),
+                    message: alert.message.clone(),
+                })
+                .collect(),
         },
     )
 }
@@ -264,6 +281,8 @@ mod tests {
         let current = snapshot(&queue);
         assert_eq!(current.alert_id.as_deref(), Some("approval-1"));
         assert_eq!(current.count, 4);
+        assert_eq!(current.alerts.len(), 4);
+        assert_eq!(current.alerts[0].state, "awaiting_approval");
         assert!(current.pinned);
     }
 

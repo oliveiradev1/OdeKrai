@@ -53,6 +53,19 @@ describe('Modal reutilizável', () => {
     expect(first.focus).toHaveBeenCalledOnce();
   });
 
+  it('prioriza o controle marcado para foco inicial sem autofocus nativo', () => {
+    const search = focusable('busca');
+    const first = focusable('primeiro');
+    const dialog = {
+      querySelector: () => search,
+      querySelectorAll: () => [first, search],
+      focus: vi.fn(),
+    } as unknown as HTMLElement;
+    focusInitialElement(dialog);
+    expect(search.focus).toHaveBeenCalledOnce();
+    expect(first.focus).not.toHaveBeenCalled();
+  });
+
   it('mantém Tab e Shift+Tab dentro do diálogo e fecha com Escape', () => {
     const first = focusable('primeiro');
     const last = focusable('último');

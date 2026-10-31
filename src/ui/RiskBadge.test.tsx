@@ -9,6 +9,7 @@ describe('RiskBadge', () => {
     ['comunicação externa', 'Comunicação externa', 'risk-badge--comunicacao_externa'],
     ['destrutivo_financeiro', 'Destrutivo ou financeiro', 'risk-badge--destrutivo_financeiro'],
     ['execução de código (alto)', 'Execução de código (alto)', 'risk-badge--execucao_de_codigo'],
+    ['captura_sensivel', 'Captura sensível', 'risk-badge--captura_sensivel'],
   ])('mapeia %s para rótulo e categoria próprios', (risk, label, className) => {
     const markup = renderToStaticMarkup(<RiskBadge risk={risk} />);
     expect(markup).toContain(`class="risk-badge ${className}`);

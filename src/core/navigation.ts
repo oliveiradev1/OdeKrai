@@ -10,6 +10,7 @@ export type SettingsSection =
   | 'conectores'
   | 'privacidade'
   | 'atividade'
+  | 'nuvem'
   | 'sobre';
 
 export type AppRoute = { page: Page; settingsSection?: SettingsSection };
@@ -122,6 +123,7 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
   'conectores',
   'privacidade',
   'atividade',
+  'nuvem',
   'sobre',
 ];
 

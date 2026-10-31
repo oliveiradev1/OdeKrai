@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   formatConversationNotes,
   mergeApprovedProfile,
+  normalizeProfileData,
   parseConversationNotes,
   profileFromApprovedCore,
   sanitizeIdentityName,
@@ -9,6 +10,19 @@ import {
 } from './identity';
 
 describe('preferências de identidade', () => {
+  it('normaliza campos de perfil ausentes para strings vazias e avatar nulo', () => {
+    expect(normalizeProfileData({ displayName: 'Ana' })).toEqual({
+      displayName: 'Ana',
+      nickname: '',
+      avatarDataUrl: null,
+    });
+    expect(normalizeProfileData(undefined)).toEqual({
+      displayName: '',
+      nickname: '',
+      avatarDataUrl: null,
+    });
+  });
+
   it('recupera nome e apelido do conteúdo aprovado e ignora modelo vazio', () => {
     expect(profileFromApprovedCore('- Nome: Marina\n- Apelido: Mari\n')).toEqual({
       displayName: 'Marina',
@@ -36,6 +50,15 @@ describe('preferências de identidade', () => {
       nickname: 'Oli',
       avatarDataUrl: 'data:image/png;base64,abc',
     });
+  });
+
+  it('recupera identidade aprovada quando o payload do perfil está incompleto', () => {
+    expect(
+      mergeApprovedProfile(
+        { displayName: undefined, nickname: undefined, avatarDataUrl: undefined } as never,
+        '- Nome: Oliver\n- Apelido: Oli\n',
+      ),
+    ).toEqual({ displayName: 'Oliver', nickname: 'Oli', avatarDataUrl: null });
   });
 
   it('preserva instruções e expressões ao salvar e reler as notas de conversa', () => {

@@ -150,6 +150,26 @@ export function petAnimationForIslandState(state: string): PetAnimationState {
   return islandStateAnimation[state] ?? 'idle';
 }
 
-export function petMotionDisabled(reduceMotion: boolean, prefersReducedMotion: boolean): boolean {
-  return reduceMotion || prefersReducedMotion;
+const assistantActivityAnimation: Record<string, PetAnimationState> = {
+  idle: 'idle',
+  thinking: 'thinking',
+  task: 'working',
+  responding: 'working',
+  awaiting_approval: 'awaiting_approval',
+  completed: 'success',
+  error: 'error',
+  paused: 'paused',
+  stopped: 'paused',
+};
+
+export function petAnimationForAssistantActivity(state: string): PetAnimationState {
+  return assistantActivityAnimation[state] ?? 'idle';
+}
+
+export function petMotionDisabled(
+  reduceMotion: boolean,
+  prefersReducedMotion: boolean,
+  performanceMode = false,
+): boolean {
+  return reduceMotion || prefersReducedMotion || performanceMode;
 }

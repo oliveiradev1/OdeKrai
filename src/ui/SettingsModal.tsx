@@ -11,6 +11,7 @@ import {
 import type { SettingsSection } from '../core/navigation';
 import type { ProfileData } from './Profile';
 import type { Section } from './screens/types';
+import type { PerformanceModeView } from './usePerformanceMode';
 import { Button } from './DesignSystem';
 import { Modal } from './Modal';
 import { ScreenErrorBoundary } from './ScreenErrorBoundary';
@@ -33,6 +34,8 @@ const ComputerScreen = lazy(() =>
 const SecurityCenter = lazy(() =>
   import('./SecurityCenter').then((module) => ({ default: module.SecurityCenter })),
 );
+import type { AuditEntry } from './SecurityCenter';
+import { CloudSettings } from './CloudSettings';
 
 export function SettingsModal({
   open,
@@ -41,6 +44,7 @@ export function SettingsModal({
   onSelectSection,
   settings,
   update,
+  performanceStatus,
   profile,
   setProfile,
   petVisible,
@@ -52,6 +56,11 @@ export function SettingsModal({
   onOpenPage,
   onOpenActivityFullPage,
   onAgentStatus,
+  releaseNotesUrl,
+  onOpenReleaseNotes,
+  onUpdateFound,
+  sharedAudit,
+  requestedEntry,
 }: {
   open: boolean;
   section: SettingsSection;
@@ -59,6 +68,7 @@ export function SettingsModal({
   onSelectSection: (section: SettingsSection) => void;
   settings: AppSettings;
   update: (settings: AppSettings) => void;
+  performanceStatus: PerformanceModeView;
   profile: ProfileData;
   setProfile: (profile: ProfileData) => void;
   petVisible: boolean;
@@ -70,10 +80,27 @@ export function SettingsModal({
   onOpenPage: (page: Extract<Section, 'skills' | 'providers'>) => void;
   onOpenActivityFullPage: () => void;
   onAgentStatus: () => void;
+  releaseNotesUrl: string;
+  onOpenReleaseNotes: () => void;
+  onUpdateFound: (result: {
+    current_version: string;
+    available_version: string | null;
+    release_url: string | null;
+    notes_summary: string | null;
+    check_succeeded: boolean;
+  }) => void;
+  sharedAudit?: {
+    entries: AuditEntry[];
+    verified: boolean | null;
+    loading: boolean;
+    unavailable?: boolean;
+  };
+  requestedEntry?: { section: SettingsSection; anchor: string; requestId: number } | null;
 }) {
   const [query, setQuery] = useState('');
   const [pendingAnchor, setPendingAnchor] = useState<string | null>(null);
   const contentRef = useRef<HTMLDivElement>(null);
+  const lastHandledPaletteRequest = useRef(0);
   const menu = useMemo(() => filterSettingsMenu(query), [query]);
   const results = useMemo(() => filterSettingsIndex(query), [query]);
   const activeTitle = SETTINGS_MENU.find((item) => item.id === section)?.title ?? 'Configurações';
@@ -96,6 +123,17 @@ export function SettingsModal({
     return () => observer.disconnect();
   }, [pendingAnchor, section]);
 
+  useEffect(() => {
+    if (
+      open &&
+      requestedEntry?.section === section &&
+      requestedEntry.requestId > lastHandledPaletteRequest.current
+    ) {
+      lastHandledPaletteRequest.current = requestedEntry.requestId;
+      setPendingAnchor(requestedEntry.anchor);
+    }
+  }, [open, requestedEntry, section]);
+
   function chooseSection(next: SettingsSection, anchor?: string) {
     setPendingAnchor(anchor ?? null);
     onSelectSection(next);
@@ -108,12 +146,21 @@ export function SettingsModal({
           <SettingsScreen
             settings={settings}
             update={update}
+            performanceStatus={performanceStatus}
             onOpenPermissions={() => chooseSection('privacidade')}
             embedded
           />
         );
       case 'sobre':
-        return <AboutSettings />;
+        return (
+          <AboutSettings
+            releaseNotesUrl={releaseNotesUrl}
+            onOpenReleaseNotes={onOpenReleaseNotes}
+            settings={settings}
+            update={update}
+            onUpdateFound={onUpdateFound}
+          />
+        );
       case 'perfil-memoria':
         return (
           <IdentityScreen
@@ -151,7 +198,16 @@ export function SettingsModal({
           />
         );
       case 'atividade':
-        return <SecurityCenter page="activity" embedded onOpenFullPage={onOpenActivityFullPage} />;
+        return (
+          <SecurityCenter
+            page="activity"
+            embedded
+            onOpenFullPage={onOpenActivityFullPage}
+            sharedAudit={sharedAudit}
+          />
+        );
+      case 'nuvem':
+        return <CloudSettings />;
       case 'habilidades':
         return <SkillsSettingsSummary onOpenPage={() => onOpenPage('skills')} />;
       case 'conectores':

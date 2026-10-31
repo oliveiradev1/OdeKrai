@@ -4,6 +4,12 @@ use std::path::{Path, PathBuf};
 use tauri_plugin_opener::OpenerExt;
 use url::Url;
 
+fn string_param<'a>(params: &'a Value, key: &str) -> Result<&'a str, String> {
+    params[key]
+        .as_str()
+        .ok_or_else(|| format!("O parâmetro {key} da habilidade do sistema é inválido."))
+}
+
 const SETTINGS_PAGES: &[(&str, &str)] = &[
     ("som", "ms-settings:sound"),
     ("tela", "ms-settings:display"),
@@ -47,9 +53,25 @@ pub(crate) fn validate(skill_id: &str, params: &Value) -> Result<(), String> {
         "system.info" => &[],
         _ => return Err("Habilidade do sistema desconhecida.".into()),
     };
-    if object.len() != expected.len() || object.keys().any(|key| !expected.contains(&key.as_str()))
+    let restore = matches!(
+        skill_id,
+        "wallpaper.restore" | "display.restore_brightness" | "theme.restore"
+    );
+    let keys_valid = object
+        .keys()
+        .all(|key| expected.contains(&key.as_str()) || (restore && key == "history_id"));
+    if !keys_valid || (!restore && object.len() != expected.len()) || (restore && object.len() > 1)
     {
         return Err("Os parâmetros não correspondem à habilidade permitida.".into());
+    }
+    if restore
+        && object.get("history_id").is_some_and(|value| {
+            value.as_str().is_none_or(|id| {
+                id.is_empty() || id.len() > 128 || id.chars().any(char::is_control)
+            })
+        })
+    {
+        return Err("O identificador do estado anterior é inválido.".into());
     }
     match skill_id {
         "audio.get_volume"
@@ -157,7 +179,7 @@ pub(crate) fn validate(skill_id: &str, params: &Value) -> Result<(), String> {
         }
         "clipboard.read" => {}
         "system.info" => {}
-        _ => unreachable!(),
+        _ => return Err("Habilidade do sistema desconhecida.".into()),
     }
     Ok(())
 }
@@ -182,7 +204,7 @@ pub(crate) fn preview(skill_id: &str, params: &Value, root: &Path) -> Result<Str
         "theme.restore" => "Restaurar o tema anterior do Windows.".into(),
         "system.open_url" => format!(
             "Abrir no navegador padrão: {}",
-            params["url"].as_str().unwrap()
+            string_param(params, "url")?
         ),
         "system.open_path" => format!(
             "Abrir arquivo ou pasta permitida: {}",
@@ -194,20 +216,21 @@ pub(crate) fn preview(skill_id: &str, params: &Value, root: &Path) -> Result<Str
         ),
         "settings.open" => format!(
             "Abrir Configurações do Windows: {}",
-            page_uri(params["page"].as_str().unwrap()).unwrap()
+            page_uri(string_param(params, "page")?)
+                .ok_or("A página de Configurações solicitada não está disponível.")?
         ),
         "notification.show" => format!(
             "Exibir notificação local: {}",
-            params["title"].as_str().unwrap()
+            string_param(params, "title")?
         ),
         "app.launch" => format!(
             "Iniciar aplicativo cadastrado {} sem argumentos.",
-            params["app_id"].as_str().unwrap()
+            string_param(params, "app_id")?
         ),
         "clipboard.write" => format!(
             "Substituir a área de transferência por texto ({} bytes):\n{}",
-            params["text"].as_str().unwrap().len(),
-            params["text"].as_str().unwrap()
+            string_param(params, "text")?.len(),
+            string_param(params, "text")?
         ),
         "clipboard.read" => "Ler o texto atual da área de transferência; o conteúdo será tratado como dado não confiável.".into(),
         "system.info" => "Consultar informações locais resumidas do Windows, memória, discos das pastas permitidas, bateria e tempo ligado.".into(),
@@ -222,7 +245,7 @@ pub(crate) fn preview_allowed_app(
     validate("app.launch", params)?;
     let (name, path) = lookup_allowed_app(
         &crate::security::database(app)?,
-        params["app_id"].as_str().unwrap(),
+        string_param(params, "app_id")?,
     )?
     .ok_or("O aplicativo não está cadastrado como permitido.")?;
     Ok(format!(
@@ -253,7 +276,7 @@ pub(crate) fn execute(
         }
         "system.open_url" => {
             let normalized =
-                crate::external_links::validate_external_url(params["url"].as_str().unwrap())
+                crate::external_links::validate_external_url(string_param(params, "url")?)
                     .map_err(str::to_string)?;
             app.opener()
                 .open_url(normalized, None::<&str>)
@@ -275,7 +298,8 @@ pub(crate) fn execute(
             Ok("Item mostrado no Explorador de Arquivos.".into())
         }
         "settings.open" => {
-            let uri = page_uri(params["page"].as_str().unwrap()).unwrap();
+            let uri = page_uri(string_param(params, "page")?)
+                .ok_or("A página de Configurações solicitada não está disponível.")?;
             app.opener()
                 .open_url(uri, None::<&str>)
                 .map_err(|_| "Não foi possível abrir Configurações do Windows.".to_string())?;
@@ -285,14 +309,14 @@ pub(crate) fn execute(
             use tauri_plugin_notification::NotificationExt;
             app.notification()
                 .builder()
-                .title(params["title"].as_str().unwrap())
-                .body(params["body"].as_str().unwrap())
+                .title(string_param(params, "title")?)
+                .body(string_param(params, "body")?)
                 .show()
                 .map_err(|_| "Não foi possível exibir a notificação.".to_string())?;
             Ok("Notificação exibida.".into())
         }
         "app.launch" => {
-            let app_id = params["app_id"].as_str().unwrap();
+            let app_id = string_param(params, "app_id")?;
             let (_, path) = lookup_allowed_app(&crate::security::database(app)?, app_id)?
                 .ok_or("O aplicativo não está cadastrado como permitido.")?;
             let executable = PathBuf::from(path);
@@ -315,7 +339,7 @@ pub(crate) fn execute(
         "clipboard.write" => {
             use tauri_plugin_clipboard_manager::ClipboardExt;
             app.clipboard()
-                .write_text(params["text"].as_str().unwrap().to_string())
+                .write_text(string_param(params, "text")?.to_string())
                 .map_err(|_| "Não foi possível atualizar a área de transferência.".to_string())?;
             Ok("Texto copiado para a área de transferência.".into())
         }
@@ -340,6 +364,7 @@ pub(crate) fn execute_managed_control(
     skill_id: &str,
     params: &Value,
     origin: &str,
+    operation_id: &str,
 ) -> Result<String, String> {
     validate(skill_id, params)?;
     let db = crate::security::database(app)?;
@@ -353,7 +378,63 @@ pub(crate) fn execute_managed_control(
         .query_map([], |row| row.get::<_, String>(0))
         .map_err(|_| "Não foi possível consultar as pastas permitidas.".to_string())?;
     roots.extend(folders.filter_map(Result::ok).map(PathBuf::from));
-    crate::system_controls::execute_managed(skill_id, params, &db, &roots, origin)
+    crate::system_controls::execute_managed_with_id(
+        &mut crate::system_controls::NativeAdapter,
+        skill_id,
+        params,
+        &db,
+        &roots,
+        origin,
+        operation_id,
+    )
+}
+
+#[tauri::command]
+pub fn open_agent_artifact(
+    app: tauri::AppHandle,
+    caller: tauri::WebviewWindow,
+    path: String,
+) -> Result<(), String> {
+    crate::require_main(&caller)?;
+    let path = validate_agent_artifact_path(&app, &path)?;
+    app.opener()
+        .open_path(path.to_string_lossy(), None::<&str>)
+        .map_err(|_| "Não foi possível abrir o arquivo permitido.".to_string())
+}
+
+#[tauri::command]
+pub fn reveal_agent_artifact(
+    app: tauri::AppHandle,
+    caller: tauri::WebviewWindow,
+    path: String,
+) -> Result<(), String> {
+    crate::require_main(&caller)?;
+    let path = validate_agent_artifact_path(&app, &path)?;
+    app.opener()
+        .reveal_item_in_dir(path)
+        .map_err(|_| "Não foi possível mostrar o arquivo permitido.".to_string())
+}
+
+fn validate_agent_artifact_path(app: &tauri::AppHandle, raw: &str) -> Result<PathBuf, String> {
+    if raw.is_empty() || raw.len() > 32_767 || raw.chars().any(char::is_control) {
+        return Err("O caminho do arquivo não é válido.".into());
+    }
+    let db = crate::security::database(app)?;
+    let mut roots = vec![crate::agent_home::workspace_path(app)?];
+    let mut statement = db
+        .prepare("SELECT path FROM allowed_folders ORDER BY path")
+        .map_err(|_| "Não foi possível consultar as pastas permitidas.".to_string())?;
+    let folders = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|_| "Não foi possível consultar as pastas permitidas.".to_string())?;
+    roots.extend(folders.filter_map(Result::ok).map(PathBuf::from));
+    let params = serde_json::json!({"path": raw});
+    roots
+        .iter()
+        .find_map(|root| checked_path(&params, root).ok())
+        .ok_or_else(|| {
+            "O arquivo não existe em uma pasta permitida ou não é seguro para abrir.".into()
+        })
 }
 
 pub(crate) fn preview_managed_control(
@@ -363,8 +444,21 @@ pub(crate) fn preview_managed_control(
 ) -> Result<String, String> {
     validate(skill_id, params)?;
     let db = crate::security::database(app)?;
-    db.execute_batch("CREATE TABLE IF NOT EXISTS wallpaper_history (id INTEGER PRIMARY KEY, previous_path TEXT, created_at INTEGER NOT NULL, origin TEXT NOT NULL, restored_at INTEGER)")
+    db.execute_batch("CREATE TABLE IF NOT EXISTS wallpaper_history (id INTEGER PRIMARY KEY, previous_path TEXT, created_at INTEGER NOT NULL, origin TEXT NOT NULL, restored_at INTEGER); CREATE TABLE IF NOT EXISTS brightness_history (id INTEGER PRIMARY KEY, previous_value INTEGER NOT NULL, created_at INTEGER NOT NULL, origin TEXT NOT NULL, restored_at INTEGER); CREATE TABLE IF NOT EXISTS theme_history (id INTEGER PRIMARY KEY, apps_type INTEGER, apps_data BLOB, system_type INTEGER, system_data BLOB, created_at INTEGER NOT NULL, origin TEXT NOT NULL, restored_at INTEGER)")
         .map_err(|_| "Não foi possível preparar o histórico do papel de parede.".to_string())?;
+    for table in ["wallpaper_history", "brightness_history", "theme_history"] {
+        let exists: bool = db
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name='operation_id')",
+                [table],
+                |row| row.get(0),
+            )
+            .map_err(|_| "Não foi possível verificar o histórico de desfazer.".to_string())?;
+        if !exists {
+            db.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN operation_id TEXT"))
+                .map_err(|_| "Não foi possível atualizar o histórico de desfazer.".to_string())?;
+        }
+    }
     let mut roots = vec![crate::agent_home::workspace_path(app)?];
     let mut statement = db
         .prepare("SELECT path FROM allowed_folders ORDER BY path")
@@ -388,11 +482,7 @@ pub(crate) fn preview_managed_control(
         }
         "wallpaper.restore" => {
             let available: bool = db
-                .query_row(
-                    "SELECT EXISTS(SELECT 1 FROM wallpaper_history WHERE restored_at IS NULL)",
-                    [],
-                    |row| row.get(0),
-                )
+                .query_row("SELECT EXISTS(SELECT 1 FROM wallpaper_history WHERE restored_at IS NULL AND (?1 IS NULL OR operation_id=?1))", [params.get("history_id").and_then(Value::as_str)], |row| row.get(0))
                 .map_err(|_| {
                     "Não foi possível consultar o histórico do papel de parede.".to_string()
                 })?;
@@ -411,11 +501,7 @@ pub(crate) fn preview_managed_control(
         )),
         "display.restore_brightness" => {
             let available: bool = db
-                .query_row(
-                    "SELECT EXISTS(SELECT 1 FROM brightness_history WHERE restored_at IS NULL)",
-                    [],
-                    |row| row.get(0),
-                )
+                .query_row("SELECT EXISTS(SELECT 1 FROM brightness_history WHERE restored_at IS NULL AND (?1 IS NULL OR operation_id=?1))", [params.get("history_id").and_then(Value::as_str)], |row| row.get(0))
                 .map_err(|_| "Não foi possível consultar o histórico do brilho.".to_string())?;
             if !available {
                 return Err("Não há brilho anterior para restaurar.".into());
@@ -429,11 +515,7 @@ pub(crate) fn preview_managed_control(
         )),
         "theme.restore" => {
             let available: bool = db
-                .query_row(
-                    "SELECT EXISTS(SELECT 1 FROM theme_history WHERE restored_at IS NULL)",
-                    [],
-                    |row| row.get(0),
-                )
+                .query_row("SELECT EXISTS(SELECT 1 FROM theme_history WHERE restored_at IS NULL AND (?1 IS NULL OR operation_id=?1))", [params.get("history_id").and_then(Value::as_str)], |row| row.get(0))
                 .map_err(|_| "Não foi possível consultar o histórico do tema.".to_string())?;
             if !available {
                 return Err("Não há tema anterior para restaurar.".into());
@@ -561,7 +643,7 @@ pub(crate) fn domain_for_open_url(params: &Value) -> Result<Option<String>, Stri
     if params.get("url").is_none() {
         return Ok(None);
     }
-    let normalized = crate::external_links::validate_external_url(params["url"].as_str().unwrap())
+    let normalized = crate::external_links::validate_external_url(string_param(params, "url")?)
         .map_err(str::to_string)?;
     let url = Url::parse(&normalized).map_err(|_| "URL inválida.")?;
     Ok(url.host_str().map(str::to_ascii_lowercase))
@@ -720,6 +802,15 @@ mod tests {
     }
 
     #[test]
+    fn malformed_open_url_preview_returns_a_skill_error() {
+        assert!(
+            preview("system.open_url", &serde_json::json!({}), Path::new("."))
+                .unwrap_err()
+                .contains("não correspondem à habilidade permitida")
+        );
+    }
+
+    #[test]
     fn blocks_executable_and_script_extensions_case_insensitively() {
         for path in [
             "setup.EXE",
@@ -744,6 +835,23 @@ mod tests {
             Some("example.com".into())
         );
         assert!(domain_for_open_url(&json!({"url":"http://127.0.0.1"})).is_err());
+    }
+
+    #[test]
+    fn artifact_paths_must_exist_inside_the_selected_allowed_root_and_be_non_executable() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root =
+            std::env::temp_dir().join(format!("odekrai-artifact-{}-{stamp}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("result.txt"), "ok").unwrap();
+        std::fs::write(root.join("payload.exe"), "not executed").unwrap();
+        assert!(checked_path(&json!({"path":"result.txt"}), &root).is_ok());
+        assert!(checked_path(&json!({"path":"../outside.txt"}), &root).is_err());
+        assert!(checked_path(&json!({"path":"payload.exe"}), &root).is_err());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

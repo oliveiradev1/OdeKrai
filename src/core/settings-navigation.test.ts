@@ -9,6 +9,7 @@ import appNavigationSource from '../ui/hooks/useNavigation.ts?raw';
 import securityCenterSource from '../ui/SecurityCenter.tsx?raw';
 import privacyConfigurationsSource from '../ui/PrivacyConfigurations.tsx?raw';
 import discordSettingsSource from '../ui/DiscordWebhooksSettings.tsx?raw';
+import cloudSettingsSource from '../ui/CloudSettings.tsx?raw';
 import {
   filterSettingsIndex,
   filterSettingsMenu,
@@ -26,11 +27,12 @@ const sourceBySection = {
   conectores: settingsModalSource,
   privacidade: `${securityCenterSource}\n${privacyConfigurationsSource}\n${discordSettingsSource}`,
   atividade: securityCenterSource,
+  nuvem: cloudSettingsSource,
   sobre: aboutSettingsSource,
 } as const;
 
 describe('navegação das configurações', () => {
-  it('lista as nove seções previstas', () => {
+  it('lista as dez seções previstas, com Nuvem logo após Atividade', () => {
     expect(SETTINGS_MENU.map((section) => section.id)).toEqual([
       'geral',
       'perfil-memoria',
@@ -40,11 +42,22 @@ describe('navegação das configurações', () => {
       'conectores',
       'privacidade',
       'atividade',
+      'nuvem',
       'sobre',
     ]);
+    expect(filterSettingsMenu('nuvem').map((section) => section.id)).toContain('nuvem');
+    expect(filterSettingsIndex('nuvem')).toContainEqual(
+      expect.objectContaining({ section: 'nuvem', anchor: 'cloud-shardcloud-heading' }),
+    );
   });
 
   it('filtra opções e seções pelo mesmo índice', () => {
+    expect(filterSettingsIndex('desempenho').map((entry) => entry.anchor)).toContain(
+      'settings-performance',
+    );
+    expect(filterSettingsIndex('novidades').map((entry) => entry.anchor)).toContain(
+      'settings-updates',
+    );
     expect(filterSettingsIndex('microfone').map((entry) => entry.anchor)).toContain(
       'settings-audio',
     );

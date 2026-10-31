@@ -20,6 +20,7 @@ import {
   Info,
   Key,
   MagnifyingGlass,
+  Microphone,
   Minus,
   Notebook,
   PaperPlaneRight,
@@ -85,6 +86,7 @@ const icons: Record<string, PhosphorIcon> = {
   blocked: Prohibit,
   stop: Stop,
   mute: SpeakerSlash,
+  microphone: Microphone,
   close: X,
 };
 

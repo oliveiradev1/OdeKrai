@@ -10,7 +10,44 @@ use tauri_plugin_opener::OpenerExt;
 
 const MAX_TEXT_BYTES: usize = 1_000_000;
 
+fn string_param<'a>(params: &'a Value, key: &str) -> Result<&'a str, String> {
+    params[key]
+        .as_str()
+        .ok_or_else(|| format!("O parâmetro {key} da habilidade de produtividade é inválido."))
+}
+
+fn array_param<'a>(params: &'a Value, key: &str) -> Result<&'a Vec<Value>, String> {
+    params[key]
+        .as_array()
+        .ok_or_else(|| format!("A lista {key} da habilidade de produtividade é inválida."))
+}
+
 pub(crate) fn validate(skill_id: &str, params: &Value) -> Result<(), String> {
+    if skill_id == "screen.capture" {
+        let object = params.as_object().ok_or("Parâmetros inválidos.")?;
+        if object.len() != 2 {
+            return Err("Os parâmetros da captura de tela são inválidos.".into());
+        }
+        let path = string_field(object, "path", 120)?;
+        let capture_id = string_field(object, "_capture_id", 128)?;
+        if !path.ends_with(".jpg")
+            || path.starts_with('.')
+            || path.contains("..")
+            || !path
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+        {
+            return Err("Informe um nome simples para o arquivo de captura .jpg.".into());
+        }
+        if capture_id.is_empty()
+            || !capture_id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        {
+            return Err("Identificador interno da captura inválido.".into());
+        }
+        return Ok(());
+    }
     if skill_id.starts_with("reminder.") {
         return crate::reminders::validate_params(skill_id, params);
     }
@@ -134,7 +171,7 @@ pub(crate) fn validate(skill_id: &str, params: &Value) -> Result<(), String> {
                     return Err("Identificador inválido.".into());
                 }
             }
-            _ => unreachable!(),
+            _ => return Err("Habilidade de calendário desconhecida.".into()),
         }
         return Ok(());
     }
@@ -322,7 +359,7 @@ pub(crate) fn validate(skill_id: &str, params: &Value) -> Result<(), String> {
                 return Err("Os cabeçalhos devem conter textos de até 256 bytes.".into());
             }
         }
-        _ => unreachable!(),
+        _ => return Err("Habilidade de produtividade desconhecida.".into()),
     }
     Ok(())
 }
@@ -389,16 +426,15 @@ pub(crate) fn preview(skill_id: &str, params: &Value, root: &Path) -> Result<Str
     }
     if skill_id == "sheet.create_xlsx" {
         let target =
-            crate::security::workspace::preview_target(root, params["path"].as_str().unwrap())?;
+            crate::security::workspace::preview_target(root, string_param(params, "path")?)?;
         return Ok(format!(
             "Criar XLSX em {} com {} aba(s).",
             target.display(),
-            params["sheets"].as_array().unwrap().len()
+            array_param(params, "sheets")?.len()
         ));
     }
     if skill_id == "sheet.read" {
-        let target =
-            crate::security::workspace::safe_target(root, params["path"].as_str().unwrap())?;
+        let target = crate::security::workspace::safe_target(root, string_param(params, "path")?)?;
         return Ok(format!(
             "Ler até {} linhas da planilha {}.",
             params["max_rows"],
@@ -407,19 +443,19 @@ pub(crate) fn preview(skill_id: &str, params: &Value, root: &Path) -> Result<Str
     }
     let path = resolve(root, params, false)?;
     if skill_id == "calendar.create_event" {
-        let start = parse_datetime(params["start"].as_str().unwrap())?;
+        let start = parse_datetime(string_param(params, "start")?)?;
         Ok(format!(
             "Criar evento em {}\nTítulo: {}\nInício local: {}\nFim: {}\nLocal: {}\nDescrição: {}\nAlerta: {}\nSerá aberto no calendário padrão para confirmação; não envia para serviços de calendário e não usa OAuth.",
             path.display(),
-            params["title"].as_str().unwrap(),
+            string_param(params, "title")?,
             start.with_timezone(&Local).format("%d/%m/%Y %H:%M %Z"),
             params["end"].as_str().and_then(|value| parse_datetime(value).ok()).map(|value| value.with_timezone(&Local).format("%d/%m/%Y %H:%M %Z").to_string()).unwrap_or_else(|| "não informado".into()),
-            params["location"].as_str().unwrap(),
-            params["description"].as_str().unwrap(),
+            string_param(params, "location")?,
+            string_param(params, "description")?,
             params["alert_minutes"].as_u64().map(|minutes| format!("{minutes} min")).unwrap_or_else(|| "nenhum".into())
         ))
     } else if skill_id.starts_with("doc.") {
-        let content = params["content"].as_str().unwrap();
+        let content = string_param(params, "content")?;
         let excerpt: String = content.chars().take(4000).collect();
         let omitted = content.chars().count().saturating_sub(4000);
         Ok(format!(
@@ -434,7 +470,7 @@ pub(crate) fn preview(skill_id: &str, params: &Value, root: &Path) -> Result<Str
         ))
     } else if skill_id == "sheet.create_csv" {
         let headers = params["headers"].to_string();
-        let rows = params["rows"].as_array().unwrap();
+        let rows = array_param(params, "rows")?;
         let excerpt =
             serde_json::to_string(&rows.iter().take(5).collect::<Vec<_>>()).unwrap_or_default();
         Ok(format!("Criar CSV em {}\nSeparador: {}\nCodificação: {}\nCabeçalhos: {}\nLinhas: {}\nAmostra (até 5 linhas): {}", path.display(), params["delimiter"], params["encoding"], headers, rows.len(), excerpt))
@@ -533,7 +569,7 @@ pub(crate) fn execute(
             file.write_all(body.as_bytes())
                 .and_then(|_| file.sync_data())
                 .map_err(|_| "Não foi possível salvar o corpo do rascunho.".to_string())?;
-            app.expect("checked")
+            app.ok_or("O aplicativo padrão só pode ser aberto após aprovação.")?
                 .opener()
                 .open_url(short_mailto, None::<&str>)
                 .map_err(|_| "Não foi possível abrir o aplicativo de e-mail padrão.".to_string())?;
@@ -542,7 +578,7 @@ pub(crate) fn execute(
         if app.is_none() {
             return Err("O rascunho só pode ser aberto após aprovação.".into());
         }
-        app.expect("checked")
+        app.ok_or("O aplicativo padrão só pode ser aberto após aprovação.")?
             .opener()
             .open_url(mailto, None::<&str>)
             .map_err(|_| "Não foi possível abrir o aplicativo de e-mail padrão.".to_string())?;
@@ -554,7 +590,7 @@ pub(crate) fn execute(
     let bytes = match skill_id {
         "calendar.create_event" => create_ics(params)?.into_bytes(),
         "doc.create_markdown" | "doc.create_text" => {
-            params["content"].as_str().unwrap().as_bytes().to_vec()
+            string_param(params, "content")?.as_bytes().to_vec()
         }
         "sheet.create_csv" => create_csv(params)?,
         _ => return Err("Habilidade de produtividade desconhecida.".into()),
@@ -574,7 +610,8 @@ pub(crate) fn execute(
         .and_then(|_| file.sync_data())
         .map_err(|_| "Não foi possível gravar o arquivo.".to_string())?;
     if skill_id == "calendar.create_event" {
-        let app = app.expect("checked before writing");
+        let app =
+            app.ok_or("O calendário padrão só pode ser aberto após aprovação no aplicativo.")?;
         app.opener()
             .open_path(path.to_string_lossy(), None::<&str>)
             .map_err(|_| {
@@ -738,7 +775,7 @@ fn fold_ical(line: &str) -> String {
 
 fn create_ics(params: &Value) -> Result<String, String> {
     validate("calendar.create_event", params)?;
-    let start = parse_datetime(params["start"].as_str().unwrap())?.with_timezone(&Utc);
+    let start = parse_datetime(string_param(params, "start")?)?.with_timezone(&Utc);
     let now = Utc::now();
     let uid_hash = format!("{:x}", sha2::Sha256::digest(start.to_rfc3339().as_bytes()));
     let uid = format!(
@@ -755,7 +792,7 @@ fn create_ics(params: &Value) -> Result<String, String> {
         format!("UID:{uid}"),
         format!("DTSTAMP:{}", now.format("%Y%m%dT%H%M%SZ")),
         format!("DTSTART:{}", start.format("%Y%m%dT%H%M%SZ")),
-        format!("SUMMARY:{}", escape_ical(params["title"].as_str().unwrap())),
+        format!("SUMMARY:{}", escape_ical(string_param(params, "title")?)),
     ];
     if let Some(end) = params["end"].as_str() {
         lines.push(format!(
@@ -765,8 +802,8 @@ fn create_ics(params: &Value) -> Result<String, String> {
                 .format("%Y%m%dT%H%M%SZ")
         ));
     }
-    let location = params["location"].as_str().unwrap();
-    let description = params["description"].as_str().unwrap();
+    let location = string_param(params, "location")?;
+    let description = string_param(params, "description")?;
     if !location.is_empty() {
         lines.push(format!("LOCATION:{}", escape_ical(location)));
     }
@@ -779,7 +816,7 @@ fn create_ics(params: &Value) -> Result<String, String> {
             "ACTION:DISPLAY".into(),
             format!(
                 "DESCRIPTION:{}",
-                escape_ical(params["title"].as_str().unwrap())
+                escape_ical(string_param(params, "title")?)
             ),
             format!("TRIGGER:-PT{minutes}M"),
             "END:VALARM".into(),
@@ -790,27 +827,25 @@ fn create_ics(params: &Value) -> Result<String, String> {
 }
 
 fn create_csv(params: &Value) -> Result<Vec<u8>, String> {
-    let delimiter = match params["delimiter"].as_str().unwrap() {
+    let delimiter = match string_param(params, "delimiter")? {
         "comma" => ',',
         "semicolon" => ';',
         "tab" => '\t',
-        _ => unreachable!(),
+        _ => return Err("Separador CSV inválido.".into()),
     };
     let mut text = String::new();
-    let headers: Vec<&str> = params["headers"]
-        .as_array()
-        .unwrap()
+    let headers: Vec<&str> = array_param(params, "headers")?
         .iter()
-        .map(|v| v.as_str().unwrap())
-        .collect();
+        .map(|value| value.as_str().ok_or("Cabeçalho CSV inválido."))
+        .collect::<Result<_, _>>()?;
     append_csv_row(&mut text, &headers, delimiter)?;
-    for row in params["rows"].as_array().unwrap() {
+    for row in array_param(params, "rows")? {
         let values: Vec<&str> = row
             .as_array()
-            .unwrap()
+            .ok_or("Linha CSV inválida.")?
             .iter()
-            .map(|v| v.as_str().unwrap())
-            .collect();
+            .map(|value| value.as_str().ok_or("Valor de texto CSV inválido."))
+            .collect::<Result<_, _>>()?;
         append_csv_row(&mut text, &values, delimiter)?;
     }
     if params["encoding"] == "utf8_bom" {
@@ -957,6 +992,12 @@ mod tests {
             vec![0x61, 0xe7, 0xe3, 0x6f, 0x20, 0x80]
         );
         assert!(encode_windows_1252("emoji 😀").is_err());
+    }
+
+    #[test]
+    fn malformed_csv_delimiter_returns_an_error_instead_of_panicking() {
+        let error = create_csv(&json!({"delimiter":"invalid","headers":[],"rows":[]})).unwrap_err();
+        assert!(error.contains("Separador CSV inválido"));
     }
 
     #[test]

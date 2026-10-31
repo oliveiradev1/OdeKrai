@@ -11,6 +11,7 @@ import type { ChatMessage } from '../../core/provider-messages';
 import { DEFAULT_PET_ID } from '../../core/pets';
 import type { ProfileData } from '../Profile';
 import type { Conversation } from '../screens/types';
+import { removeDiagnostic, upsertDiagnostic, type DiagnosticItem } from '../../core/diagnostics';
 
 export function useAppState() {
   const [initialSettingsLoad] = useState(loadSettingsWithWarnings);
@@ -39,28 +40,19 @@ export function useAppState() {
   const [error, setError] = useState('');
   const [lastFailedPrompt, setLastFailedPrompt] = useState('');
   const [toast, setToast] = useState(initialSettingsLoad.warnings.join(' '));
-  const [diagnostics, setDiagnostics] = useState<
-    { command: string; message: string; details: string; count: number }[]
-  >([]);
+  const [diagnostics, setDiagnostics] = useState<DiagnosticItem[]>([]);
   const [chatMode, setChatMode] = useState(false);
   const request = useRef<string | null>(null);
   const companionStateTimer = useRef<number | undefined>(undefined);
   const appliedCloseBehavior = useRef<string | null>(null);
   const reportDiagnostic = useCallback((command: string, message: string, details = '') => {
-    setDiagnostics((items) => {
-      if (!message) return items.filter((item) => item.command !== command);
-      const existing = items.find((item) => item.command === command && item.message === message);
-      if (existing) {
-        return items.map((item) =>
-          item === existing
-            ? { ...item, count: item.count + 1, details: details || item.details }
-            : item,
-        );
-      }
-      return [...items.slice(-7), { command, message, details, count: 1 }];
-    });
+    setDiagnostics((items) => upsertDiagnostic(items, command, message, details));
   }, []);
   const dismissDiagnostics = useCallback(() => setDiagnostics([]), []);
+  const dismissDiagnostic = useCallback(
+    (key: string) => setDiagnostics((items) => removeDiagnostic(items, key)),
+    [],
+  );
 
   useEffect(() => {
     saveSettings(settings);
@@ -164,6 +156,7 @@ export function useAppState() {
     diagnostics,
     reportDiagnostic,
     dismissDiagnostics,
+    dismissDiagnostic,
     chatMode,
     setChatMode,
     request,

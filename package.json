@@ -1,15 +1,15 @@
 {
   "name": "odekrai",
   "private": true,
-  "version": "0.15.0",
+  "version": "0.16.0",
   "type": "module",
   "engines": {
     "node": ">=22.12.0"
   },
   "scripts": {
-    "predev": "node scripts/generate-sound-manifest.mjs",
+    "predev": "node scripts/check-version.mjs && node scripts/generate-sound-manifest.mjs && node scripts/generate-release-notes.mjs",
     "dev": "vite",
-    "prebuild": "node scripts/generate-sound-manifest.mjs",
+    "prebuild": "node scripts/check-version.mjs && node scripts/generate-sound-manifest.mjs && node scripts/generate-release-notes.mjs",
     "build": "tsc -b && vite build",
     "check:debug-command": "node scripts/check-debug-command.mjs",
     "check:version": "node scripts/check-version.mjs",
@@ -23,7 +23,7 @@
     "render:pets": "node scripts/render-pets.mjs",
     "render:pets:animations": "node scripts/render-pets.mjs --animations",
     "preview": "vite preview",
-    "pretest": "node scripts/generate-sound-manifest.mjs",
+    "pretest": "node scripts/check-version.mjs && node scripts/generate-sound-manifest.mjs && node scripts/generate-release-notes.mjs",
     "test": "vitest run",
     "format": "prettier --write . --ignore-unknown",
     "format:check": "prettier --check . --ignore-unknown",

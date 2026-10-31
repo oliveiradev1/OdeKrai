@@ -1,9 +1,9 @@
 import { useEffect, useState, type CSSProperties } from 'react';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { getCurrentWindow } from '@tauri-apps/api/window';
 import {
   DEFAULT_PET_ID,
+  PET_ANIMATION_LABELS,
   PETS,
   petAnimationSheet,
   petImageUrl,
@@ -13,6 +13,8 @@ import {
 } from '../core/pets';
 import { Icon, type IconName } from './Icon';
 import { canAnimateIdle, idleCue, idleCueDelay, type IdleCue } from '../core/idle-motion';
+import { petAnimationPlayState } from '../core/pet-motion';
+import { usePetMotionActive, usePetPerformanceMode } from './usePetMotionActivity';
 
 export function PetSprite({
   estado,
@@ -36,9 +38,8 @@ export function PetSprite({
   const [sheetFailed, setSheetFailed] = useState(false);
   const [idleCueState, setIdleCueState] = useState<IdleCue | null>(null);
   const [visualState, setVisualState] = useState(estado);
-  const [documentVisible, setDocumentVisible] = useState(
-    () => typeof document === 'undefined' || document.visibilityState === 'visible',
-  );
+  const animationActive = usePetMotionActive();
+  const performanceMode = usePetPerformanceMode();
   const [prefersReducedMotion, setPrefersReducedMotion] = useState(
     () =>
       typeof window !== 'undefined' &&
@@ -51,21 +52,6 @@ export function PetSprite({
     return () => query.removeEventListener('change', updatePreference);
   }, []);
   useEffect(() => setVisualState(estado), [estado]);
-  useEffect(() => {
-    const updateVisibility = () => setDocumentVisible(document.visibilityState === 'visible');
-    document.addEventListener('visibilitychange', updateVisibility);
-    return () => document.removeEventListener('visibilitychange', updateVisibility);
-  }, []);
-  useEffect(() => {
-    if (!isTauri() || getCurrentWindow().label !== 'pet') return;
-    let unlisten: (() => void) | undefined;
-    void listen<boolean>('pet-window-visibility', ({ payload }) => setDocumentVisible(payload))
-      .then((off) => {
-        unlisten = off;
-      })
-      .catch(() => console.warn('[OdeKrai diagnóstico] Falha ao registrar pet-window-visibility.'));
-    return () => unlisten?.();
-  }, []);
   useEffect(() => {
     if (!isTauri() || petId) return;
     let unlisten: (() => void) | undefined;
@@ -85,13 +71,13 @@ export function PetSprite({
   const selected = petId ?? storedPetId;
   const pet = PETS.find((entry) => entry.id === selected);
   const accessibleDescription = pet?.altText ?? 'Mascote do OdeKrai';
-  const motionDisabled = petMotionDisabled(reduceMotion, prefersReducedMotion);
+  const motionDisabled = petMotionDisabled(reduceMotion, prefersReducedMotion, performanceMode);
   const isIslandPet = className.split(/\s+/).includes('island-mascot-renderer');
   useEffect(() => {
     if (
       !canAnimateIdle({
         enabled: isIslandPet && !motionDisabled,
-        visible: documentVisible,
+        visible: animationActive,
         idle: estado === 'idle',
       })
     ) {
@@ -121,7 +107,7 @@ export function PetSprite({
       window.clearTimeout(cueTimer);
       window.clearTimeout(resetTimer);
     };
-  }, [className, documentVisible, estado, motionDisabled]);
+  }, [animationActive, className, estado, motionDisabled]);
   const sheet = avatar || staticImage ? null : petAnimationSheet(selected, visualState);
   useEffect(() => {
     setImageFailed(false);
@@ -131,10 +117,10 @@ export function PetSprite({
   const visualMode = petVisualMode(Boolean(sheet && !sheetFailed), Boolean(image));
   return (
     <span
-      className={`pet-sprite pet-state-${visualState} ${idleCueState ? `pet-idle-${idleCueState}` : ''} ${motionDisabled ? 'pet-reduce-motion' : ''} ${!documentVisible ? 'pet-hidden' : ''} ${avatar ? 'pet-avatar' : ''} ${className}`.trim()}
+      className={`pet-sprite pet-state-${visualState} ${idleCueState ? `pet-idle-${idleCueState}` : ''} ${motionDisabled ? 'pet-reduce-motion' : ''} ${!animationActive ? 'pet-hidden' : ''} ${avatar ? 'pet-avatar' : ''} ${className}`.trim()}
       role="img"
-      aria-label={avatar ? `Avatar do OdeKrai: ${accessibleDescription}` : accessibleDescription}
-      title={accessibleDescription}
+      aria-label={`${avatar ? `Avatar do OdeKrai: ${accessibleDescription}` : accessibleDescription}. Estado: ${PET_ANIMATION_LABELS[visualState]}.`}
+      title={`${accessibleDescription} · ${PET_ANIMATION_LABELS[visualState]}`}
       style={style}
     >
       <span className="pet-shadow" aria-hidden="true" />
@@ -151,7 +137,7 @@ export function PetSprite({
                 '--pet-duration': `${sheet.frames / sheet.fps}s`,
                 '--pet-last-frame': `-${((sheet.frames - 1) / sheet.frames) * 100}%`,
                 width: `${sheet.frames * 100}%`,
-                animationPlayState: documentVisible && !motionDisabled ? 'running' : 'paused',
+                animationPlayState: petAnimationPlayState(!animationActive, motionDisabled),
               } as CSSProperties
             }
             onAnimationEnd={() => {

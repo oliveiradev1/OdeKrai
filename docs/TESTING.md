@@ -1,5 +1,23 @@
 # Testes e validação
 
+## L11 — modo Desempenho
+
+- `performance.test.ts` cobre os modos fixos e Automático com perfis de hardware simulados, incluindo os limites de 8 GiB e 4 núcleos lógicos. `performance-mode.test.ts` verifica os efeitos CSS e a sincronização da janela do pet.
+- A medição de CPU em idle e das chamadas IPC por 60 s exige execução e instrumentação do aplicativo Tauri no Windows; permanece pendente neste ambiente.
+
+## L10 — notas de versão no app
+
+- `scripts/generate-release-notes.test.mjs` verifica extração, ordenação, validação de Markdown e ausência da nota atual; `release-notes.test.ts` cobre nova versão, versão já vista, primeira instalação, opção desligada e notas ausentes.
+- `ReleaseNotesModal.test.tsx` verifica que a tela usa resumo e mudanças do manifesto local e lista todas as versões embutidas. `Settings.test.tsx` e `settings.test.ts` cobrem o toggle e sua persistência.
+- A suíte completa e a build devem ser executadas em validação final; teste visual no Windows continua pendente.
+
+## Paleta de comandos
+
+`src/core/command-palette.test.ts` verifica busca aproximada, recência, destinos canônicos, despacho
+dos tipos de ação, navegação com setas, contrato ARIA do combobox/listbox e reutilização do comando
+Rust de modo de permissão com confirmação nativa. Os testes são locais; validação visual e de foco
+no executável Windows permanece pendente.
+
 ## Fase 4 — cobertura parcial do agente
 
 O loop de agente e o motor de políticas têm cobertura unitária, mas continuam pendentes cenários
@@ -71,6 +89,32 @@ detalhes sanitizados de stack ficam limitados ao painel local da interface.
 - A barra lateral alterna com `Ctrl+B`; as alças dos painéis aceitam arraste e setas do teclado. As preferências ficam nas configurações locais da interface.
 - Validação visual pendente no executável Windows em 1000 × 600, incluindo foco, redimensionamento por ponteiro e legibilidade no modo compacto.
 
+### L0 — Início
+
+- `home.test.ts` verifica disponibilidade, ordem e limite das sugestões, requisitos do checklist, dados ausentes, preenchimento sem envio automático e limites do dia local.
+- `MessageComposer.test.tsx`, `Conversations.test.tsx` e `Overview.test.tsx` cobrem o campo compartilhado, Enter/Shift+Enter, estado de envio, envio inicial, retomar conversas e ausência de conteúdo fictício.
+- Validação visual no Windows pendente em 1000 × 600: conferir posição do mascote, sugestões, checklist, faixa de aprovação e acesso ao histórico sem cortes ou rolagem horizontal.
+
+### L8 — comando rápido da ilha
+
+- `island-quick.test.ts` cobre a solicitação de foco e sua liberação, envio sem duplicação, criação de conversa com texto revisável, limite de três sugestões reais, resumo e encaminhamento de cada tipo de alerta sem ação de aprovação na ilha.
+- Build, testes de frontend, codificação e ACL foram executados nesta sessão. A suíte completa tem três testes de publicação bloqueados pelo `spawnSync git EPERM` do sandbox; Rust não pôde ser compilado porque `cargo`/`rustfmt` não estão instalados no ambiente.
+- Validação visual e de foco no Windows pendente, incluindo monitores múltiplos e DPI misto. A confirmação documental Microsoft do comportamento de foco também está pendente por bloqueio HTTP 403 neste ambiente.
+
+### L9 — assistente de primeiro uso
+
+- `first-use.test.ts` usa armazenamento simulado para verificar abrir uma vez, persistir e retomar, pular, voltar e concluir apenas etapas atendidas. `FirstUseAssistant.test.tsx` verifica as etapas como botões com nome acessível e estado atual anunciado. `Modal.test.tsx` cobre foco por teclado e Escape no Modal reutilizado.
+- A grade de provedores, a pasta, a seleção de mascote e os modos de permissão reutilizam componentes/fluxos já testados; o modo do assistente suprime descoberta/listagem e teste rápido de modelos, e nenhum teste usa credenciais reais ou chama o provedor automaticamente.
+- Validação visual no Windows pendente, incluindo tamanho do Modal, foco e leitura das etapas em telas estreitas.
+
+### L2 — Cartão de ação do agente
+
+- `AgentControls.test.tsx` cobre os estados apresentados, prévia como texto, timeline, parada, revisão pela janela nativa e controles de artefato sem botões de decisão.
+- `agent-card.test.ts` cobre normalização de estado, prazo restante e rejeição de travessia/extensões executáveis.
+- Teste Rust em `history.rs` cobre migração aditiva de colunas e leitura retrocompatível de cartões antigos; requer `cargo test`.
+- Comandos para abrir/mostrar artefatos revalidam caminho existente, pasta de trabalho ou permitida e extensões bloqueadas no Rust.
+- **VALIDAÇÃO VISUAL NO WINDOWS PENDENTE** para foco da janela nativa, leitores de tela e interação com o Explorador.
+
 ### Links em respostas
 
 - `markdown.test.ts` cobre links Markdown e URLs soltas, esquemas proibidos, caracteres de controle e normalização de domínios; `MessageMarkdown.test.tsx` verifica o rótulo do domínio de destino.
@@ -80,11 +124,15 @@ detalhes sanitizados de stack ficam limitados ao painel local da interface.
 
 ### UI-3 — pet 2D
 
-- `src/core/pets.test.ts`: rejeita catálogo ausente e nomes de arquivo inválidos, verifica mapeamento da FSM, fallback para PNG ausente e preferência de movimento reduzido.
+- `src/core/pets.test.mjs`: rejeita catálogo ausente e nomes de arquivo inválidos, verifica mapeamento da FSM e do estado do agente, fallback para PNG ausente e preferência de movimento reduzido.
 - `src/core/pet-layout.test.ts`: verifica dimensões da janela compacta/expandida e escala do mascote no modo Livre; `pet_position.rs` verifica o ajuste do painel expandido à área útil.
-- A animação CSS do sprite pausa quando o documento fica oculto ou recebe o evento nativo de visibilidade da janela do pet. Isso cobre a regra de estado; a animação renderizada e o consumo em idle ainda dependem de observação no Windows.
+- A animação CSS do sprite pausa por visibilidade do documento e eventos Tauri de foco, minimização e visibilidade da janela do pet. O comportamento renderizado ainda precisa de observação no Windows.
+- `pet-motion.test.ts` cobre pausa por documento/janela oculta, minimização e foco perdido por 2,5 s, retomada ao focar, preferência de movimento reduzido e uso de `data-performance`. Testes de settings/Home/Agenda verificam persistência da opção de mascote estático e os respectivos estados vazios. A janela do pet observa a visibilidade própria e o foco da janela principal, pois é intencionalmente não focalizável.
+- A carga de CPU em idle não foi medida: este ambiente não executa o binário Windows. A implementação não usa polling contínuo; eventos Tauri/documento e CSS controlam a pausa.
 - `history.rs`: `pet_catalog_rejects_missing_json_and_unsafe_paths` valida o manifesto e bloqueia caminhos inseguros; `selected_pet_defaults_and_persists_in_sqlite` confere o padrão e persistência local.
 - `npm run build`, `npm test`, `npm run format:check`, `cargo fmt --check`, `cargo test --offline --lib` e `git diff --check` devem ser executados para validar o código.
+- L11: `performance.test.ts` exercita Automático com perfis simulados, inclusive os limites de 8 GiB e 4 núcleos. `performance-mode.test.ts` confere a aplicação em ambas as janelas e as regras CSS. Build medido em 2026-10-30: JavaScript+CSS somam 881.681 bytes (861,0 KiB); Desempenho é uma preferência de runtime, portanto Ligado/Desligado têm delta de bundle igual a 0 bytes. CPU em idle e total de IPC em 60 s ainda dependem de medição do executável no Windows.
+- L12: `Modal.test.tsx`, `ActivitySidePanel.test.tsx`, `command-palette.test.ts`, `Overview.test.tsx`, `AgentControls.test.tsx` e `markdown.test.ts` verificam foco, teclado, rótulos ARIA, ausência de decisões de aprovação nos cartões/painel, parsing seguro e renderização de texto. `npm run check:design-tokens` cobre tokens e pares de contraste principais; não representa a conferência de cada pixel da interface. O roteiro de validação manual para 1000×600 e 1250×700, movimento, segurança e medições está em [`WINDOWS-MANUAL-VALIDATION.md`](WINDOWS-MANUAL-VALIDATION.md). CPU idle e IPC total por 60 s exigem o executável Windows; a contagem IPC ainda requer build de diagnóstico instrumentada.
 - Validação visual nativa pendente no Windows: cápsula expandida/recolhida, ajuste em monitores pequenos, transparência real sem borda/sombra, animações nos dois modos, avatar, foco, arrasto, topmost, escala/DPI e limites da área útil em vários monitores. Medição de CPU idle não disponível nesta sessão; não validar click-through, pois a janela recebe cliques normalmente.
 - Há SVGs locais em `assets-src/iconly/`, sem arquivo de licença e ainda não rastreados pelo Git; não são incorporados nesta fase.
 
@@ -193,7 +241,7 @@ O teste `window_sizing::tests` usa uma área útil sintética de 1.920 × 1.040 
 
 ## Entrada e cabeçalho
 
-O estado inicial é a Visão geral; a falta de identidade é apresentada por um cartão dispensável nessa tela. O chip do cabeçalho abre Conectores e mostra o provedor/modelo quando há credencial disponível. A disposição precisa de conferência visual em Windows.
+O estado inicial é Início; nome/apelido, mascote, mensagens, sugestões e requisitos disponíveis usam o estado carregado pelo aplicativo. A falta de provedor ou pasta aparece em um checklist com navegação para resolução. O chip do cabeçalho abre Conectores e mostra o provedor/modelo quando há credencial disponível. A disposição precisa de conferência visual em Windows.
 
 O histórico local guarda o provedor e modelo da última resposta de cada conversa. `history.rs` testa a migração do esquema anterior e a leitura desses campos; `Conversations.test.tsx` verifica que o chip só aparece quando a conversa difere do modelo atual. A exibição ainda requer conferência visual em Windows.
 
@@ -212,3 +260,15 @@ Na inicialização, nome e apelido aprovados em `ODEKRAI.md` preenchem campos va
 A janela do pet salva a fração da posição dentro da área útil para cada monitor, junto com nome, origem, dimensões da área útil e escala DPI. Ao restaurar, usa o monitor salvo se ainda estiver disponível; se não estiver, usa o primário. Mudanças de DPI/monitor e a reexibição reposicionam e limitam a janela à área útil. Eventos de movimento persistem no máximo uma vez por segundo, com gravação imediata ao ocultar.
 
 A geometria tem testes unitários para escala alterada, monitor removido, origem negativa e resolução reduzida. A validação visual manual em múltiplos monitores e DPI permanece pendente; executar os itens 3, 4 e 9 do checklist nativo acima quando houver sessão Windows apropriada.
+
+## Desfazer (L3)
+
+Os testes de restauração de sistema devem usar `SystemAdapter` simulado e SQLite em memória; os testes de arquivo usam diretórios temporários isolados. Não execute esses testes sobre configurações reais do Windows nem sobre arquivos do usuário. Cobrem IDs de operação independentes, estado ausente, edição posterior do arquivo, confirmação e ausência de botão para ações irreversíveis. A suíte `cargo test` ainda deve ser executada no ambiente Rust; valide também a janela e o aviso no Windows.
+
+## Planos informativos (L4)
+
+`skills::tests` verifica os limites e que texto instrucional no plano não muda seu risco de leitura; `workspace::files_tests` verifica que `plan.propose` não modifica arquivos. `agent_runtime::plan_state_tests` cobre avanço, falha e chamada fora das etapas listadas; `AgentControls.test.tsx` verifica renderização numerada e escaping do texto como dado. Os testes Rust usam somente dados em memória/diretórios temporários e precisam ser executados em ambiente com Cargo. A conferência visual do cartão no Windows permanece pendente.
+
+## Painel lateral de atividade (L5)
+
+`ActivitySidePanel.test.tsx` cobre as cinco seções com dados simulados, estados vazios, resumo de auditoria sem parâmetros, exclusão de executáveis, ausência de controles de aprovação, gatilho/estado fechado e lógica de foco/teclado. A consulta de auditoria é compartilhada com a página Atividade; a consulta só é iniciada com o painel aberto ou a página completa ativa. Não há polling do painel fechado. A validação de dimensões, sobreposição, foco real do WebView2 e operação dos comandos do Windows exige validação visual em Windows.

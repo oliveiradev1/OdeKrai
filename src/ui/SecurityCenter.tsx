@@ -20,7 +20,7 @@ type PermissionSettings = {
   approvalTtlSeconds: number;
   overrides: ToolOverride[];
 };
-type AuditEntry = {
+export type AuditEntry = {
   timestamp: number;
   id: string;
   tool: string;
@@ -37,6 +37,10 @@ type AuditEntry = {
   previousHash: string;
   hash: string;
 };
+
+export function auditRuleLabel(ruleId: string): string {
+  return ruleId.trim() || 'configuração ausente';
+}
 type Pending = {
   id: string;
   tool: string;
@@ -44,6 +48,7 @@ type Pending = {
   origin: string;
   summary: string;
   preview: string;
+  previewImage: string | null;
   fullPreview: boolean;
   expiresAt: number;
   displayHash: string;
@@ -75,6 +80,7 @@ const risks: { id: RiskLevel; title: string }[] = [
   { id: 'comunicacao_externa', title: 'Comunicação externa' },
   { id: 'destrutivo_financeiro', title: 'Destrutivo ou financeiro' },
   { id: 'execucao_de_codigo', title: 'Execução de código (alto)' },
+  { id: 'captura_sensivel', title: 'Captura sensível' },
 ];
 const tools = [
   ['workspace.read_file', 'Ler arquivo em pasta permitida'],
@@ -91,6 +97,7 @@ function toolLabel(tool: string): string {
 function decision(mode: Mode, risk: RiskLevel): string {
   if (risk === 'leitura') return 'Permitir em pastas permitidas';
   if (risk === 'execucao_de_codigo') return 'Sempre pedir aprovação';
+  if (risk === 'captura_sensivel') return 'Sempre pedir aprovação';
   if (mode === 'sempre_perguntar') return 'Pedir aprovação';
   if (mode === 'aprovar_por_mim')
     return risk === 'escrita_reversivel' ? 'Permitir em pastas permitidas' : 'Pedir aprovação';
@@ -106,6 +113,7 @@ export function SecurityCenter({
   onDeleteAllHistory,
   appSettings,
   updateAppSettings,
+  sharedAudit,
 }: {
   page: 'permissions' | 'activity';
   embedded?: boolean;
@@ -113,6 +121,12 @@ export function SecurityCenter({
   onDeleteAllHistory?: () => Promise<boolean>;
   appSettings?: AppSettings;
   updateAppSettings?: (settings: AppSettings) => void;
+  sharedAudit?: {
+    entries: AuditEntry[];
+    verified: boolean | null;
+    loading: boolean;
+    unavailable?: boolean;
+  };
 }) {
   const [settings, setSettings] = useState<PermissionSettings | null>(null);
   const [entries, setEntries] = useState<AuditEntry[]>([]);
@@ -126,7 +140,7 @@ export function SecurityCenter({
       const current = await invoke<PermissionSettings>('get_permission_settings');
       setSettings(current);
       setShortcut(current.shortcut);
-      if (page === 'activity') {
+      if (page === 'activity' && !sharedAudit) {
         const [audit, valid] = await Promise.all([
           invoke<AuditEntry[]>('list_audit'),
           invoke<boolean>('verify_audit'),
@@ -208,14 +222,16 @@ export function SecurityCenter({
     }
   }
 
+  const displayedEntries = sharedAudit?.entries ?? entries;
+  const displayedVerified = sharedAudit?.verified ?? verified;
   const visibleEntries = useMemo(
     () =>
-      entries.filter((entry) =>
+      displayedEntries.filter((entry) =>
         `${entry.tool} ${entry.status} ${entry.origin} ${entry.decision}`
           .toLowerCase()
           .includes(filter.toLowerCase()),
       ),
-    [entries, filter],
+    [displayedEntries, filter],
   );
 
   return (
@@ -488,8 +504,14 @@ export function SecurityCenter({
                 alterações, mas não impede um processo local com os mesmos privilégios.
               </p>
             </div>
-            <span className={`state-chip ${verified ? 'connected' : 'warning'}`}>
-              {verified === null ? 'VERIFICANDO' : verified ? 'CADEIA ÍNTEGRA' : 'FALHA NA CADEIA'}
+            <span className={`state-chip ${displayedVerified ? 'connected' : 'warning'}`}>
+              {sharedAudit?.unavailable
+                ? 'INDISPONÍVEL'
+                : displayedVerified === null
+                  ? 'VERIFICANDO'
+                  : displayedVerified
+                    ? 'CADEIA ÍNTEGRA'
+                    : 'FALHA NA CADEIA'}
             </span>
             {embedded && onOpenFullPage && (
               <Button type="button" variant="secondary" onClick={onOpenFullPage}>
@@ -497,6 +519,7 @@ export function SecurityCenter({
               </Button>
             )}
           </div>
+          {sharedAudit?.loading && <p>Carregando registros de atividade…</p>}
           <div className="audit-toolbar">
             <input
               value={filter}
@@ -538,7 +561,7 @@ export function SecurityCenter({
                   </span>
                 </div>
                 <span className="audit-status">
-                  {entry.status} · {entry.decision} ({entry.ruleId})
+                  {entry.status} · {entry.decision} ({auditRuleLabel(entry.ruleId)})
                 </span>
                 <pre>{entry.paramsSummary}</pre>
                 {entry.error && <p>{entry.error}</p>}
@@ -678,6 +701,13 @@ export function ApprovalWindow() {
               <span>{remaining}s restantes · expira e é negada automaticamente</span>
             </header>
             <pre>{full ? completePreview : pending.preview}</pre>
+            {pending.previewImage && (
+              <img
+                className="approval-preview-image"
+                src={pending.previewImage}
+                alt="Prévia reduzida da captura que será salva na pasta de trabalho após aprovação"
+              />
+            )}
             {pending.fullPreview && (
               <button
                 className="text-button"

@@ -6,6 +6,7 @@ import {
   DEFAULT_PET_ID,
   PET_ANIMATION_LABELS,
   PETS,
+  petAnimationForAssistantActivity,
   petAnimationForIslandState,
   petGreeting,
   petAnimationSheet,
@@ -99,6 +100,20 @@ function webpInfo(bytes) {
 }
 
 describe('catálogo e imagens do mascote', () => {
+  it('mapeia eventos reais do assistente para animações existentes', () => {
+    expect(petAnimationForAssistantActivity('idle')).toBe('idle');
+    expect(petAnimationForAssistantActivity('thinking')).toBe('thinking');
+    expect(petAnimationForAssistantActivity('task')).toBe('working');
+    expect(petAnimationForAssistantActivity('responding')).toBe('working');
+    expect(petAnimationForAssistantActivity('awaiting_approval')).toBe('awaiting_approval');
+    expect(petAnimationForAssistantActivity('completed')).toBe('success');
+    expect(petAnimationForAssistantActivity('error')).toBe('error');
+    expect(petAnimationForAssistantActivity('paused')).toBe('paused');
+    expect(petAnimationForAssistantActivity('stopped')).toBe('paused');
+    expect(petAnimationForAssistantActivity('listening')).toBe('idle');
+    expect(petAnimationForAssistantActivity('unknown')).toBe('idle');
+  });
+
   it('rejeita um pets.json ausente ou inválido', () => {
     expect(validatePetCatalog(undefined)).toBeNull();
     expect(validatePetCatalog(null)).toBeNull();
@@ -218,6 +233,7 @@ describe('catálogo e imagens do mascote', () => {
     expect(petVisualMode(true, true)).toBe('animated');
     expect(petMotionDisabled(true, false)).toBe(true);
     expect(petMotionDisabled(false, true)).toBe(true);
+    expect(petMotionDisabled(false, false, true)).toBe(true);
     expect(petMotionDisabled(false, false)).toBe(false);
   });
 

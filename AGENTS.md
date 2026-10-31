@@ -2,6 +2,8 @@
 
 Regras fixas para qualquer agente de código (Codex, Claude Code etc.) que trabalhe neste repositório.
 Leia este arquivo inteiro antes de alterar qualquer coisa.
+As instruções permanentes complementares do proprietário estão em
+[`docs/CODEX-CLOUD-INSTRUCTIONS.md`](docs/CODEX-CLOUD-INSTRUCTIONS.md); leia-as também.
 
 ## O que é o projeto
 
@@ -71,6 +73,14 @@ Consulte `docs/IMPLEMENTATION-STATUS.md` e `docs/ROADMAP.md` antes de planejar.
   (CC0, MIT ou equivalente) e registro em `THIRD_PARTY_NOTICES.md` e `docs/AUDIO-ASSETS.md`
   (nome, origem, URL, licença, edições).
 - Sem caminhos absolutos, `..` ou URLs remotas em manifestos de assets.
+
+## Artefatos de release Windows
+
+Uma release pública pode anexar somente o instalador NSIS gerado pelo Tauri
+(`OdeKrai_<versão>_x64-setup.exe`) e `SHA256SUMS.txt`. Esse instalador não é assinado; o Windows
+SmartScreen exibirá um aviso. O `odekrai.exe` avulso do build de diagnóstico/teste não é instalador
+e não pode ser anexado à release. GLB, FBX, OBJ e `assets-src` continuam proibidos em qualquer
+artefato. Esta versão não oferece atualização automática. Não commitar binários ao repositório.
 
 ## Convenções
 

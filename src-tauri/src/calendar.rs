@@ -18,6 +18,19 @@ pub struct CalendarEvent {
     pub recurrence: String,
 }
 
+fn interval_bounds(from: &str, to: &str) -> Result<(DateTime<Utc>, DateTime<Utc>), String> {
+    let start = DateTime::parse_from_rfc3339(from)
+        .map_err(|_| "O início do intervalo é inválido.")?
+        .with_timezone(&Utc);
+    let end = DateTime::parse_from_rfc3339(to)
+        .map_err(|_| "O fim do intervalo é inválido.")?
+        .with_timezone(&Utc);
+    if start >= end {
+        return Err("O intervalo da agenda é inválido.".into());
+    }
+    Ok((start, end))
+}
+
 fn validate(event: &CalendarEvent) -> Result<(), String> {
     if event.id.is_empty()
         || event.id.len() > 80
@@ -668,17 +681,9 @@ pub fn calendar_list_events(
     to: String,
 ) -> Result<Vec<CalendarEvent>, String> {
     crate::require_main(&caller)?;
-    let from = DateTime::parse_from_rfc3339(&from)
-        .map_err(|_| "O início do intervalo é inválido.".to_string())?
-        .with_timezone(&Utc)
-        .to_rfc3339();
-    let to = DateTime::parse_from_rfc3339(&to)
-        .map_err(|_| "O fim do intervalo é inválido.".to_string())?
-        .with_timezone(&Utc)
-        .to_rfc3339();
-    if from >= to {
-        return Err("O intervalo da agenda é inválido.".into());
-    }
+    let (range_start, range_end) = interval_bounds(&from, &to)?;
+    let from = range_start.to_rfc3339();
+    let to = range_end.to_rfc3339();
     let conn = db(&app)?;
     let mut stmt = conn.prepare("SELECT id,title,start,end,location,description,alert_minutes,recurrence FROM calendar_events ORDER BY julianday(start) LIMIT 1000").map_err(|_| "Não foi possível consultar a agenda.".to_string())?;
     let rows = stmt
@@ -699,12 +704,6 @@ pub fn calendar_list_events(
         .collect::<Result<Vec<_>, _>>()
         .map_err(|_| "Não foi possível ler os eventos.".to_string())?;
     // Recurrences are projected into the requested range for the UI; the original row stays authoritative.
-    let range_start = DateTime::parse_from_rfc3339(&from)
-        .unwrap()
-        .with_timezone(&Utc);
-    let range_end = DateTime::parse_from_rfc3339(&to)
-        .unwrap()
-        .with_timezone(&Utc);
     let mut expanded = Vec::new();
     for event in events {
         let mut occurrence = event.clone();
@@ -860,6 +859,13 @@ mod tests {
         e = event();
         e.recurrence = "yearly".into();
         assert!(save(&conn, &e).is_err());
+    }
+
+    #[test]
+    fn invalid_event_list_interval_returns_a_clear_error() {
+        assert!(interval_bounds("início inválido", "2030-03-10T10:00:00Z")
+            .unwrap_err()
+            .contains("início do intervalo"));
     }
 
     #[test]

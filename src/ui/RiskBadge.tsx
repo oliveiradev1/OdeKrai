@@ -5,6 +5,7 @@ import {
   PencilSimple,
   Question,
   Warning,
+  EyeSlash,
   type Icon as PhosphorIcon,
 } from '@phosphor-icons/react';
 import type { SkillRisk } from '../core/skills-catalog';
@@ -17,6 +18,7 @@ const risks: Record<RiskLevel, { label: string; icon: PhosphorIcon }> = {
   comunicacao_externa: { label: 'Comunicação externa', icon: PaperPlaneRight },
   destrutivo_financeiro: { label: 'Destrutivo ou financeiro', icon: Warning },
   execucao_de_codigo: { label: 'Execução de código (alto)', icon: Code },
+  captura_sensivel: { label: 'Captura sensível', icon: EyeSlash },
 };
 
 function normalizeRisk(value: string): RiskLevel | null {
@@ -36,6 +38,8 @@ function normalizeRisk(value: string): RiskLevel | null {
     'destrutivo ou financeiro': 'destrutivo_financeiro',
     execucao_de_codigo: 'execucao_de_codigo',
     'execucao de codigo (alto)': 'execucao_de_codigo',
+    captura_sensivel: 'captura_sensivel',
+    'captura sensivel': 'captura_sensivel',
   };
   return aliases[normalized] ?? null;
 }

@@ -4,6 +4,12 @@ use std::{fs, io::Write, path::Path};
 const MAX_NOTE_BYTES: usize = 8 * 1024;
 const MAX_SEARCH_RESULTS: usize = 20;
 
+fn string_param<'a>(params: &'a Value, key: &str) -> Result<&'a str, String> {
+    params[key]
+        .as_str()
+        .ok_or_else(|| format!("O parâmetro {key} da memória é inválido."))
+}
+
 fn object_keys(value: &Value, allowed: &[&str]) -> Result<(), String> {
     let object = value
         .as_object()
@@ -213,13 +219,13 @@ pub(crate) fn preview(skill_id: &str, params: &Value) -> Result<String, String> 
     match skill_id {
         "memory.propose_note" => Ok(format!(
             "Gravar em memory/{} após aprovação explícita. Texto exato:\n\n{}",
-            params["name"].as_str().unwrap(),
-            params["text"].as_str().unwrap()
+            string_param(params, "name")?,
+            string_param(params, "text")?
         )),
         "memory.list" => Ok("Listar nomes das notas da memória manual local.".into()),
         "memory.search" => Ok(format!(
             "Pesquisar na memória manual pelo termo: {}",
-            params["query"].as_str().unwrap()
+            string_param(params, "query")?
         )),
         _ => Err("Habilidade de memória desconhecida.".into()),
     }
@@ -236,18 +242,18 @@ pub(crate) fn execute(
         "memory.list" => serde_json::to_string(&names(&directory)?)
             .map_err(|_| "Não foi possível preparar a lista de memória.".into()),
         "memory.search" => {
-            serde_json::to_string(&search(&directory, params["query"].as_str().unwrap())?)
+            serde_json::to_string(&search(&directory, string_param(params, "query")?)?)
                 .map_err(|_| "Não foi possível preparar a busca de memória.".into())
         }
         "memory.propose_note" => {
             write_new_note(
                 &directory,
-                params["name"].as_str().unwrap(),
-                params["text"].as_str().unwrap(),
+                string_param(params, "name")?,
+                string_param(params, "text")?,
             )?;
             Ok(format!(
                 "Nota aprovada gravada em memory/{}.",
-                params["name"].as_str().unwrap()
+                string_param(params, "name")?
             ))
         }
         _ => Err("Habilidade de memória desconhecida.".into()),
@@ -300,6 +306,12 @@ mod tests {
         )
         .unwrap();
         assert!(preview.ends_with(text));
+    }
+
+    #[test]
+    fn malformed_memory_preview_returns_a_validation_error() {
+        let error = preview("memory.propose_note", &json!({})).unwrap_err();
+        assert!(error.contains("não correspondem ao esquema permitido"));
     }
 
     #[test]

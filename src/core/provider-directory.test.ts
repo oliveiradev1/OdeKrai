@@ -162,13 +162,13 @@ describe('diretório de provedores', () => {
 
   it('só remove credencial após confirmação explícita', async () => {
     const remove = vi.fn().mockResolvedValue(undefined);
-    await expect(confirmProviderCredentialRemoval('OpenAI', () => false, remove)).resolves.toBe(
-      false,
-    );
+    await expect(
+      confirmProviderCredentialRemoval('OpenAI', async () => false, remove),
+    ).resolves.toBe(false);
     expect(remove).not.toHaveBeenCalled();
-    await expect(confirmProviderCredentialRemoval('OpenAI', () => true, remove)).resolves.toBe(
-      true,
-    );
+    await expect(
+      confirmProviderCredentialRemoval('OpenAI', async () => true, remove),
+    ).resolves.toBe(true);
     expect(remove).toHaveBeenCalledOnce();
   });
 });

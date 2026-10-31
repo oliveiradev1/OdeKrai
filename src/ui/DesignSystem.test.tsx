@@ -5,12 +5,22 @@ import {
   Banner,
   Button,
   Card,
+  EmptyState,
+  getTabsKeyboardIndex,
+  Kbd,
+  ListItem,
   PageHeader,
   SelectableCard,
   SelectInput,
+  Skeleton,
+  StatusBadge,
+  Tabs,
   TextInput,
   Toggle,
+  Toast,
+  Tooltip,
 } from './DesignSystem';
+import { DesignSystemGallery } from './DesignSystemGallery';
 
 describe('componentes visuais compartilhados', () => {
   it('aplica a variante solicitada ao botão', () => {
@@ -60,5 +70,80 @@ describe('componentes visuais compartilhados', () => {
     expect(markup).toContain('ui-card');
     expect(markup).toContain('ui-input');
     expect(markup).toContain('ui-select');
+  });
+
+  it('renderiza e nomeia os estados, abas, avisos e estado vazio', () => {
+    const markup = renderToStaticMarkup(
+      <>
+        {(['ativa', 'desativada', 'pendente', 'erro', 'sucesso'] as const).map((state) => (
+          <StatusBadge key={state} state={state} />
+        ))}
+        <Tabs
+          label="Preferências"
+          selectedId="geral"
+          onSelect={() => undefined}
+          items={[
+            { id: 'geral', label: 'Geral', content: 'Geral' },
+            { id: 'avancado', label: 'Avançado', content: 'Avançado' },
+          ]}
+        />
+        <Toast action={{ onClick: () => undefined }}>Alteração salva</Toast>
+        <EmptyState
+          icon={<span>◎</span>}
+          title="Sem resultados"
+          description="Ajuste a pesquisa."
+          action={{ label: 'Limpar', onClick: () => undefined }}
+        />
+      </>,
+    );
+    expect(markup).toContain('role="tablist" aria-label="Preferências"');
+    expect(markup).toContain('role="tabpanel"');
+    expect(markup).toContain('aria-live="polite"');
+    expect(markup).toContain('Desfazer');
+    expect(markup).toContain('aria-labelledby=');
+    expect(markup).toContain('Limpar');
+    for (const state of ['ativa', 'desativada', 'pendente', 'erro', 'sucesso']) {
+      expect(markup).toContain(`ui-status-badge--${state}`);
+    }
+  });
+
+  it('cobre navegação de abas por teclado, dica associada e semântica', () => {
+    const tabs = [{ disabled: false }, { disabled: true }, { disabled: false }];
+    expect(getTabsKeyboardIndex('ArrowRight', 0, tabs)).toBe(2);
+    expect(getTabsKeyboardIndex('ArrowLeft', 2, tabs)).toBe(0);
+    expect(getTabsKeyboardIndex('Home', 2, tabs)).toBe(0);
+    expect(getTabsKeyboardIndex('End', 0, tabs)).toBe(2);
+    expect(getTabsKeyboardIndex('Home', 0, [{ disabled: true }])).toBeNull();
+    expect(getTabsKeyboardIndex('Escape', 0, tabs)).toBeNull();
+
+    const markup = renderToStaticMarkup(
+      <>
+        <Tooltip content="Explicação">
+          <button type="button">Ajuda</button>
+        </Tooltip>
+        <Kbd>Ctrl</Kbd>
+        <Skeleton />
+        <ul>
+          <ListItem description="Detalhe" trailing="Pronto">
+            Nome
+          </ListItem>
+        </ul>
+      </>,
+    );
+    expect(markup).toContain('role="tooltip"');
+    expect(markup).toContain('aria-describedby=');
+    expect(markup).toContain('<kbd');
+    expect(markup).toContain('aria-hidden="true"');
+    expect(markup).toContain('<li');
+    expect(markup).toContain('ui-list-item-description');
+  });
+
+  it('usa a galeria interna como amostra integrada dos componentes', () => {
+    const markup = renderToStaticMarkup(<DesignSystemGallery />);
+    expect(markup).toContain('Galeria do sistema visual');
+    expect(markup).toContain('Desfazer');
+    expect(markup).toContain('role="tablist"');
+    expect(markup).toContain('ui-status-badge--pendente');
+    expect(markup).toContain('ui-empty-state');
   });
 });

@@ -1,8 +1,25 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { defaultSettings, loadSettings, loadSettingsWithWarnings, saveSettings } from './settings';
+import { shouldAutomaticallyCheckForUpdates } from './update-check';
 
 describe('preferências persistidas', () => {
   afterEach(() => vi.unstubAllGlobals());
+
+  it('ativa a verificação automática por padrão e migra preferências antigas', () => {
+    expect(defaultSettings.checkForUpdatesAutomatically).toBe(true);
+    vi.stubGlobal('localStorage', {
+      getItem: () =>
+        JSON.stringify({ ...defaultSettings, checkForUpdatesAutomatically: undefined }),
+      setItem: () => undefined,
+    });
+    expect(loadSettings().checkForUpdatesAutomatically).toBe(true);
+  });
+
+  it('respeita a opção desligada e só automatiza no aplicativo nativo', () => {
+    expect(shouldAutomaticallyCheckForUpdates(false, true)).toBe(false);
+    expect(shouldAutomaticallyCheckForUpdates(true, false)).toBe(false);
+    expect(shouldAutomaticallyCheckForUpdates(true, true)).toBe(true);
+  });
 
   it('migra preferências antigas preenchendo valores padrão do Companion', () => {
     const storage = new Map<string, string>();
@@ -20,6 +37,7 @@ describe('preferências persistidas', () => {
       setItem: (key: string, value: string) => storage.set(key, value),
     });
     const migrated = loadSettings();
+    expect(migrated.reduceMascot).toBe(false);
     expect(migrated.companion).toMatchObject({
       enabled: false,
       position: 'bottom-right',
@@ -82,6 +100,43 @@ describe('preferências persistidas', () => {
     });
     expect(storage.get('odekrai.settings.v2')).not.toContain('apiKey');
     expect(storage.get('odekrai.settings.v2')).not.toContain('chave');
+  });
+
+  it('persiste a preferência independente para reduzir o mascote', () => {
+    const storage = new Map<string, string>();
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem: (key: string, value: string) => storage.set(key, value),
+    });
+    const settings = loadSettings();
+    settings.reduceMascot = true;
+    expect(saveSettings(settings)).toBe(true);
+    expect(loadSettings().reduceMascot).toBe(true);
+  });
+
+  it('usa novidades ativadas por padrão e migra a opção persistida', () => {
+    expect(defaultSettings.showReleaseNotes).toBe(true);
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) =>
+        key === 'odekrai.settings.v2'
+          ? JSON.stringify({ ...defaultSettings, showReleaseNotes: false })
+          : null,
+      setItem: () => undefined,
+    });
+    expect(loadSettings().showReleaseNotes).toBe(false);
+  });
+
+  it('inicia Desempenho em Automático e persiste a escolha manual', () => {
+    const storage = new Map<string, string>();
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem: (key: string, value: string) => storage.set(key, value),
+    });
+    const settings = loadSettings();
+    expect(settings.performanceMode).toBe('automatic');
+    settings.performanceMode = 'enabled';
+    expect(saveSettings(settings)).toBe(true);
+    expect(loadSettings().performanceMode).toBe('enabled');
   });
 
   it('persiste a substituição de efeito sonoro selecionada', () => {

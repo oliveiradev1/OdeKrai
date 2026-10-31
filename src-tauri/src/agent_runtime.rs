@@ -157,7 +157,7 @@ pub fn agent_availability(
             workspace_path: Some(workspace.to_string_lossy().into_owned()),
         });
     }
-    if security::skills::skills_exposed_to_agent(&app)?.is_empty() {
+    if !security::skills::skill_turn_offer(&app)?.has_response_context() {
         return Ok(AgentAvailability {
             available: false,
             reason: Some(
@@ -181,6 +181,75 @@ struct RuntimeBackend<'a> {
     active_skills: Vec<Skill>,
     events: Channel<AgentEvent>,
     daily_token_limit: u64,
+    plan_card: Option<crate::history::AgentActionCard>,
+}
+
+fn start_plan_step(plan: &mut crate::history::AgentPlan, action_label: &str) -> Option<usize> {
+    if let Some(index) = plan
+        .steps
+        .iter()
+        .position(|step| step.status == crate::history::AgentPlanStepStatus::Pending)
+    {
+        plan.steps[index].status = crate::history::AgentPlanStepStatus::InProgress;
+        Some(index)
+    } else {
+        if plan.outside_plan_actions.len() < 8 {
+            plan.outside_plan_actions
+                .push(action_label.chars().take(120).collect());
+        }
+        None
+    }
+}
+
+fn finish_plan_step(plan: &mut crate::history::AgentPlan, index: usize, succeeded: bool) -> bool {
+    let Some(step) = plan.steps.get_mut(index) else {
+        return false;
+    };
+    if step.status != crate::history::AgentPlanStepStatus::InProgress {
+        return false;
+    }
+    step.status = if succeeded {
+        crate::history::AgentPlanStepStatus::Completed
+    } else {
+        crate::history::AgentPlanStepStatus::Failed
+    };
+    true
+}
+
+impl RuntimeBackend<'_> {
+    fn begin_plan_action(&mut self, action_label: &str) -> Result<Option<usize>, String> {
+        let Some(card) = self.plan_card.as_mut() else {
+            return Ok(None);
+        };
+        let Some(plan) = card.plan.as_mut() else {
+            return Ok(None);
+        };
+        let index = start_plan_step(plan, action_label);
+        let snapshot = card.clone();
+        crate::history::save_agent_action_card(&self.app, &self.conversation_id, &snapshot)?;
+        let _ = self.events.send(AgentEvent::ActionCard {
+            card: Box::new(snapshot),
+        });
+        Ok(index)
+    }
+
+    fn finish_plan_action(&mut self, index: usize, succeeded: bool) -> Result<(), String> {
+        let Some(card) = self.plan_card.as_mut() else {
+            return Ok(());
+        };
+        let Some(plan) = card.plan.as_mut() else {
+            return Ok(());
+        };
+        if !finish_plan_step(plan, index, succeeded) {
+            return Ok(());
+        }
+        let snapshot = card.clone();
+        crate::history::save_agent_action_card(&self.app, &self.conversation_id, &snapshot)?;
+        let _ = self.events.send(AgentEvent::ActionCard {
+            card: Box::new(snapshot),
+        });
+        Ok(())
+    }
 }
 
 impl AgentBackend for RuntimeBackend<'_> {
@@ -214,8 +283,14 @@ impl AgentBackend for RuntimeBackend<'_> {
                 .active_skills
                 .iter()
                 .find(|skill| skill.id == call.name)
+                .cloned()
                 .ok_or_else(|| "A habilidade não está ativa; chamada recusada.".to_string())?;
             let conversation_id = self.conversation_id.clone();
+            let plan_step_index = if skill.id == "plan.propose" {
+                None
+            } else {
+                self.begin_plan_action(skill.name)?
+            };
             let args_hash = format!("{:x}", Sha256::digest(call.args.to_string().as_bytes()));
             crate::history::persist_agent_record(
                 &self.app,
@@ -232,30 +307,62 @@ impl AgentBackend for RuntimeBackend<'_> {
                 crate::policy::Risk::ComunicacaoExterna => "comunicação externa",
                 crate::policy::Risk::DestrutivoFinanceiro => "destrutivo ou financeiro",
                 crate::policy::Risk::ExecucaoDeCodigo => "execução de código (alto)",
+                crate::policy::Risk::CapturaSensivel => "captura sensível",
             };
-            let summary = action_card_summary(skill, &call.args);
+            let summary = action_card_summary(&skill, &call.args);
+            let untrusted_result = skill.id == "code.delegate"
+                || security::skills::result_is_untrusted(&self.app, skill.id, &call.args)?;
+            let action_started = std::time::Instant::now();
             let mut card = crate::history::AgentActionCard {
                 id: call.id.clone(),
                 skill_id: skill.id.into(),
                 title: skill.name.into(),
                 risk: risk.into(),
                 decision: "automática".into(),
-                status: "Executando".into(),
+                status: "Planejada".into(),
                 summary,
                 result_summary: String::new(),
                 diff: None,
+                preview: None,
+                artifacts: Vec::new(),
+                timeline: vec![crate::history::AgentTimelineEntry {
+                    label: "Etapa do agente".into(),
+                    status: "planejada".into(),
+                    duration_ms: None,
+                    at: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs() as i64,
+                }],
+                duration_ms: None,
+                approval_expires_at: None,
+                untrusted_result,
+                undo_descriptor: None,
+                plan: None,
                 created_at: std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_secs() as i64,
             };
             crate::history::save_agent_action_card(&self.app, &conversation_id, &card)?;
-            let _ = self
-                .events
-                .send(AgentEvent::ActionCard { card: card.clone() });
+            let _ = self.events.send(AgentEvent::ActionCard {
+                card: Box::new(card.clone()),
+            });
+            card.status = "Executando".into();
+            card.timeline.push(crate::history::AgentTimelineEntry {
+                label: format!("Chamada de ferramenta: {}", skill.name),
+                status: "executando".into(),
+                duration_ms: None,
+                at: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs() as i64,
+            });
+            crate::history::save_agent_action_card(&self.app, &conversation_id, &card)?;
+            let _ = self.events.send(AgentEvent::ActionCard {
+                card: Box::new(card.clone()),
+            });
             let approved_by_user = Arc::new(AtomicBool::new(false));
-            let untrusted_result =
-                security::skills::result_is_untrusted(&self.app, skill.id, &call.args)?;
             let approval_state = approved_by_user.clone();
             let channel = self.events.clone();
             let app = self.app.clone();
@@ -290,19 +397,42 @@ impl AgentBackend for RuntimeBackend<'_> {
                     &stream_card,
                 );
                 let _ = stream_events.send(AgentEvent::ActionCard {
-                    card: stream_card.clone(),
+                    card: Box::new(stream_card.clone()),
                 });
             };
-            let mut on_approval = move |approval_id: String| {
+            let mut on_approval = move |approval_id: String, preview: String, expires_at: u64| {
                 approval_state.store(true, Ordering::SeqCst);
                 let mut waiting = approval_card.clone();
                 waiting.decision = "aguardando".into();
                 waiting.status = "Aguardando aprovação".into();
+                let mut bounded_preview = preview;
+                if bounded_preview.len() > 32_000 {
+                    let mut boundary = 32_000;
+                    while !bounded_preview.is_char_boundary(boundary) {
+                        boundary -= 1;
+                    }
+                    bounded_preview.truncate(boundary);
+                }
+                waiting.preview = Some(bounded_preview);
+                waiting.approval_expires_at = Some(expires_at.min(i64::MAX as u64) as i64);
+                waiting.timeline.push(crate::history::AgentTimelineEntry {
+                    label: "Aguardando aprovação na janela nativa".into(),
+                    status: "aguardando aprovação".into(),
+                    duration_ms: None,
+                    at: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs() as i64,
+                });
                 let _ = crate::history::save_agent_action_card(&app, &card_conversation, &waiting);
-                let _ = channel.send(AgentEvent::ActionCard { card: waiting });
+                let _ = channel.send(AgentEvent::ActionCard {
+                    card: Box::new(waiting.clone()),
+                });
                 let _ = channel.send(AgentEvent::AwaitingApproval {
                     id: approval_id.clone(),
                     audit_id: approval_id,
+                    preview: waiting.preview.clone().unwrap_or_default(),
+                    expires_at,
                 });
             };
             let result = skill
@@ -320,21 +450,93 @@ impl AgentBackend for RuntimeBackend<'_> {
             let result = match result {
                 Ok(result) => result,
                 Err(_) => {
+                    if let Some(index) = plan_step_index {
+                        self.finish_plan_action(index, false)?;
+                    }
                     card.decision = if approved_by_user.load(Ordering::SeqCst) {
                         "aprovada".into()
                     } else {
                         "automática".into()
                     };
                     card.status = "Falhou".into();
+                    card.duration_ms =
+                        Some(action_started.elapsed().as_millis().min(i64::MAX as u128) as i64);
+                    card.timeline.push(crate::history::AgentTimelineEntry {
+                        label: format!("Resultado da ferramenta: {} falhou", skill.name),
+                        status: "erro".into(),
+                        duration_ms: card.duration_ms,
+                        at: std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs() as i64,
+                    });
                     card.result_summary =
                         "A ferramenta falhou; nenhum resultado foi confirmado.".into();
                     crate::history::save_agent_action_card(&self.app, &conversation_id, &card)?;
-                    let _ = self.events.send(AgentEvent::ActionCard { card });
+                    let _ = self.events.send(AgentEvent::ActionCard {
+                        card: Box::new(card),
+                    });
                     return Err("A ferramenta falhou durante a execução.".into());
                 }
             };
             let status = result.status.clone();
-            card.decision = if approved_by_user.load(Ordering::SeqCst) {
+            card.undo_descriptor = result.undo_descriptor.clone();
+            if skill.id == "plan.propose" && status == "completed" {
+                if let Some(plan) = result
+                    .result
+                    .as_deref()
+                    .and_then(|text| serde_json::from_str::<crate::history::AgentPlan>(text).ok())
+                {
+                    card.title = format!("Plano: {}", plan.title);
+                    card.summary =
+                        "Plano informativo. Cada ação continua sujeita às permissões locais."
+                            .into();
+                    card.result_summary = "Este plano não executa nem autoriza ações.".into();
+                    card.plan = Some(plan);
+                }
+            }
+            if status == "completed" {
+                let artifact_path = match skill.id {
+                    "files.write"
+                    | "files.append"
+                    | "doc.create_markdown"
+                    | "doc.create_text"
+                    | "sheet.create_csv"
+                    | "workspace.write_file" => {
+                        call.args.get("path").and_then(serde_json::Value::as_str)
+                    }
+                    "screen.capture" => call.args.get("path").and_then(serde_json::Value::as_str),
+                    "calendar.create_event" => {
+                        call.args.get("path").and_then(serde_json::Value::as_str)
+                    }
+                    "files.copy" | "files.move" | "files.rename" => call
+                        .args
+                        .get("destination")
+                        .and_then(serde_json::Value::as_str),
+                    _ => None,
+                };
+                if let Some(path) =
+                    artifact_path.filter(|path| !path.is_empty() && path.len() <= 32_767)
+                {
+                    card.artifacts = vec![crate::history::AgentArtifact {
+                        path: path.to_owned(),
+                        kind: if skill.id.starts_with("doc.") {
+                            "documento".into()
+                        } else if skill.id == "sheet.create_csv" {
+                            "planilha".into()
+                        } else if skill.id == "calendar.create_event" {
+                            "evento de calendário".into()
+                        } else if skill.id == "screen.capture" {
+                            "captura de tela".into()
+                        } else {
+                            "arquivo".into()
+                        },
+                    }];
+                }
+            }
+            card.decision = if status == "configuration_pending" {
+                "automática".into()
+            } else if approved_by_user.load(Ordering::SeqCst) {
                 if result.message.contains("expir") {
                     "expirada".into()
                 } else if status == "completed" || status == "failed" {
@@ -349,13 +551,27 @@ impl AgentBackend for RuntimeBackend<'_> {
             };
             card.status = match status.as_str() {
                 "completed" => "Concluída",
+                "configuration_pending" => "Configuração pendente",
+                "denied" if result.message.contains("expir") => "Expirada",
                 "denied" => "Negada",
                 "failed" => "Falhou",
                 _ => "Interrompida",
             }
             .into();
+            card.duration_ms =
+                Some(action_started.elapsed().as_millis().min(i64::MAX as u128) as i64);
+            card.timeline.push(crate::history::AgentTimelineEntry {
+                label: format!("Resultado da ferramenta: {}", card.status.to_lowercase()),
+                status: card.status.to_lowercase(),
+                duration_ms: card.duration_ms,
+                at: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs() as i64,
+            });
             card.result_summary = match status.as_str() {
                 "completed" => "Ação concluída; o resultado segue na resposta do OdeKrai.".into(),
+                "configuration_pending" => "Falta cadastrar um webhook do Discord.".into(),
                 "denied" if result.message.contains("expir") => {
                     "O prazo de aprovação terminou.".into()
                 }
@@ -363,6 +579,42 @@ impl AgentBackend for RuntimeBackend<'_> {
                 "failed" => "A ação aprovada não pôde ser concluída.".into(),
                 _ => "A execução foi interrompida.".into(),
             };
+            if status == "completed" && skill.id == "calendar.create_event" {
+                let field = |name: &str| -> String {
+                    call.args
+                        .get(name)
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("Não informado")
+                        .chars()
+                        .map(|character| {
+                            if character.is_control() {
+                                ' '
+                            } else {
+                                character
+                            }
+                        })
+                        .take(100)
+                        .collect()
+                };
+                card.result_summary = format!(
+                    "Evento: {}\nData: {}\nLocal: {}\nGravado em: {}",
+                    field("title"),
+                    field("start"),
+                    field("location"),
+                    field("path")
+                );
+            }
+            if status == "completed" && skill.id == "files.delete" {
+                card.result_summary =
+                    "Arquivo enviado à Lixeira do Windows; restaure pela Lixeira do Windows."
+                        .into();
+            }
+            if let Some(index) = plan_step_index {
+                self.finish_plan_action(index, status == "completed")?;
+            }
+            if skill.id == "plan.propose" && card.plan.is_some() {
+                self.plan_card = Some(card.clone());
+            }
             crate::history::save_agent_action_card(&self.app, &conversation_id, &card)?;
             if skill.id == "code.delegate" && status == "completed" {
                 if let Some(result) = result.result.as_deref() {
@@ -378,9 +630,9 @@ impl AgentBackend for RuntimeBackend<'_> {
                 }
             }
             crate::history::save_agent_action_card(&self.app, &conversation_id, &card)?;
-            let _ = self
-                .events
-                .send(AgentEvent::ActionCard { card: card.clone() });
+            let _ = self.events.send(AgentEvent::ActionCard {
+                card: Box::new(card.clone()),
+            });
             let result_text = result.result.as_deref().unwrap_or(&result.message);
             let result_hash = format!("{:x}", Sha256::digest(result_text.as_bytes()));
             crate::history::persist_agent_record(
@@ -394,7 +646,7 @@ impl AgentBackend for RuntimeBackend<'_> {
             Ok(ToolExecution {
                 content: result.result.unwrap_or(result.message),
                 audit_id: Some(result.id),
-                denied: status == "denied",
+                denied: status == "denied" || status == "configuration_pending",
                 external_communication: skill.id == "simulated.send_message",
                 untrusted: untrusted_result || status != "completed",
             })
@@ -444,7 +696,6 @@ pub async fn agent_run(
     state: State<'_, SecurityState>,
     conversation_id: String,
     message: String,
-    image_base64: Option<String>,
     daily_token_limit: u64,
     on_event: Channel<AgentEvent>,
 ) -> Result<String, String> {
@@ -455,7 +706,6 @@ pub async fn agent_run(
         state: &state,
         conversation_id,
         message,
-        image_base64,
         daily_token_limit,
         on_event: on_event.clone(),
         error_emitted: error_emitted.clone(),
@@ -484,7 +734,6 @@ struct AgentRunContext<'a> {
     state: &'a SecurityState,
     conversation_id: String,
     message: String,
-    image_base64: Option<String>,
     daily_token_limit: u64,
     on_event: Channel<AgentEvent>,
     error_emitted: Arc<AtomicBool>,
@@ -496,7 +745,6 @@ async fn agent_run_inner(context: AgentRunContext<'_>) -> Result<String, String>
         state,
         conversation_id,
         message,
-        image_base64,
         daily_token_limit,
         on_event,
         error_emitted,
@@ -504,19 +752,6 @@ async fn agent_run_inner(context: AgentRunContext<'_>) -> Result<String, String>
     if message.trim().is_empty() || message.len() > 1_000_000 {
         return Err("Informe uma mensagem válida para o agente.".into());
     }
-    let image = image_base64
-        .map(|encoded| {
-            if encoded.len() > crate::screen_capture::MAX_SCREENSHOT_BYTES * 2 {
-                return Err("A captura excede o limite permitido.".to_string());
-            }
-            use base64::Engine as _;
-            let decoded = base64::engine::general_purpose::STANDARD
-                .decode(encoded)
-                .map_err(|_| "A captura temporária é inválida.".to_string())?;
-            let (jpeg, _, _) = crate::screen_capture::normalize_image(&decoded)?;
-            Ok(base64::engine::general_purpose::STANDARD.encode(jpeg))
-        })
-        .transpose()?;
     if state.is_halted() {
         return Err("O agente está parado pelo kill switch.".into());
     }
@@ -525,11 +760,6 @@ async fn agent_run_inner(context: AgentRunContext<'_>) -> Result<String, String>
     if !enabled {
         return Err("Modo agente indisponível: ele está desativado nesta conversa. Ative-o nas configurações da conversa.".into());
     }
-    if image.is_some() && !crate::providers::supports_vision_model(&provider_id, &model) {
-        return Err(
-            "O provedor e o modelo desta conversa não têm suporte a imagens verificado.".into(),
-        );
-    }
     if crate::agent_home::system_prompt(&app)?.is_none() {
         return Err(
             "Modo agente indisponível: configure a pasta e a identidade aprovada do agente.".into(),
@@ -537,23 +767,13 @@ async fn agent_run_inner(context: AgentRunContext<'_>) -> Result<String, String>
     }
     crate::history::save_agent_user_message(&app, &conversation_id, &message)?;
     let mut messages = crate::history::load_agent_context(&app, &conversation_id)?.4;
-    if let Some(data_base64) = image {
-        let user_message = messages
-            .iter_mut()
-            .rev()
-            .find(|entry| entry.role == "user")
-            .ok_or("Não foi possível anexar a captura à mensagem temporária.")?;
-        user_message.blocks.push(Block::Image {
-            media_type: "image/jpeg".into(),
-            data_base64,
-        });
-    }
-    let active_skills = security::skills::skills_exposed_to_agent(&app)?;
-    if active_skills.is_empty() {
+    let skill_offer = security::skills::skill_turn_offer(&app)?;
+    if !skill_offer.has_response_context() {
         return Err(
             "Modo agente indisponível: ative uma habilidade disponível e conclua os requisitos da integração em Configurações → Habilidades.".into(),
         );
     }
+    let active_skills = skill_offer.offered_skills();
     if let Some(reason) =
         crate::providers::agent_provider_unavailable_reason(&app, &provider_id, &model)
     {
@@ -561,24 +781,20 @@ async fn agent_run_inner(context: AgentRunContext<'_>) -> Result<String, String>
     }
     let prompt = crate::agent_home::system_prompt(&app)?
         .ok_or("Configure a pasta e a identidade aprovada do agente.")?;
-    let skill_context = active_skills
-        .iter()
-        .map(|skill| format!("- {}: {}", skill.name, skill.model_description))
-        .collect::<Vec<_>>()
-        .join("\n");
     messages.insert(
         0,
         Message {
             role: "system".into(),
             blocks: vec![Block::Text {
                 text: format!(
-                    "{prompt}\n\nData e hora locais no momento da execução: {}. Use este relógio e o fuso do sistema para interpretar datas relativas. Nunca presuma duração de eventos: pergunte ao usuário se o fim não foi informado.\n\nHabilidades ativas para esta execução:\n{skill_context}",
-                    crate::calendar::current_local_time()
+                    "{prompt}\n\nData e hora locais no momento da execução: {}. Use este relógio e o fuso do sistema para interpretar datas relativas. Nunca presuma duração de eventos: pergunte ao usuário se o fim não foi informado.\n\n{}",
+                    crate::calendar::current_local_time(),
+                    skill_offer.system_context()
                 ),
             }],
         },
     );
-    let tools = security::skills::model_tools(&app)?;
+    let tools = skill_offer.model_tools();
     let token = CancellationToken::new();
     {
         let mut runs = state.agent_runs.lock().await;
@@ -595,6 +811,7 @@ async fn agent_run_inner(context: AgentRunContext<'_>) -> Result<String, String>
         active_skills,
         events: on_event.clone(),
         daily_token_limit,
+        plan_card: None,
     };
     let result = agent::run_agent(
         &mut backend,
@@ -708,6 +925,52 @@ mod limits_tests {
         }
         .validate()
         .is_err());
+    }
+}
+
+#[cfg(test)]
+mod plan_state_tests {
+    use super::*;
+
+    fn plan() -> crate::history::AgentPlan {
+        crate::history::AgentPlan {
+            title: "Preparar relatório".into(),
+            steps: vec![
+                crate::history::AgentPlanStep {
+                    description: "Ler dados".into(),
+                    status: crate::history::AgentPlanStepStatus::Pending,
+                },
+                crate::history::AgentPlanStep {
+                    description: "Criar arquivo".into(),
+                    status: crate::history::AgentPlanStepStatus::Pending,
+                },
+            ],
+            outside_plan_actions: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn real_actions_advance_plan_and_extras_are_reported_without_blocking() {
+        let mut plan = plan();
+        let first = start_plan_step(&mut plan, "Ler dados").unwrap();
+        assert_eq!(
+            plan.steps[first].status,
+            crate::history::AgentPlanStepStatus::InProgress
+        );
+        assert!(finish_plan_step(&mut plan, first, true));
+        assert_eq!(
+            plan.steps[first].status,
+            crate::history::AgentPlanStepStatus::Completed
+        );
+
+        let second = start_plan_step(&mut plan, "Criar arquivo").unwrap();
+        assert!(finish_plan_step(&mut plan, second, false));
+        assert_eq!(
+            plan.steps[second].status,
+            crate::history::AgentPlanStepStatus::Failed
+        );
+        assert_eq!(start_plan_step(&mut plan, "Consultar lembrete"), None);
+        assert_eq!(plan.outside_plan_actions, ["Consultar lembrete"]);
     }
 }
 

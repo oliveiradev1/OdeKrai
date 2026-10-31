@@ -1,10 +1,12 @@
 use keyring::Entry;
 use serde::Serialize;
+use std::future::Future;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::Emitter;
 
 const SERVICE: &str = "site.anceryx.odekrai.discord-webhook";
 const MIN_SEND_INTERVAL: u64 = 5;
+pub(crate) const WEBHOOK_NOT_REGISTERED: &str = "Webhook não cadastrado.";
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -80,14 +82,27 @@ pub fn discord_list(
 
 pub fn discord_is_configured(app: &tauri::AppHandle) -> Result<bool, String> {
     let db = crate::security::database(app)?;
+    discord_is_configured_in_db(&db)
+}
+
+pub(crate) fn discord_is_configured_in_db(db: &rusqlite::Connection) -> Result<bool, String> {
     let mut stmt = db
         .prepare("SELECT id FROM discord_webhooks")
-        .map_err(|_| "Não foi possível verificar a configuração do Discord.".to_string())?;
+        .map_err(|error| {
+            log::warn!("Falha ao consultar discord_webhooks ao verificar a configuração: {error}");
+            "Não foi possível verificar a configuração do Discord.".to_string()
+        })?;
     let ids = stmt
         .query_map([], |row| row.get::<_, String>(0))
-        .map_err(|_| "Não foi possível verificar a configuração do Discord.".to_string())?
+        .map_err(|error| {
+            log::warn!("Falha ao ler registros de discord_webhooks ao verificar a configuração: {error}");
+            "Não foi possível verificar a configuração do Discord.".to_string()
+        })?
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|_| "Não foi possível verificar a configuração do Discord.".to_string())?;
+        .map_err(|error| {
+            log::warn!("Falha ao coletar registros de discord_webhooks ao verificar a configuração: {error}");
+            "Não foi possível verificar a configuração do Discord.".to_string()
+        })?;
     Ok(ids.into_iter().any(|id| {
         credential(&id)
             .and_then(|entry| entry.get_password().map_err(|_| "indisponível".to_string()))
@@ -177,17 +192,18 @@ pub async fn discord_remove(
         webhook_id.strip_prefix("discord-").unwrap_or(&webhook_id)
     );
     let db = crate::security::database(&app)?;
-    let exists: bool = db
+    let name: String = db
         .query_row(
-            "SELECT EXISTS(SELECT 1 FROM discord_webhooks WHERE id=?1)",
+            "SELECT name FROM discord_webhooks WHERE id=?1",
             [&id],
             |row| row.get(0),
         )
-        .map_err(|_| "Não foi possível localizar o webhook.".to_string())?;
-    if !exists {
-        return Err("Webhook não cadastrado.".into());
-    }
+        .map_err(|error| match error {
+            rusqlite::Error::QueryReturnedNoRows => WEBHOOK_NOT_REGISTERED.to_string(),
+            _ => "Não foi possível localizar o webhook.".to_string(),
+        })?;
     drop(db);
+    require_discord_revocation_confirmation(name, crate::security::confirm_native).await?;
     let raw = credential(&id)?
         .get_password()
         .map_err(|_| "A credencial do webhook não está disponível para revogação.".to_string())?;
@@ -220,16 +236,40 @@ pub async fn discord_remove(
     Ok(())
 }
 
+async fn require_discord_revocation_confirmation<F, Fut>(
+    name: String,
+    confirm: F,
+) -> Result<(), String>
+where
+    F: FnOnce(String) -> Fut,
+    Fut: Future<Output = bool>,
+{
+    let prompt = format!(
+        "Remover o destino “{name}” do Discord? A conexão será apagada e não poderá ser reutilizada."
+    );
+    if confirm(prompt).await {
+        Ok(())
+    } else {
+        Err("A remoção do destino do Discord foi cancelada.".into())
+    }
+}
+
 pub fn preview(app: &tauri::AppHandle, id: &str, text: &str) -> Result<String, String> {
     mentions_disabled(text)?;
-    let name: String = crate::security::database(app)?
-        .query_row(
-            "SELECT name FROM discord_webhooks WHERE id=?1",
-            [id],
-            |row| row.get(0),
-        )
-        .map_err(|_| "Webhook não cadastrado.".to_string())?;
+    let name = webhook_name(&crate::security::database(app)?, id)?;
     Ok(render_preview(&name, text))
+}
+
+fn webhook_name(db: &rusqlite::Connection, id: &str) -> Result<String, String> {
+    db.query_row(
+        "SELECT name FROM discord_webhooks WHERE id=?1",
+        [id],
+        |row| row.get::<_, String>(0),
+    )
+    .map_err(|error| match error {
+        rusqlite::Error::QueryReturnedNoRows => WEBHOOK_NOT_REGISTERED.to_string(),
+        _ => "Não foi possível consultar o webhook do Discord.".to_string(),
+    })
 }
 
 fn render_preview(name: &str, text: &str) -> String {
@@ -253,7 +293,10 @@ pub async fn send(app: &tauri::AppHandle, id: &str, text: &str) -> Result<String
             [id],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
-        .map_err(|_| "Webhook não cadastrado.".to_string())?;
+        .map_err(|error| match error {
+            rusqlite::Error::QueryReturnedNoRows => WEBHOOK_NOT_REGISTERED.to_string(),
+            _ => "Não foi possível consultar o webhook do Discord.".to_string(),
+        })?;
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -318,6 +361,41 @@ mod tests {
         )
         .is_ok());
         for url in ["https://evil.com/api/webhooks/123456789012345678/abcdefghijklmnopqrstuvwxyz", "https://discord.com.evil.test/api/webhooks/123456789012345678/abcdefghijklmnopqrstuvwxyz", "https://discord.com/api/webhooks/123456789012345678/abcdefghijklmnopqrstuvwxyz/extra", "http://discord.com/api/webhooks/123456789012345678/abcdefghijklmnopqrstuvwxyz"] { assert!(validate_webhook_url(url).is_err()); }
+    }
+
+    #[test]
+    fn missing_registered_webhook_is_configuration_error_without_network_access() {
+        let db = rusqlite::Connection::open_in_memory().unwrap();
+        db.execute(
+            "CREATE TABLE discord_webhooks (id TEXT PRIMARY KEY, name TEXT NOT NULL, last_sent INTEGER NOT NULL DEFAULT 0)",
+            [],
+        )
+        .unwrap();
+
+        assert_eq!(
+            webhook_name(&db, "discord-123"),
+            Err(WEBHOOK_NOT_REGISTERED.to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn webhook_removal_requires_native_confirmation_before_side_effects() {
+        let prompt_name = "Alertas".to_string();
+        let prompt = require_discord_revocation_confirmation(prompt_name, |text| async move {
+            assert!(text.contains("Alertas"));
+            false
+        })
+        .await;
+        assert_eq!(
+            prompt.unwrap_err(),
+            "A remoção do destino do Discord foi cancelada."
+        );
+
+        assert!(
+            require_discord_revocation_confirmation("Alertas".into(), |_| async { true })
+                .await
+                .is_ok()
+        );
     }
 
     #[test]

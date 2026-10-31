@@ -8,6 +8,8 @@ import {
   parseConversationNotes,
   updateIdentityProfile,
 } from '../core/identity';
+import { memoryDeletionConfirmation, runConfirmedAction } from '../core/confirmation';
+import { useConfirmation } from './ConfirmationProvider';
 
 const TONE_PRESETS = ['direto e cordial', 'acolhedor', 'formal'];
 
@@ -61,6 +63,7 @@ export function AgentHome({
   onProfileChange: (profile: ProfileData) => void;
   embedded?: boolean;
 }) {
+  const requestConfirmation = useConfirmation();
   const [status, setStatus] = useState<HomeStatus | null>(null);
   const [path, setPath] = useState('');
   const [customTone, setCustomTone] = useState(false);
@@ -145,13 +148,27 @@ export function AgentHome({
       setBusy(false);
     }
   }
+  async function confirmAction(request: Parameters<typeof requestConfirmation>[0]) {
+    try {
+      return await requestConfirmation(request);
+    } catch {
+      setError('Não foi possível mostrar a confirmação. A ação não foi realizada.');
+      return false;
+    }
+  }
   async function initialize(event: FormEvent) {
     event.preventDefault();
     if (setupStep < 3) {
       setSetupStep((step) => step + 1);
       return;
     }
-    if (!window.confirm(`Salvar sua identidade e criar a pasta do OdeKrai em ${path}?`)) return;
+    if (
+      !(await confirmAction({
+        title: 'Salvar identidade?',
+        message: `Salvar sua identidade e criar a pasta do OdeKrai em ${path}?`,
+      }))
+    )
+      return;
     await run(async () => {
       await invoke('agent_home_init', { path, profile });
       const saved = await invoke<ProfileData>('save_profile', {
@@ -164,7 +181,14 @@ export function AgentHome({
     });
   }
   async function saveCore() {
-    if (!core || !window.confirm('Confirmar este arquivo base como sua identidade?')) return;
+    if (!core) return;
+    if (
+      !(await confirmAction({
+        title: 'Confirmar arquivo base?',
+        message: 'Confirmar este arquivo base como sua identidade?',
+      }))
+    )
+      return;
     await run(async () => {
       await invoke('agent_home_save_core', { content: coreDraft, expectedHash: core.current_hash });
       await refresh();
@@ -181,7 +205,13 @@ export function AgentHome({
         .replace(/^- Idioma: .*$/m, `- Idioma: ${profile.language}`)
         .replace(/^- Tom: .*$/m, `- Tom: ${profile.tone}`);
       if (next !== current.content) {
-        if (!window.confirm('Salvar o idioma e o tom no arquivo base?')) return;
+        if (
+          !(await confirmAction({
+            title: 'Salvar preferências?',
+            message: 'Salvar o idioma e o tom no arquivo base?',
+          }))
+        )
+          return;
         await invoke('agent_home_save_core', { content: next, expectedHash: current.current_hash });
       }
       const content = formatConversationNotes({ instructions: personalInstructions, slang });
@@ -198,7 +228,12 @@ export function AgentHome({
       const externalReview = current.changed_externally
         ? `\n\nO arquivo também mudou fora do aplicativo:\n${current.diff}`
         : '';
-      if (!window.confirm(`Atualizar o nome e o apelido no arquivo base?${externalReview}`))
+      if (
+        !(await confirmAction({
+          title: 'Atualizar identidade?',
+          message: `Atualizar o nome e o apelido no arquivo base?${externalReview}`,
+        }))
+      )
         return false;
       await invoke('agent_home_save_core', {
         content: updated,
@@ -234,18 +269,25 @@ export function AgentHome({
     });
   }
   async function deleteMemory() {
-    if (!window.confirm(`Apagar ${memoryName}?`)) return;
-    await run(async () => {
-      await invoke('agent_memory_delete', { name: memoryName });
-      setNames(
-        (await invoke<string[]>('agent_memory_list')).filter((name) => name !== 'estilo.md'),
-      );
-      setMemoryName('');
-      setMemoryDraft('');
+    await runConfirmedAction(confirmAction, memoryDeletionConfirmation(memoryName), async () => {
+      await run(async () => {
+        await invoke('agent_memory_delete', { name: memoryName });
+        setNames(
+          (await invoke<string[]>('agent_memory_list')).filter((name) => name !== 'estilo.md'),
+        );
+        setMemoryName('');
+        setMemoryDraft('');
+      });
     });
   }
   async function deleteAllMemory() {
-    if (!window.confirm('Apagar todos os arquivos de memória? Esta ação não pode ser desfeita.'))
+    if (
+      !(await confirmAction({
+        title: 'Apagar todas as memórias?',
+        message: 'Apagar todos os arquivos de memória? Esta ação não pode ser desfeita.',
+        destructive: true,
+      }))
+    )
       return;
     await run(async () => {
       await invoke('agent_memory_delete_all');

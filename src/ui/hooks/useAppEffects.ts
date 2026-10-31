@@ -2,14 +2,17 @@ import { useEffect } from 'react';
 import { emit, listen } from '@tauri-apps/api/event';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { AI_PROVIDERS } from '../../core/providers';
+import { sanitizeDiagnosticDetails } from '../../core/diagnostics';
 import { loadSettings } from '../../core/settings';
 import { stopLocalSpeech } from '../../core/speech';
 import { normalizeSoundPreferences, playSound } from '../../core/sounds';
 import type { ChatMessage } from '../../core/provider-messages';
-import { mergeApprovedProfile } from '../../core/identity';
+import { mergeApprovedProfile, normalizeProfileData } from '../../core/identity';
 import type { useAppState } from './useAppState';
 import type { Conversation } from '../screens/types';
 import type { ProfileData } from '../Profile';
+
+export { sanitizeDiagnosticDetails } from '../../core/diagnostics';
 
 const STARTUP_TIMEOUT_MS = 5000;
 
@@ -92,18 +95,6 @@ export async function startupInvoke<T>(
   }
 }
 
-export function sanitizeDiagnosticDetails(error: unknown): string {
-  const text =
-    error instanceof Error ? (error.stack ?? `${error.name}: ${error.message}`) : String(error);
-  return text
-    .replace(/(?:\\\\\?\\)?[A-Z]:\\(?:[^\\\s]+\\)*[^\\\s]*/gi, '[caminho local]')
-    .replace(/[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}/g, '[e-mail]')
-    .replace(/(?:Bearer\s+|sk-[A-Za-z0-9_-]{8,})\S+/gi, '[credencial]')
-    .replace(/(?:api[_-]?key|token|secret|password)\s*[:=]\s*\S+/gi, '[credencial]')
-    .replace(/[\r\n\t]+/g, ' ')
-    .slice(0, 1200);
-}
-
 export function useAppEffects(state: ReturnType<typeof useAppState>) {
   const {
     settings,
@@ -163,9 +154,12 @@ export function useAppEffects(state: ReturnType<typeof useAppState>) {
       ]);
       if (!current) return;
       const [pet, permissions, savedProfile, home, history, credential] = results;
+      const currentProfile = normalizeProfileData(
+        savedProfile.status === 'fulfilled' ? savedProfile.value : undefined,
+      );
       if (pet.status === 'fulfilled') setSelectedPet(pet.value);
       if (permissions.status === 'fulfilled') setPermissionIndicator(permissions.value);
-      if (savedProfile.status === 'fulfilled') setProfile(savedProfile.value);
+      if (savedProfile.status === 'fulfilled') setProfile(currentProfile);
       if (home.status === 'fulfilled') setIdentityConfigured(home.value.configured);
       if (credential.status === 'fulfilled')
         setKeySavedForSession(credential.value || provider?.id === 'local');
@@ -186,10 +180,6 @@ export function useAppEffects(state: ReturnType<typeof useAppState>) {
           }
         }
       }
-      const currentProfile =
-        savedProfile.status === 'fulfilled'
-          ? savedProfile.value
-          : { displayName: '', nickname: '', avatarDataUrl: null };
       if (
         home.status === 'fulfilled' &&
         home.value.state === 'integra' &&
@@ -209,7 +199,7 @@ export function useAppEffects(state: ReturnType<typeof useAppState>) {
               { displayName: recovered.displayName, nickname: recovered.nickname },
               reportDiagnostic,
             );
-            setProfile(saved);
+            setProfile(normalizeProfileData(saved));
           }
         } catch {
           // O banner persistente identifica o comando que falhou.
@@ -331,10 +321,11 @@ export function useAppEffects(state: ReturnType<typeof useAppState>) {
       );
     const onError = (event: ErrorEvent) => {
       const id = correlationId();
+      const details = sanitizeDiagnosticDetails(event.error ?? event.message);
       reportDiagnostic(
         'frontend.window.onerror',
-        'Ocorreu um erro não tratado no frontend.',
-        sanitizeDiagnosticDetails(event.error ?? event.message),
+        'A interface encontrou um erro.',
+        `Referência ${id}: ${details || 'O WebView não informou o motivo do erro.'}`,
       );
       void invoke('record_diagnostic_event', {
         event: 'frontend_window_error',
@@ -353,8 +344,8 @@ export function useAppEffects(state: ReturnType<typeof useAppState>) {
       const id = correlationId();
       reportDiagnostic(
         'frontend.unhandledrejection',
-        `Uma promessa do frontend foi rejeitada (referência ${id}).`,
-        detail || 'O WebView não informou o motivo da rejeição.',
+        'Uma ação falhou.',
+        `Referência ${id}: ${detail || 'O WebView não informou o motivo da rejeição.'}`,
       );
       void invoke('record_diagnostic_event', {
         event: 'frontend_unhandled_rejection',

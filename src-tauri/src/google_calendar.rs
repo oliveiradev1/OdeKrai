@@ -93,18 +93,13 @@ fn event_payload(params: &Value) -> Result<Value, String> {
     let end = params["end"]
         .as_str()
         .ok_or("Informe o fim do evento; não vou presumir a duração.")?;
-    if chrono::DateTime::parse_from_rfc3339(start).is_err()
-        || chrono::DateTime::parse_from_rfc3339(end).is_err()
-    {
-        return Err("Início e fim precisam incluir data, hora e fuso horário ISO 8601.".into());
-    }
-    if chrono::DateTime::parse_from_rfc3339(end).unwrap()
-        <= chrono::DateTime::parse_from_rfc3339(start).unwrap()
-    {
+    let zone_start = chrono::DateTime::parse_from_rfc3339(start)
+        .map_err(|_| "Início e fim precisam incluir data, hora e fuso horário ISO 8601.")?;
+    let zone_end = chrono::DateTime::parse_from_rfc3339(end)
+        .map_err(|_| "Início e fim precisam incluir data, hora e fuso horário ISO 8601.")?;
+    if zone_end <= zone_start {
         return Err("O fim do evento precisa ocorrer depois do início.".into());
     }
-    let zone_start = chrono::DateTime::parse_from_rfc3339(start).map_err(|_| "Início inválido.")?;
-    let zone_end = chrono::DateTime::parse_from_rfc3339(end).map_err(|_| "Fim inválido.")?;
     let mut payload = json!({
         "summary": title,
         "location": params["location"].as_str().unwrap_or_default(),
@@ -534,5 +529,16 @@ mod tests {
         assert!(api_error(StatusCode::UNAUTHORIZED).contains("token Google expirou"));
         assert!(api_error(StatusCode::FORBIDDEN).contains("permissão"));
         assert!(api_error(StatusCode::TOO_MANY_REQUESTS).contains("limitou"));
+    }
+
+    #[test]
+    fn event_payload_returns_a_clear_error_for_invalid_dates() {
+        let error = event_payload(&json!({
+            "title":"Reunião",
+            "start":"não é data",
+            "end":"2030-01-01T11:00:00Z"
+        }))
+        .unwrap_err();
+        assert!(error.contains("ISO 8601"));
     }
 }

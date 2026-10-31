@@ -111,6 +111,10 @@ pub enum AgentEvent {
     AwaitingApproval {
         id: String,
         audit_id: String,
+        #[serde(default)]
+        preview: String,
+        #[serde(default)]
+        expires_at: u64,
     },
     ToolResult {
         id: String,
@@ -118,7 +122,7 @@ pub enum AgentEvent {
         is_error: bool,
     },
     ActionCard {
-        card: crate::history::AgentActionCard,
+        card: Box<crate::history::AgentActionCard>,
     },
     FinalResponse {
         content: String,
@@ -171,7 +175,7 @@ pub async fn run_agent<B: AgentBackend>(
     cancel: &CancellationToken,
     mut emit: impl FnMut(AgentEvent),
 ) -> Result<String, String> {
-    if tools.is_empty() || limits.max_turns == 0 || limits.repeated_call_limit == 0 {
+    if limits.max_turns == 0 || limits.repeated_call_limit == 0 {
         return Err("A execu\u{00e7}\u{00e3}o do agente est\u{00e1} indispon\u{00ed}vel.".into());
     }
     let started = Instant::now();
@@ -885,6 +889,186 @@ mod tests {
             })
         }
     }
+
+    struct SimulatedProvider {
+        received_system: String,
+        received_tools: Vec<String>,
+    }
+
+    impl AgentBackend for SimulatedProvider {
+        fn model_turn<'a>(
+            &'a mut self,
+            messages: &'a [Message],
+            tools: &'a [ToolDef],
+            _: &'a CancellationToken,
+        ) -> Pin<Box<dyn Future<Output = Result<ProviderReply, String>> + Send + 'a>> {
+            Box::pin(async move {
+                self.received_system = messages
+                    .iter()
+                    .filter(|message| message.role == "system")
+                    .flat_map(|message| message.blocks.iter())
+                    .filter_map(|block| match block {
+                        Block::Text { text } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                self.received_tools = tools.iter().map(|tool| tool.name.clone()).collect();
+                let has_discord_tool = self
+                    .received_tools
+                    .iter()
+                    .any(|name| name == "discord.send");
+                let answer = if self
+                    .received_system
+                    .contains("Estado do Discord: não configurado")
+                    && !has_discord_tool
+                {
+                    "Falta cadastrar um webhook em Privacidade e permissões > Destinos do Discord."
+                } else if self
+                    .received_system
+                    .contains("Estado do Discord: configurado e ativo")
+                    && has_discord_tool
+                {
+                    "A habilidade do Discord está ativa. Cada envio exige aprovação na janela nativa."
+                } else if self
+                    .received_system
+                    .contains("Estado do Discord: bloqueado")
+                    && !has_discord_tool
+                {
+                    "A habilidade do Discord está desativada em Habilidades > Mensagens."
+                } else {
+                    "O estado do Discord não corresponde às ferramentas desta conversa."
+                };
+                Ok(reply(answer, vec![]))
+            })
+        }
+
+        fn execute_tool<'a>(
+            &'a mut self,
+            _: &'a ToolCall,
+            _: bool,
+            _: &'a CancellationToken,
+        ) -> Pin<Box<dyn Future<Output = Result<ToolExecution, String>> + Send + 'a>> {
+            Box::pin(async { Err("O fornecedor simulado não executa ferramentas.".into()) })
+        }
+    }
+
+    #[tokio::test]
+    async fn simulated_provider_explains_pending_discord_setup_without_claiming_tool_missing() {
+        let enabled = std::collections::HashSet::from(["discord.send".to_string()]);
+        let offer = crate::security::skills::SkillTurnOffer::from_registry(
+            crate::security::skills::registry(),
+            &enabled,
+            false,
+        );
+        let tools = offer.model_tools();
+        let mut messages = vec![Message {
+            role: "system".into(),
+            blocks: vec![Block::Text {
+                text: offer.system_context(),
+            }],
+        }];
+        let mut provider = SimulatedProvider {
+            received_system: String::new(),
+            received_tools: Vec::new(),
+        };
+        let result = run_agent(
+            &mut provider,
+            &mut messages,
+            &tools,
+            AgentLimits::default(),
+            &CancellationToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap();
+
+        assert!(result.contains("Falta cadastrar um webhook"));
+        assert!(provider.received_tools.is_empty());
+        assert!(provider
+            .received_system
+            .contains("Não diga que a ferramenta não existe"));
+    }
+
+    #[tokio::test]
+    async fn simulated_provider_reports_active_discord_as_offered_with_mandatory_approval() {
+        let enabled = std::collections::HashSet::from(["discord.send".to_string()]);
+        let offer = crate::security::skills::SkillTurnOffer::from_registry(
+            crate::security::skills::registry(),
+            &enabled,
+            true,
+        );
+        let tools = offer.model_tools();
+        let mut messages = vec![Message {
+            role: "system".into(),
+            blocks: vec![Block::Text {
+                text: offer.system_context(),
+            }],
+        }];
+        let mut provider = SimulatedProvider {
+            received_system: String::new(),
+            received_tools: Vec::new(),
+        };
+        let result = run_agent(
+            &mut provider,
+            &mut messages,
+            &tools,
+            AgentLimits::default(),
+            &CancellationToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap();
+
+        assert!(provider
+            .received_tools
+            .iter()
+            .any(|name| name == "discord.send"));
+        assert!(provider
+            .received_system
+            .contains("Cada envio exige aprovação"));
+        assert!(result.contains("Cada envio exige aprovação na janela nativa"));
+    }
+
+    #[tokio::test]
+    async fn simulated_provider_reports_disabled_discord_as_blocked_without_claiming_it_missing() {
+        let offer = crate::security::skills::SkillTurnOffer::from_registry(
+            crate::security::skills::registry(),
+            &std::collections::HashSet::new(),
+            true,
+        );
+        let tools = offer.model_tools();
+        let mut messages = vec![Message {
+            role: "system".into(),
+            blocks: vec![Block::Text {
+                text: offer.system_context(),
+            }],
+        }];
+        let mut provider = SimulatedProvider {
+            received_system: String::new(),
+            received_tools: Vec::new(),
+        };
+        let result = run_agent(
+            &mut provider,
+            &mut messages,
+            &tools,
+            AgentLimits::default(),
+            &CancellationToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap();
+
+        assert!(!provider
+            .received_tools
+            .iter()
+            .any(|name| name == "discord.send"));
+        assert!(provider
+            .received_system
+            .contains("Estado do Discord: bloqueado"));
+        assert!(result.contains("desativada em Habilidades > Mensagens"));
+    }
+
     fn reply(content: &str, calls: Vec<ToolCall>) -> ProviderReply {
         ProviderReply {
             content: content.into(),
@@ -1305,11 +1489,29 @@ mod tests {
         let event = AgentEvent::AwaitingApproval {
             id: "approval-1".into(),
             audit_id: "audit-1".into(),
+            preview: "Prévia segura".into(),
+            expires_at: 123,
         };
         let value = serde_json::to_value(event).unwrap();
         assert_eq!(value["type"], "awaitingApproval");
+        assert_eq!(value["preview"], "Prévia segura");
+        assert_eq!(value["expiresAt"], 123);
         assert_eq!(value["id"], "approval-1");
         assert_eq!(value["auditId"], "audit-1");
+        let legacy: AgentEvent = serde_json::from_value(serde_json::json!({
+            "type": "awaitingApproval",
+            "id": "legacy",
+            "auditId": "legacy-audit"
+        }))
+        .unwrap();
+        assert!(matches!(
+            legacy,
+            AgentEvent::AwaitingApproval {
+                preview,
+                expires_at,
+                ..
+            } if preview.is_empty() && expires_at == 0
+        ));
         let error = serde_json::to_value(AgentEvent::FinalResponse {
             content: "pronto".into(),
         })

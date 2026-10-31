@@ -33,6 +33,56 @@ pub struct StoredMessage {
 
 #[derive(Clone, Debug, Serialize, serde::Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct AgentTimelineEntry {
+    pub label: String,
+    pub status: String,
+    pub duration_ms: Option<i64>,
+    pub at: i64,
+}
+
+#[derive(Clone, Debug, Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentArtifact {
+    pub path: String,
+    pub kind: String,
+}
+
+#[derive(Clone, Debug, Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct UndoDescriptor {
+    pub skill_id: String,
+    pub state_id: String,
+    pub path: Option<String>,
+    pub label: String,
+}
+
+#[derive(Clone, Debug, Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentPlanStepStatus {
+    Pending,
+    InProgress,
+    Completed,
+    Failed,
+}
+
+#[derive(Clone, Debug, Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentPlanStep {
+    pub description: String,
+    pub status: AgentPlanStepStatus,
+}
+
+#[derive(Clone, Debug, Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentPlan {
+    pub title: String,
+    pub steps: Vec<AgentPlanStep>,
+    #[serde(default)]
+    pub outside_plan_actions: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct AgentActionCard {
     pub id: String,
     pub skill_id: String,
@@ -43,6 +93,22 @@ pub struct AgentActionCard {
     pub summary: String,
     pub result_summary: String,
     pub diff: Option<String>,
+    #[serde(default)]
+    pub preview: Option<String>,
+    #[serde(default)]
+    pub artifacts: Vec<AgentArtifact>,
+    #[serde(default)]
+    pub timeline: Vec<AgentTimelineEntry>,
+    #[serde(default)]
+    pub duration_ms: Option<i64>,
+    #[serde(default)]
+    pub approval_expires_at: Option<i64>,
+    #[serde(default)]
+    pub untrusted_result: bool,
+    #[serde(default)]
+    pub undo_descriptor: Option<UndoDescriptor>,
+    #[serde(default)]
+    pub plan: Option<AgentPlan>,
     pub created_at: i64,
 }
 
@@ -66,6 +132,52 @@ pub(crate) fn save_agent_action_card(
         || card.summary.len() > 500
         || card.result_summary.len() > 500
         || card.diff.as_ref().is_some_and(|diff| diff.len() > 16_000)
+        || card
+            .preview
+            .as_ref()
+            .is_some_and(|preview| preview.len() > 32_000)
+        || card.artifacts.len() > 32
+        || card.timeline.len() > 128
+        || card.undo_descriptor.as_ref().is_some_and(|undo| {
+            undo.skill_id.len() > 64
+                || undo.state_id.len() > 128
+                || undo.label.len() > 160
+                || undo
+                    .path
+                    .as_ref()
+                    .is_some_and(|path| path.len() > 4096 || path.chars().any(char::is_control))
+        })
+        || card.plan.as_ref().is_some_and(|plan| {
+            plan.title.is_empty()
+                || plan.title.chars().count() > 120
+                || plan.steps.is_empty()
+                || plan.steps.len() > 12
+                || plan.outside_plan_actions.len() > 8
+                || plan.steps.iter().any(|step| {
+                    step.description.is_empty() || step.description.chars().count() > 240
+                })
+                || plan
+                    .outside_plan_actions
+                    .iter()
+                    .any(|action| action.is_empty() || action.chars().count() > 120)
+        })
+        || card.artifacts.iter().any(|artifact| {
+            artifact.path.is_empty()
+                || artifact.path.len() > 32_767
+                || artifact.kind.len() > 40
+                || artifact.path.chars().any(char::is_control)
+        })
+        || card.timeline.iter().any(|entry| {
+            entry.label.len() > 160
+                || entry.status.len() > 80
+                || entry.label.chars().any(char::is_control)
+                || entry.status.chars().any(char::is_control)
+        })
+        || card.preview.as_ref().is_some_and(|preview| {
+            preview
+                .chars()
+                .any(|character| character.is_control() && character != '\n' && character != '\t')
+        })
         || [
             &card.title,
             &card.risk,
@@ -80,14 +192,27 @@ pub(crate) fn save_agent_action_card(
         return Err("Cartão de ação inválido.".into());
     }
     let changed = database(app)?.execute(
-        "INSERT INTO agent_action_cards(conversation_id,id,skill_id,title,risk,decision,status,summary,result_summary,diff) SELECT ?1,?2,?3,?4,?5,?6,?7,?8,?9,?10 WHERE EXISTS(SELECT 1 FROM conversations WHERE id=?1) ON CONFLICT(conversation_id,id) DO UPDATE SET decision=excluded.decision,status=excluded.status,result_summary=excluded.result_summary,diff=excluded.diff",
-        params![conversation_id,card.id,card.skill_id,card.title,card.risk,card.decision,card.status,card.summary,card.result_summary,card.diff],
+        "INSERT INTO agent_action_cards(conversation_id,id,skill_id,title,risk,decision,status,summary,result_summary,diff,preview,artifacts,timeline,duration_ms,approval_expires_at,untrusted_result,undo_descriptor,plan) SELECT ?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18 WHERE EXISTS(SELECT 1 FROM conversations WHERE id=?1) ON CONFLICT(conversation_id,id) DO UPDATE SET decision=excluded.decision,status=excluded.status,result_summary=excluded.result_summary,diff=excluded.diff,preview=excluded.preview,artifacts=excluded.artifacts,timeline=excluded.timeline,duration_ms=excluded.duration_ms,approval_expires_at=excluded.approval_expires_at,untrusted_result=excluded.untrusted_result,undo_descriptor=excluded.undo_descriptor,plan=excluded.plan",
+        params![conversation_id,card.id,card.skill_id,card.title,card.risk,card.decision,card.status,card.summary,card.result_summary,card.diff,card.preview,serde_json::to_string(&card.artifacts).unwrap_or_else(|_| "[]".into()),serde_json::to_string(&card.timeline).unwrap_or_else(|_| "[]".into()),card.duration_ms,card.approval_expires_at,card.untrusted_result,card.undo_descriptor.as_ref().and_then(|undo| serde_json::to_string(undo).ok()),card.plan.as_ref().and_then(|plan| serde_json::to_string(plan).ok())],
     ).map_err(|_| "Não foi possível salvar o cartão da ação.".to_string())?;
     if changed == 1 {
         Ok(())
     } else {
         Err("A conversa do cartão não existe no histórico local.".into())
     }
+}
+
+pub(crate) fn clear_undo_descriptor_for_state(
+    app: &tauri::AppHandle,
+    state_id: &str,
+) -> Result<(), String> {
+    let db = database(app)?;
+    db.execute(
+        "UPDATE agent_action_cards SET undo_descriptor=NULL WHERE json_extract(undo_descriptor,'$.stateId')=?1",
+        [state_id],
+    )
+    .map_err(|_| "Não foi possível atualizar o cartão da ação restaurada.".to_string())?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -102,7 +227,7 @@ pub fn load_agent_action_cards(
     }
     let db = database(&app)?;
     let mut statement = db
-        .prepare("SELECT id,skill_id,title,risk,decision,status,summary,result_summary,diff,created_at FROM agent_action_cards WHERE conversation_id=?1 ORDER BY created_at,id LIMIT 200")
+        .prepare("SELECT id,skill_id,title,risk,decision,status,summary,result_summary,diff,created_at,preview,artifacts,timeline,duration_ms,approval_expires_at,untrusted_result,undo_descriptor,plan FROM agent_action_cards WHERE conversation_id=?1 ORDER BY created_at,id LIMIT 200")
         .map_err(|_| "Não foi possível ler as ações da conversa.".to_string())?;
     let rows = statement
         .query_map([conversation_id], |row| {
@@ -117,6 +242,30 @@ pub fn load_agent_action_cards(
                 result_summary: row.get(7)?,
                 diff: row.get(8)?,
                 created_at: row.get(9)?,
+                preview: row.get(10)?,
+                artifacts: row
+                    .get::<_, String>(11)
+                    .ok()
+                    .and_then(|value| serde_json::from_str(&value).ok())
+                    .unwrap_or_default(),
+                timeline: row
+                    .get::<_, String>(12)
+                    .ok()
+                    .and_then(|value| serde_json::from_str(&value).ok())
+                    .unwrap_or_default(),
+                duration_ms: row.get(13)?,
+                approval_expires_at: row.get(14)?,
+                untrusted_result: row.get(15).unwrap_or(false),
+                undo_descriptor: row
+                    .get::<_, Option<String>>(16)
+                    .ok()
+                    .flatten()
+                    .and_then(|value| serde_json::from_str(&value).ok()),
+                plan: row
+                    .get::<_, Option<String>>(17)
+                    .ok()
+                    .flatten()
+                    .and_then(|value| serde_json::from_str(&value).ok()),
             })
         })
         .map_err(|_| "Não foi possível ler as ações da conversa.".to_string())?;
@@ -142,7 +291,7 @@ fn init_schema(db: &Connection) -> Result<(), String> {
         CREATE TABLE IF NOT EXISTS conversations (id TEXT PRIMARY KEY, title TEXT NOT NULL, created_at INTEGER NOT NULL DEFAULT (unixepoch()), provider_id TEXT NOT NULL DEFAULT '', model TEXT NOT NULL DEFAULT '', agent_enabled INTEGER NOT NULL DEFAULT 0 CHECK(agent_enabled IN (0,1)), provider_targets TEXT NOT NULL DEFAULT '[]');
         CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY, conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE, role TEXT NOT NULL CHECK(role IN ('user','assistant')), content TEXT NOT NULL, created_at INTEGER NOT NULL DEFAULT (unixepoch()));
         CREATE TABLE IF NOT EXISTS agent_messages (id INTEGER PRIMARY KEY, conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE, role TEXT NOT NULL CHECK(role IN ('tool_call','tool_result')), skill_id TEXT NOT NULL, audit_id TEXT, content TEXT NOT NULL, created_at INTEGER NOT NULL DEFAULT (unixepoch()));
-        CREATE TABLE IF NOT EXISTS agent_action_cards (conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE, id TEXT NOT NULL, skill_id TEXT NOT NULL, title TEXT NOT NULL, risk TEXT NOT NULL, decision TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NOT NULL, result_summary TEXT NOT NULL DEFAULT '', diff TEXT, created_at INTEGER NOT NULL DEFAULT (unixepoch()), PRIMARY KEY(conversation_id,id));
+        CREATE TABLE IF NOT EXISTS agent_action_cards (conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE, id TEXT NOT NULL, skill_id TEXT NOT NULL, title TEXT NOT NULL, risk TEXT NOT NULL, decision TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NOT NULL, result_summary TEXT NOT NULL DEFAULT '', diff TEXT, created_at INTEGER NOT NULL DEFAULT (unixepoch()), preview TEXT, artifacts TEXT NOT NULL DEFAULT '[]', timeline TEXT NOT NULL DEFAULT '[]', duration_ms INTEGER, approval_expires_at INTEGER, untrusted_result INTEGER NOT NULL DEFAULT 0, undo_descriptor TEXT, plan TEXT, PRIMARY KEY(conversation_id,id));
         CREATE INDEX IF NOT EXISTS messages_conversation ON messages(conversation_id, id);
         CREATE TABLE IF NOT EXISTS pet_preferences (key TEXT PRIMARY KEY, value TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS provider_tool_support (
@@ -180,6 +329,24 @@ fn init_schema(db: &Connection) -> Result<(), String> {
                 "ALTER TABLE conversations ADD COLUMN {column} {definition}"
             ))
             .map_err(|_| "Não foi possível atualizar o histórico local.".to_string())?;
+        }
+    }
+    for (column, definition) in [
+        ("preview", "TEXT"),
+        ("artifacts", "TEXT NOT NULL DEFAULT '[]'"),
+        ("timeline", "TEXT NOT NULL DEFAULT '[]'"),
+        ("duration_ms", "INTEGER"),
+        ("approval_expires_at", "INTEGER"),
+        ("untrusted_result", "INTEGER NOT NULL DEFAULT 0"),
+        ("undo_descriptor", "TEXT"),
+        ("plan", "TEXT"),
+    ] {
+        let exists: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('agent_action_cards') WHERE name = ?1)", [column], |row| row.get(0)).map_err(|_| "Não foi possível verificar os cartões de ação.".to_string())?;
+        if !exists {
+            db.execute_batch(&format!(
+                "ALTER TABLE agent_action_cards ADD COLUMN {column} {definition}"
+            ))
+            .map_err(|_| "Não foi possível atualizar os cartões de ação.".to_string())?;
         }
     }
     Ok(())
@@ -714,7 +881,7 @@ pub async fn list_conversations(
 fn read_conversations(db: &Connection) -> Result<Vec<Conversation>, String> {
     let mut stmt = db
         .prepare(
-            "SELECT c.id, c.title, c.created_at, COALESCE((SELECT substr(content, 1, 240) FROM messages WHERE conversation_id = c.id ORDER BY id DESC LIMIT 1), ''), c.provider_id, c.model, c.agent_enabled FROM conversations c ORDER BY c.created_at DESC, c.rowid DESC LIMIT 100",
+            "SELECT c.id, c.title, c.created_at, COALESCE((SELECT substr(content, 1, 240) FROM messages WHERE conversation_id = c.id ORDER BY id DESC LIMIT 1), ''), c.provider_id, c.model, c.agent_enabled FROM conversations c ORDER BY COALESCE((SELECT MAX(id) FROM messages WHERE conversation_id = c.id), 0) DESC, c.created_at DESC, c.rowid DESC LIMIT 100",
         )
         .map_err(|_| "Não foi possível ler o histórico local.".to_string())?;
     let rows = stmt
@@ -976,6 +1143,31 @@ mod tests {
     }
 
     #[test]
+    fn legacy_agent_cards_deserialize_and_card_columns_migrate_without_data_loss() {
+        let legacy_json = r#"{"id":"call-legacy","skillId":"files.read","title":"Ler arquivo","risk":"leitura","decision":"automática","status":"Concluída","summary":"Resumo","resultSummary":"Texto","diff":null,"createdAt":10}"#;
+        let legacy: AgentActionCard = serde_json::from_str(legacy_json).unwrap();
+        assert!(legacy.timeline.is_empty());
+        assert!(legacy.artifacts.is_empty());
+        assert!(legacy.undo_descriptor.is_none());
+        assert!(legacy.plan.is_none());
+        assert_eq!(legacy.status, "Concluída");
+
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch("CREATE TABLE conversations (id TEXT PRIMARY KEY, title TEXT NOT NULL, created_at INTEGER NOT NULL DEFAULT (unixepoch())); CREATE TABLE agent_action_cards (conversation_id TEXT NOT NULL, id TEXT NOT NULL, skill_id TEXT NOT NULL, title TEXT NOT NULL, risk TEXT NOT NULL, decision TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NOT NULL, result_summary TEXT NOT NULL DEFAULT '', diff TEXT, created_at INTEGER NOT NULL DEFAULT (unixepoch()), PRIMARY KEY(conversation_id,id)); INSERT INTO conversations(id,title) VALUES ('keep','Histórico'); INSERT INTO agent_action_cards(conversation_id,id,skill_id,title,risk,decision,status,summary,result_summary) VALUES ('keep','call-legacy','files.read','Ler arquivo','leitura','automática','Concluída','Resumo','Texto');").unwrap();
+        init_schema(&db).unwrap();
+        let (status, artifacts, timeline, undo, plan): (String, String, String, Option<String>, Option<String>) = db.query_row("SELECT status,artifacts,timeline,undo_descriptor,plan FROM agent_action_cards WHERE id='call-legacy'", [], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?))).unwrap();
+        assert_eq!(status, "Concluída");
+        assert_eq!(artifacts, "[]");
+        assert_eq!(timeline, "[]");
+        assert!(undo.is_none());
+        assert!(plan.is_none());
+        let has_undo_column: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('agent_action_cards') WHERE name='undo_descriptor')", [], |row| row.get(0)).unwrap();
+        assert!(has_undo_column);
+        let has_plan_column: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('agent_action_cards') WHERE name='plan')", [], |row| row.get(0)).unwrap();
+        assert!(has_plan_column);
+    }
+
+    #[test]
     fn schema_and_foreign_keys_are_valid() {
         let db = Connection::open_in_memory().unwrap();
         init_schema(&db).unwrap();
@@ -1094,6 +1286,24 @@ mod tests {
         assert_eq!(items[0].preview, "");
         assert_eq!(items[0].provider_id, "");
         assert_eq!(items[0].model, "");
+    }
+
+    #[test]
+    fn conversation_list_sorts_by_latest_message_activity() {
+        let db = Connection::open_in_memory().unwrap();
+        init_schema(&db).unwrap();
+        db.execute_batch(
+            "INSERT INTO conversations (id, title, created_at) VALUES
+                ('older-active', 'Mais ativa', 10),
+                ('newer-idle', 'Mais nova', 20);
+             INSERT INTO messages (conversation_id, role, content, created_at)
+                VALUES ('older-active', 'user', 'Retomada recente', 30);",
+        )
+        .unwrap();
+
+        let items = read_conversations(&db).unwrap();
+        assert_eq!(items[0].id, "older-active");
+        assert_eq!(items[1].id, "newer-idle");
     }
 
     #[test]

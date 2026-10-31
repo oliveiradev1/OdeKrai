@@ -6,6 +6,12 @@ import { moveFallbackProvider, setFallbackProviderIds } from '../../core/provide
 import { PageHeader, Toggle } from '../DesignSystem';
 import { CodeDelegationSettings } from '../CodeDelegationSettings';
 import { localBrazilianPortugueseVoices, type LocalSpeechVoice } from '../../core/speech';
+import { openUrl } from '@tauri-apps/plugin-opener';
+import {
+  MICROSOFT_SPEECH_SETTINGS_URL,
+  openMicrosoftSupportLink,
+} from '../../core/microsoft-support-link';
+import type { PerformanceModeView } from '../usePerformanceMode';
 
 type ProviderUsage = {
   providerId: string;
@@ -26,11 +32,13 @@ export function SettingsScreen({
   settings,
   update,
   onOpenPermissions,
+  performanceStatus,
   embedded = false,
 }: {
   settings: AppSettings;
   update: (next: AppSettings) => void;
   onOpenPermissions: () => void;
+  performanceStatus: PerformanceModeView;
   embedded?: boolean;
 }) {
   const [usage, setUsage] = useState<ProviderUsage[]>([]);
@@ -43,6 +51,7 @@ export function SettingsScreen({
   });
   const [agentLimitsError, setAgentLimitsError] = useState('');
   const [speechVoices, setSpeechVoices] = useState<LocalSpeechVoice[]>([]);
+  const [speechHelpError, setSpeechHelpError] = useState('');
   const totalTokensToday = usage.reduce(
     (total, item) => total + item.todayInput + item.todayOutput,
     0,
@@ -115,6 +124,20 @@ export function SettingsScreen({
           </select>
         </div>
       </section>
+      <section id="settings-updates" className="settings-panel settings-section">
+        <h2>Atualizações</h2>
+        <div className="preference-row">
+          <div>
+            <strong>Mostrar novidades de novas versões</strong>
+            <span>Exibe as notas da versão uma vez quando uma versão nova for aberta.</span>
+          </div>
+          <Toggle
+            checked={settings.showReleaseNotes}
+            label="Mostrar novidades de novas versões"
+            onClick={() => update({ ...settings, showReleaseNotes: !settings.showReleaseNotes })}
+          />
+        </div>
+      </section>
       <section id="settings-window" className="settings-panel settings-section">
         <h2>Janela</h2>
         <div className="preference-row">
@@ -137,6 +160,38 @@ export function SettingsScreen({
           </select>
         </div>
       </section>
+      <section id="settings-performance" className="settings-panel settings-section">
+        <h2>Desempenho</h2>
+        <div className="preference-row">
+          <div>
+            <strong>Modo Desempenho</strong>
+            <span>
+              Automático ativa com movimento reduzido do Windows, até 8 GiB de RAM ou no máximo 4
+              núcleos lógicos de CPU. Desligado desativa esta regra; o movimento reduzido do Windows
+              continua sendo respeitado.
+            </span>
+          </div>
+          <select
+            aria-label="Modo Desempenho"
+            value={settings.performanceMode}
+            onChange={(event) =>
+              update({
+                ...settings,
+                performanceMode: event.target.value as AppSettings['performanceMode'],
+              })
+            }
+          >
+            <option value="automatic">Automático</option>
+            <option value="enabled">Ligado</option>
+            <option value="disabled">Desligado</option>
+          </select>
+        </div>
+        <p className="settings-description" role="status" aria-live="polite">
+          {performanceStatus.loading
+            ? 'Verificando movimento reduzido e recursos do computador…'
+            : performanceStatus.reason}
+        </p>
+      </section>
       <section id="settings-appearance" className="settings-panel settings-section">
         <h2>Aparência</h2>
         <div className="preference-row">
@@ -148,6 +203,20 @@ export function SettingsScreen({
             checked={settings.reduceMotion}
             label="Reduzir animações"
             onClick={() => update({ ...settings, reduceMotion: !settings.reduceMotion })}
+          />
+        </div>
+        <div className="preference-row">
+          <div>
+            <strong>Reduzir mascote</strong>
+            <span>
+              Usa uma imagem estática no Início e nos estados vazios. A janela do pet continua
+              seguindo Reduzir animações e a preferência do sistema.
+            </span>
+          </div>
+          <Toggle
+            checked={settings.reduceMascot}
+            label="Reduzir mascote"
+            onClick={() => update({ ...settings, reduceMascot: !settings.reduceMascot })}
           />
         </div>
         <div className="preference-row">
@@ -231,15 +300,21 @@ export function SettingsScreen({
             Hora e idioma → Idioma e região → opções do Português (Brasil) e instale o recurso
             “Conversão de texto em fala”. Depois, feche e abra o OdeKrai.{' '}
             <a
-              href="https://support.microsoft.com/pt-br/windows/hardware/input-devices/manage-the-language-and-keyboard-input-layout-settings-in-windows"
-              target="_blank"
-              rel="noreferrer"
+              href={MICROSOFT_SPEECH_SETTINGS_URL}
+              onClick={(event) => {
+                event.preventDefault();
+                void openMicrosoftSupportLink(MICROSOFT_SPEECH_SETTINGS_URL, openUrl).then(
+                  () => setSpeechHelpError(''),
+                  () => setSpeechHelpError('Não foi possível abrir as instruções da Microsoft.'),
+                );
+              }}
             >
               Instruções da Microsoft
             </a>
             .
           </p>
         )}
+        {speechHelpError && <p role="alert">{speechHelpError}</p>}
         <div className="preference-row">
           <label htmlFor="speech-rate">
             <strong>Velocidade</strong>

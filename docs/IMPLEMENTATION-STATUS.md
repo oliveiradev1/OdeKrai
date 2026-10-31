@@ -1,8 +1,52 @@
 # Estado da implementação
 
+## L12 — auditoria de interface e limpeza
+
+- Rastreamento local confirmou os componentes atuais do Início e os testes de regressão; removidos apenas `.home-footer` e três regras CSS específicas do Início sem referências nos arquivos TSX. O componente de tela não foi descartado: continua como destino interno da rota Início.
+- A sequência de commits deste ramo cobre L0 e L2–L11: Design System (`0203b5a`), Início (`c5a8ace`), cartões (`e903124`, `bd407a3`), desfazer (`50c2846`, `83efcae`), planos (`e1dbcaf`, `83b5ba2`), painel (`bada860`), paleta (`ab2f1ac`), mascote (`488b789`), Compacto (`eeaa545`), primeiro uso (`7ea4896`), novidades (`94ff788`) e Desempenho (`883280c`). L1 foi pulado: não há prompt com requisitos nem fase nomeada correspondente no histórico disponível; não é possível implementá-lo ou validá-lo sem inventar seu escopo.
+- Auditoria estática e testes existentes cobrem ordem de foco/modal/painel, rótulos, combobox, redução de movimento, dados externos como texto, ausência de decisões de aprovação fora da janela nativa e validação nativa de caminhos. Contraste automatizado cobre pares de tokens principais, não cada combinação de pixels da UI.
+- Bundle JS+CSS medido antes da limpeza: 881.681 bytes (861,0 KiB); depois da limpeza: 881.282 bytes (860,6 KiB), redução de 399 bytes (0,39 KiB). IPC total por 60 s e CPU em idle antes/depois dependem do executável instrumentado no Windows e permanecem pendentes.
+- O roteiro para 1000×600 e 1250×700 está em [`WINDOWS-MANUAL-VALIDATION.md`](WINDOWS-MANUAL-VALIDATION.md). A validação visual, foco, DPI e medições no exe seguem pendentes.
+
+## L11 — modo Desempenho
+
+- A preferência é Automático, Ligado ou Desligado. Automático ativa com `prefers-reduced-motion` ou com até 8 GiB de RAM total ou no máximo 4 núcleos lógicos; falhas de consulta não presumem hardware fraco e a interface informa o motivo.
+- Ligado aplica `data-performance="on"` à janela principal e à janela do pet. Sombras, superfícies translúcidas, imagens de fundo/gradientes e animações do mascote são removidos; o modal não se move. Os recursos funcionais permanecem disponíveis.
+- Build de produção medido no Linux: 881.681 bytes (861,0 KiB) de JavaScript e CSS, sem fontes e imagens; Ligado e Desligado usam o mesmo bundle, pois a opção só altera CSS em tempo de execução (delta: 0 bytes).
+- A medição real de CPU em idle e contagem total de IPC durante 60 s depende de executar as janelas Tauri no Windows e permanece pendente. Automático faz uma consulta inicial do perfil de hardware; não há consulta periódica para o modo Desempenho.
+
+## L10 — notas de versão no app
+
+- `scripts/generate-release-notes.mjs` valida `docs/releases/*.md` e gera o manifesto JSON que entra no bundle. A geração ocorre antes de dev, build e testes e exige versão atual com notas formatadas.
+- Instalações existentes veem o resumo extraído da nota atual uma vez por versão; primeira instalação apenas registra a versão. A lista de versões usa o manifesto local. Configurações permite desligar o aviso, e Sobre abre as notas completas da versão pelo fluxo seguro de link externo.
+- Testes cobrem manifesto, erro de formatação, nota ausente, primeira instalação, versão igual/nova, opção desligada e renderização das notas embutidas.
+
+## L9 — assistente de primeiro uso
+
+- O Modal apresenta provedor, pasta, mascote e permissões reutilizando `ProvidersScreen`, `IdentityScreen`/`AgentHome`, `AssistantScreen` e `SecurityCenter`; as configurações continuam no estado compartilhado do app. A etapa de provedores começa na aba de planos gratuitos verificados, e a chave continua no Gerenciador de Credenciais do Windows e é apagada do campo após salvar. No modo do assistente, descoberta/listagem de modelos e teste rápido ficam indisponíveis; salvar valida apenas o formato/endereço localmente, sem enviar dados ao provedor. A conexão só é testada pela ação explícita “Testar conexão sem gerar resposta”.
+- Pular, avançar, voltar e escolher uma etapa são permitidos. Passo atual e conclusão real ficam em `localStorage` sem credenciais; o Modal abre sozinho uma vez e pode ser reaberto em Ajuda e suporte. O modo de permissões reaproveita `set_permission_mode`, incluindo a confirmação nativa para Controle total. O checklist do Início não foi alterado.
+- Testes cobrem persistência/retomada, pular e voltar, abertura única, conclusão que acompanha requisitos e rótulos ARIA das etapas. Validação visual no Windows permanece pendente.
+
+## L8 — comando rápido na ilha
+
+- O modo expandido da janela `pet` inclui campo de uma linha e até três sugestões reais geradas pela mesma `createHomeSuggestions` usada no Início. Enviar encaminha o texto ao `sendMessage` existente no app principal, que persiste e executa a conversa no motor atual; a ilha mostra um resumo e oferece “Abrir no OdeKrai”.
+- A janela continua criada uma única vez sob demanda. O foco temporário é solicitado por `set_pet_keyboard_focus`, comando Rust async restrito à janela `pet`, e volta a `focusable(false)` ao perder foco, enviar ou pressionar Escape. Os alertas da fila aparecem com “Revisar”; aprovações abrem a janela nativa e a ilha não contém decisões de aprovação.
+- O pacote local `@tauri-apps/api` 2.8 documenta `setFocusable` e `setFocus`; o caminho nativo usado aqui é o equivalente Rust. A consulta à documentação da Microsoft sobre ativação/foco da janela foi bloqueada pelo ambiente (HTTP 403), portanto a semântica do Windows ainda requer confirmação e teste. Atalho global para o comando rápido não foi registrado: o handler atual do plugin de atalhos encaminha todo atalho registrado ao kill switch, e separar os destinos com segurança requer uma mudança própria.
+- Testes unitários cobrem a sequência de foco, envio duplicado, criação de conversa, limite de sugestões e roteamento de alertas. Validação visual/foco em Windows, monitores e DPI permanece pendente.
+
 ## Diálogo modal reutilizável
 
 - `src/ui/Modal.tsx` fornece um modal acessível seguindo o padrão [Dialog (Modal) da WAI-ARIA Authoring Practices](https://www.w3.org/WAI/ARIA/apg/patterns/dialog-modal/): nome por `aria-labelledby`, fundo inerte, foco inicial, ciclo de foco por Tab, Escape, retorno de foco e rolagem isolada. O conteúdo de fundo continua montado. A aparência respeita movimento reduzido e `data-performance="on"`; o componente ainda não substitui diálogos existentes.
+
+## Paleta de comandos
+
+- `Ctrl+K` abre a paleta dentro da janela focada. A tabela tipada deriva páginas, Configurações pelo menu e índice únicos, famílias de habilidades e mascotes reais, e inclui ações para conversas, modo agente, permissões, parada e silêncio. Busca aproximada, recência em sessão e navegação por setas/Enter/Escape estão implementadas. O campo segue o padrão WAI-ARIA combobox/listbox com `aria-activedescendant`; o modal reutilizado administra foco inicial e retorno. A alteração de modo de permissão reutiliza `set_permission_mode` no Rust, que exige confirmação nativa antes de salvar. Sobre lista o atalho. Validação visual e teste de foco no Windows permanecem pendentes.
+
+## Estado e movimento do mascote
+
+- Eventos reais do agente mapeiam para os sprites idle, thinking, working, awaiting approval, success, error e paused; a FSM existente continua dirigindo a janela do pet. O estado é exposto também no nome acessível e no indicador do avatar do chat. Não há estado de voz fabricado.
+- Início, lista/vazio de conversa e resultados vazios da agenda usam o mascote escolhido. A nova preferência persistida `reduceMascot` mostra imagem estática nesses locais; a janela do pet segue `reduceMotion` e `prefers-reduced-motion`. Um store compartilhado pausa sprites se o documento/janela fica oculto ou minimizado, e pausa após 2,5 s sem foco; ele retoma ao voltar. A opção `data-performance="on"` também desativa animações e dicas de idle. Sem polling contínuo.
+- Testes cobrem mapeamento de estados, pausa/retomada, modo estático e persistência. Uso de CPU em idle não foi medido nesta sessão; a inspeção visual no Windows permanece pendente.
 
 ## Navegação do Hub
 
@@ -17,7 +61,7 @@
 ## Sidebar e perfil
 
 - A janela principal pode consultar, por um comando Rust somente de leitura e restrito à janela principal, a quantidade de aprovações pendentes e não expiradas. As aprovações continuam sendo decididas exclusivamente na janela nativa; a contagem serve apenas para navegação.
-- A navegação lateral mostra Visão geral, Conversas, Agenda, Habilidades e Conectores de IA sem cabeçalhos de grupo. O cartão do perfil fica no rodapé e abre um menu por teclado; Ajuda e suporte abre a pasta `docs/` do repositório pelo fluxo existente de validação e confirmação de links externos. O contador de aprovações abre Atividade e Parar tudo aparece enquanto chat ou agente estão em execução.
+- A navegação lateral mostra Início, Conversas, Agenda, Habilidades e Conectores de IA sem cabeçalhos de grupo. Início concentra o mascote selecionado, campo de mensagem, sugestões baseadas em habilidades/dados locais disponíveis, checklist de requisitos e as três conversas mais recentes. A faixa de aprovação do Início abre a janela nativa por comando Rust restrito à janela principal; o indicador do cabeçalho continua abrindo Atividade. O cartão do perfil fica no rodapé e abre um menu por teclado; Ajuda e suporte abre a pasta `docs/` do repositório pelo fluxo existente de validação e confirmação de links externos. Parar tudo aparece enquanto chat ou agente estão em execução.
 - A validação visual do rodapé em janelas curtas, menu compacto, popover e controles do cabeçalho continua pendente no Windows.
 
 ## Captura de tela e análise visual
@@ -51,7 +95,7 @@ Atualizado em 24/10/2026 após a verificação de fechamento da Fase 3. Requisit
 
 ## Fase 4
 
-**Implementado com limites.** `agent_runtime::agent_run` prepara a execução e `agent::run_agent` coordena chamadas de modelo e ferramentas, respeitando limites, cancelamento e respostas de aprovação. `security::skills::model_tools` oferece somente habilidades ativadas; o dispatcher aplica schemas, política e executor Rust. Os adaptadores e modelos não têm suporte uniforme a tools, e não há roteador geral entre provedores. Os testes em `agent.rs`, `agent_runtime.rs` e `security/` cobrem a continuidade e os bloqueios. A matriz de evidências está em [`TRACEABILITY.md`](TRACEABILITY.md).
+**Implementado com limites.** `agent_runtime::agent_run` prepara a execução e `agent::run_agent` coordena chamadas de modelo e ferramentas, respeitando limites, cancelamento e respostas de aprovação. Um snapshot imutável por execução deriva, pela mesma regra, as ferramentas, o contexto de habilidades do prompt e os estados do catálogo. O estado Rust do Discord (`not_configured`, `active` ou `blocked`) também determina a orientação fixa que o modelo recebe. O dispatcher aplica schemas, política e executor Rust. Os adaptadores e modelos não têm suporte uniforme a tools, e não há roteador geral entre provedores. Os testes em `agent.rs`, `agent_runtime.rs` e `security/` cobrem a continuidade e os bloqueios. A matriz de evidências está em [`TRACEABILITY.md`](TRACEABILITY.md).
 
 ## Implementado
 
@@ -82,7 +126,7 @@ Atualizado em 24/10/2026 após a verificação de fechamento da Fase 3. Requisit
 - Fase 2.1 implementada: catálogo verificado com campos por provedor, configuração isolada por ID e migração local, validação de host/caminho, listagem documentada de modelos, teste de conexão sem prompt de geração, perfil SQLite e processamento de avatar no Rust. Inter é carregada localmente sob OFL 1.1.
 - Fase 3 implementada em Rust: matriz pura de políticas; modos, exceções, atalho e estado do kill switch em SQLite; janela `approval`; auditoria JSONL encadeada; habilidades de arquivos com gravação reversível e lixeira, além de exportação de `.ics`, Markdown, texto e CSV; parada e retomada cancelam/rejeitam trabalho.
 - `mail.draft` prepara um rascunho no aplicativo de e-mail padrão somente após aprovação explícita; não envia mensagens. Corpos acima do limite do link são salvos como `.txt` na pasta de trabalho.
-- `discord.send` envia mensagens por webhooks cadastrados em Habilidades, com URL guardada no Credential Manager, menções bloqueadas, limite por webhook e aprovação explícita. O estado `Ativa` indica habilidade habilitada e webhook válido; a ferramenta só é exposta quando o modo agente está ativo e o provedor/modelo atende aos requisitos. O chat normal não envia ferramentas. O fluxo de preparação separado para envio manual não está implementado; a prévia atual é a tela de aprovação.
+- `discord.send` envia mensagens por webhooks cadastrados em Habilidades, com URL guardada no Credential Manager, menções bloqueadas, limite por webhook e aprovação explícita. O Rust calcula o único estado usado pelo cartão e pelo prompt: `Não configurada` quando falta webhook, `Ativa` quando há webhook válido e a habilidade está ligada, e `Bloqueada` quando o webhook existe mas a habilidade está desligada. No estado ativo, a ferramenta é incluída em cada conversa que executa o modo agente; o chat normal não envia ferramentas. Cada envio continua exigindo aprovação. Se o webhook estiver ausente, o agente recebe orientação de cadastro sem a ferramenta; o snapshot é recriado no turno seguinte após o cadastro. O fluxo de preparação separado para envio manual não está implementado; a prévia atual é a tela de aprovação.
 - `web.fetch` oferece leitura limitada de páginas HTTPS com aprovação inicial por domínio, validação SSRF em cada salto e resultado marcado como dado não confiável.
 - Lembretes locais: `reminder.create`, `reminder.list` e `reminder.cancel` são habilidades Rust com risco e interruptor. O SQLite guarda vencimento ISO 8601 com fuso; o agendador espera o próximo horário sem polling quando não há pendências, tenta exibir notificação pelo plugin Tauri e recupera vencidos/perdas de notificação ao abrir o app. Notificações do Windows dependem de aplicativo instalado e ainda precisam de validação no executável instalado.
 - Planilhas: `sheet.create_xlsx` cria abas, cabeçalhos, valores e fórmulas simples sem avaliá-las; `sheet.read` aceita CSV UTF-8 e XLSX com limite de 1.000 linhas por aba, 16 MiB de entrada e conteúdo em pastas permitidas. Fórmulas externas são recusadas. As dependências de leitura (`calamine`, MIT) e escrita (`rust_xlsxwriter`, MIT OR Apache-2.0) têm licenças registradas nos metadados oficiais dos projetos.
@@ -91,10 +135,12 @@ Atualizado em 24/10/2026 após a verificação de fechamento da Fase 3. Requisit
 
 ## Limites e validação pendente
 
+- L2 do cartão do agente: a interface reúne estados, risco, prévia textual limitada, prazo de aprovação, timeline e artefatos; decisões de aprovação continuam exclusivamente na janela nativa. Campos aditivos no histórico preservam cartões antigos. Abertura e revelação de artefatos revalidam pasta permitida e extensões no Rust. A cobertura Rust/Windows ainda precisa ser executada no ambiente correspondente.
+
 - A janela do pet agora entra da borda mais próxima do monitor e sai pela mesma borda em 12 passos nativos (~208 ms); a posição salva é registrada antes da saída e transições não persistem posições intermediárias. O cálculo usa a área útil e escala do monitor. Testes de geometria passaram; inspeção visual em Windows, DPI misto e múltiplos monitores ainda está pendente.
 - A janela do pet usa `focusable(false)` para não ativar nem capturar o teclado ao entrar; os comandos que abrem o Hub continuam focando somente a janela principal. O contrato tem teste unitário, mas o foco e a digitação em janela externa ainda exigem validação visual no Windows.
 - A fila local do pet é mantida no Rust (máximo de 32 itens), prioriza aprovações fixadas, lembretes e eventos do agente e consolida atualizações de progresso. O renderer não toma decisões de prioridade. Aprovações são removidas após a resposta do broker; lembretes expiram visualmente após cinco segundos e resultados do agente após 2,4 segundos. A fila não usa rede. Testes automatizados da fila e do snapshot passaram; comportamento com a janela nativa fechada/reaberta e notificações reais permanece pendente.
-- O pet da ilha recebe dicas esparsas de olhar/piscar sobre os sprites atuais, apenas em idle e enquanto visível. Timers são cancelados ao ocultar, mudar de estado ou ativar movimento reduzido; a preferência também pausa a animação de quadros existente. Não há chamadas de rede ou polling em idle. A carga de CPU/memória e a aparência continuam sem medição visual no Windows.
+- O pet da ilha recebe dicas esparsas de olhar/piscar sobre os sprites atuais, apenas em idle e enquanto visível. Timers são cancelados ao ocultar, mudar de estado ou ativar movimento reduzido; eventos Tauri também pausam os quadros ao minimizar a janela ou após perda de foco. Não há chamadas de rede ou polling em idle. A carga de CPU/memória e a aparência continuam sem medição visual no Windows.
 
 - Um erro WebView2 `0x800700AA` ocorreu anteriormente ao abrir o executável. A causa não foi confirmada; qualquer conclusão exige repetição com o binário atualizado em Windows com acesso à janela visível.
 - Histórico SQLite não é criptografado pelo aplicativo. Proteção em repouso depende do dispositivo.
@@ -119,3 +165,19 @@ Atualizado em 24/10/2026 após a verificação de fechamento da Fase 3. Requisit
 - `dist/`: nenhuma imagem GLB e nenhuma referência `three.module`, `GLTFLoader` ou `WebGLRenderer`.
 - `npm test`: 26 testes passaram em 7 arquivos; `cargo test --lib`: 50 testes passaram. `npm run format:check`, `cargo fmt --check` e `git diff --check` passaram.
 - `npm run tauri:build` e validação visual nativa no Windows não foram executados nesta revisão.
+
+## Desfazer de ações (L3, parcial)
+
+Resultados de alteração de papel de parede, brilho, tema, gravação/acréscimo e renomeação podem carregar um descritor de restauração associado ao ID da execução. O cartão exibe “Desfazer” apenas quando o resultado o inclui; o aviso dura oito segundos. Restaurações entram no dispatcher como origem do usuário e passam pelas regras de política e auditoria. O histórico de papel de parede, brilho e tema migra com uma coluna de ID de operação, preservando instalações anteriores.
+
+Para arquivos, o manifesto e a versão anterior ficam em `.history`. Se o conteúdo atual mudou, o aplicativo pede confirmação e preserva a versão modificada antes de restaurar; renomeações não sobrescrevem um arquivo que já exista no caminho original. Operações irreversíveis, inclusive mensagens e envio à Lixeira, não recebem descritor. Para arquivos enviados à Lixeira, a interface informa: “restaure pela Lixeira do Windows”.
+
+Testes Rust usam `SystemAdapter` simulado e pastas temporárias isoladas. Eles não alteram o computador real. A execução desses testes e a compilação Rust precisam ser repetidas em ambiente com Rust instalado; a validação visual e nativa no Windows continua pendente.
+
+## Planos informativos (L4)
+
+`plan.propose` valida e retorna um plano textual de até 12 etapas, sem executar ações. O texto é dado inerte; risco de leitura. O cartão guarda os passos e os atualiza somente quando chamadas reais de habilidades começam e terminam. Chamadas adicionais após todas as etapas serem consumidas são registradas como “Ação fora do plano”; isso é apenas informativo e não bloqueia nem autoriza ações. Cada habilidade continua passando pelo dispatcher, motor de políticas e aprovações usuais. Planos são persistidos em campo opcional para preservar cartões antigos. Não há execução automática. Testes de Rust foram adicionados; a validação visual e a execução Rust permanecem pendentes neste ambiente.
+
+## Painel de atividade (L5)
+
+O cabeçalho abre um painel lateral sob demanda. Ele reaproveita execução/cartões e aprovações em memória, a agenda e a contagem de lembretes já disponíveis, e compartilha a consulta da auditoria com a página Atividade. Ao fechar, não há consulta periódica do painel. Aprovações só podem ser decididas na janela nativa; “Revisar” apenas a traz para frente. O histórico do painel exibe ferramenta, estado e decisão, sem parâmetros. Artefatos usam os comandos validados de abrir/revelar. O comando de lembretes disponível retorna somente a contagem de pendentes, sem horário; o painel declara essa limitação. O layout modal abaixo de 1.100 px devolve o foco ao gatilho e fecha com Escape; em tela larga mantém 600 px mínimos para a área principal. Validação visual em Windows continua pendente.

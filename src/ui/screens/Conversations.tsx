@@ -12,9 +12,41 @@ import { initials, type ProfileData } from '../Profile';
 import { ResizeHandle } from '../ResizeHandle';
 import { providerById } from '../../core/providers';
 import { AgentActionCard, AgentControls, type AgentActionCardData } from '../AgentControls';
-import { ScreenCapture } from '../ScreenCapture';
 import { supportsTranscription, transcribeConfirmedRecording } from '../../core/transcription';
 import { getLocalSpeechReader, type SpeechState } from '../../core/speech';
+import { MessageComposer, shouldSubmitMessageOnEnter } from '../MessageComposer';
+import type { PetAnimationState } from '../../core/pets';
+import {
+  activateMicrophone,
+  microphoneClickAction,
+  microphonePermissionError,
+} from '../../core/microphone';
+import { Modal } from '../Modal';
+
+export function MicrophoneActivationDialogContent({
+  busy,
+  onCancel,
+  onActivate,
+}: {
+  busy: boolean;
+  onCancel: () => void;
+  onActivate: () => void;
+}) {
+  return (
+    <div className="microphone-activation-dialog">
+      <p>O áudio gravado fica apenas na memória do aplicativo.</p>
+      <p>Nada será enviado sem você confirmar uma ação de transcrição.</p>
+      <div className="dialog-actions">
+        <Button type="button" variant="ghost" onClick={onCancel} disabled={busy}>
+          Agora não
+        </Button>
+        <Button type="button" variant="primary" onClick={onActivate} disabled={busy}>
+          {busy ? 'Solicitando permissão…' : 'Ativar'}
+        </Button>
+      </div>
+    </div>
+  );
+}
 
 export function shouldFollowChatScroll(
   scrollHeight: number,
@@ -25,9 +57,7 @@ export function shouldFollowChatScroll(
   return scrollHeight - scrollTop - clientHeight < threshold;
 }
 
-export function shouldSubmitChatOnEnter(key: string, shiftKey: boolean) {
-  return key === 'Enter' && !shiftKey;
-}
+export const shouldSubmitChatOnEnter = shouldSubmitMessageOnEnter;
 
 export function ConversationsScreen({
   messages,
@@ -59,17 +89,25 @@ export function ConversationsScreen({
   canRetry,
   profile,
   selectedPet,
+  petState = 'idle',
+  reduceMotion = false,
+  reduceMascot = false,
   agentEnabled,
   agentUnavailableReason,
   agentWorkspacePath,
   agentRunning,
   agentAwaitingApproval,
   agentActionCards,
+  onReviewApproval,
+  onConfigureDiscord,
+  onUndo,
+  onOpenArtifact,
+  onRevealArtifact,
   onToggleAgent,
   onStopAgent,
   onConfigureAgent,
-  onAnalyzeCapture,
   microphoneEnabled,
+  onMicrophonePreferenceChange,
   readRepliesAutomatically,
   speechVoiceURI,
   speechRate,
@@ -88,7 +126,7 @@ export function ConversationsScreen({
   error: string;
   errorDetails: string;
   canFixConfiguration: boolean;
-  submit: (event: FormEvent) => void;
+  submit: (event: FormEvent) => void | Promise<unknown>;
   cancel: () => void;
   providerModel: string;
   providerId: string;
@@ -104,17 +142,25 @@ export function ConversationsScreen({
   canRetry: boolean;
   profile: ProfileData;
   selectedPet: string;
+  petState?: PetAnimationState;
+  reduceMotion?: boolean;
+  reduceMascot?: boolean;
   agentEnabled: boolean;
   agentUnavailableReason: string | null;
   agentWorkspacePath: string | null;
   agentRunning: boolean;
   agentAwaitingApproval: boolean;
   agentActionCards: AgentActionCardData[];
+  onReviewApproval: () => void;
+  onConfigureDiscord?: () => void;
+  onUndo: (action: AgentActionCardData) => void;
+  onOpenArtifact: (path: string) => void;
+  onRevealArtifact: (path: string) => void;
   onToggleAgent: (enabled: boolean) => void;
   onStopAgent: () => void;
   onConfigureAgent: () => void;
-  onAnalyzeCapture: (prompt: string, imageBase64: string) => Promise<boolean>;
   microphoneEnabled: boolean;
+  onMicrophonePreferenceChange: (enabled: boolean) => void | Promise<void>;
   readRepliesAutomatically: boolean;
   speechVoiceURI: string;
   speechRate: number;
@@ -127,6 +173,7 @@ export function ConversationsScreen({
   const messagesAreaRef = useRef<HTMLDivElement>(null);
   const followMessagesRef = useRef(true);
   const recorderRef = useRef<MediaRecorder | null>(null);
+  const recordingStartRef = useRef(false);
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<BlobPart[]>([]);
   const startedAtRef = useRef(0);
@@ -137,6 +184,9 @@ export function ConversationsScreen({
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [recordingLevel, setRecordingLevel] = useState(0);
   const [recordingError, setRecordingError] = useState('');
+  const [microphoneActivationOpen, setMicrophoneActivationOpen] = useState(false);
+  const [microphoneActivationBusy, setMicrophoneActivationBusy] = useState(false);
+  const microphoneActivationBusyRef = useRef(false);
   const [recordingUrl, setRecordingUrl] = useState<string | null>(null);
   const [transcriptionDialogOpen, setTranscriptionDialogOpen] = useState(false);
   const [transcriptionPrice, setTranscriptionPrice] = useState('');
@@ -220,12 +270,6 @@ export function ConversationsScreen({
     speechVoiceURI,
   ]);
   useEffect(() => {
-    const textarea = composerRef.current;
-    if (!textarea) return;
-    textarea.style.height = 'auto';
-    textarea.style.height = `${Math.min(textarea.scrollHeight, 120)}px`;
-  }, [draft]);
-  useEffect(() => {
     followMessagesRef.current = true;
   }, [conversationId]);
   useEffect(() => {
@@ -295,18 +339,22 @@ export function ConversationsScreen({
     return () => document.removeEventListener('visibilitychange', stopInBackground);
   }, [recordingUrl]);
 
-  async function startRecording() {
+  async function startRecording(streamOverride?: MediaStream) {
     setRecordingError('');
-    if (!microphoneEnabled) {
-      setRecordingError('Ative “Usar microfone” em Configurações para gravar.');
+    if (!streamOverride && microphoneClickAction(microphoneEnabled) === 'activate') {
+      setMicrophoneActivationOpen(true);
       return;
     }
+    if (recordingStartRef.current) return;
+    recordingStartRef.current = true;
+    let acquiredStream = streamOverride ?? null;
     try {
       if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
         setRecordingError('A gravação de áudio não está disponível neste WebView.');
         return;
       }
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = acquiredStream ?? (await navigator.mediaDevices.getUserMedia({ audio: true }));
+      acquiredStream = stream;
       streamRef.current = stream;
       chunksRef.current = [];
       const recorder = new MediaRecorder(stream);
@@ -368,20 +416,40 @@ export function ConversationsScreen({
       setRecordingState('recording');
       requestAnimationFrame(meter);
     } catch (error) {
-      const name = error instanceof DOMException ? error.name : '';
-      if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
-        setRecordingError(
-          'Nenhum microfone foi encontrado. Conecte ou habilite um dispositivo de entrada.',
-        );
-      } else if (name === 'NotAllowedError' || name === 'SecurityError') {
-        setRecordingError(
-          'A permissão do microfone foi negada pelo aplicativo ou pelo Windows. Em Configurações do Windows → Privacidade e segurança → Microfone, habilite o acesso ao microfone e o acesso para aplicativos da área de trabalho.',
-        );
-      } else {
-        setRecordingError(
-          'Não foi possível iniciar a gravação. Verifique se o microfone está conectado e disponível.',
-        );
+      acquiredStream?.getTracks().forEach((track) => track.stop());
+      if (streamRef.current === acquiredStream) streamRef.current = null;
+      recorderRef.current = null;
+      void audioContextRef.current?.close();
+      audioContextRef.current = null;
+      setRecordingError(microphonePermissionError(error));
+    } finally {
+      recordingStartRef.current = false;
+    }
+  }
+
+  async function confirmMicrophoneActivation() {
+    if (microphoneActivationBusyRef.current) return;
+    microphoneActivationBusyRef.current = true;
+    setMicrophoneActivationBusy(true);
+    setRecordingError('');
+    try {
+      if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
+        throw new Error('A gravação de áudio não está disponível neste WebView.');
       }
+      await activateMicrophone(
+        () => onMicrophonePreferenceChange(true),
+        () => navigator.mediaDevices.getUserMedia({ audio: true }),
+        async (stream) => {
+          setMicrophoneActivationOpen(false);
+          await startRecording(stream);
+        },
+      );
+    } catch (error) {
+      setMicrophoneActivationOpen(false);
+      setRecordingError(microphonePermissionError(error));
+    } finally {
+      microphoneActivationBusyRef.current = false;
+      setMicrophoneActivationBusy(false);
     }
   }
 
@@ -554,9 +622,18 @@ export function ConversationsScreen({
             </div>
           ))}
           {filteredConversations.length === 0 && (
-            <p className="conversation-list-empty">
-              {search ? 'Nenhuma conversa encontrada.' : 'Suas conversas aparecerão aqui.'}
-            </p>
+            <div className="conversation-list-empty">
+              <PetSprite
+                estado={petState}
+                petId={selectedPet}
+                reduceMotion={reduceMotion}
+                staticImage={reduceMascot}
+                className="empty-state-pet"
+              />
+              <span>
+                {search ? 'Nenhuma conversa encontrada.' : 'Suas conversas aparecerão aqui.'}
+              </span>
+            </div>
           )}
         </div>
         {!conversationSidebarCollapsed && (
@@ -650,7 +727,13 @@ export function ConversationsScreen({
         >
           {messages.length === 0 && agentActionCards.length === 0 ? (
             <div className="empty-chat">
-              <img className="empty-chat-icon" src={appIcon} alt="" />
+              <PetSprite
+                estado={petState}
+                petId={selectedPet}
+                reduceMotion={reduceMotion}
+                staticImage={reduceMascot}
+                className="empty-state-pet empty-chat-pet"
+              />
               <strong>O que você gostaria de explorar?</strong>
               <p>Escreva uma pergunta, uma ideia ou algo que queira organizar.</p>
               <div className="prompt-chips">
@@ -675,7 +758,13 @@ export function ConversationsScreen({
                   {message.role === 'assistant' && (
                     <span className="message-avatar">
                       {assistantUsesMascot ? (
-                        <PetSprite estado="idle" petId={selectedPet} avatar />
+                        <PetSprite
+                          estado={petState}
+                          petId={selectedPet}
+                          reduceMotion={reduceMotion}
+                          staticImage={reduceMascot}
+                          avatar
+                        />
                       ) : (
                         <img src={appIcon} alt="" />
                       )}
@@ -770,7 +859,17 @@ export function ConversationsScreen({
                 </p>
               )}
               {agentActionCards.map((action) => (
-                <AgentActionCard action={action} key={action.id} />
+                <AgentActionCard
+                  action={action}
+                  key={action.id}
+                  running={agentRunning && !agentAwaitingApproval && action.status === 'Executando'}
+                  onStop={cancel}
+                  onReviewApproval={onReviewApproval}
+                  onConfigureDiscord={onConfigureDiscord}
+                  onOpenArtifact={onOpenArtifact}
+                  onRevealArtifact={onRevealArtifact}
+                  onUndo={() => onUndo(action)}
+                />
               ))}
               {busy && !agentAwaitingApproval && (
                 <div className="thinking-row">
@@ -814,114 +913,74 @@ export function ConversationsScreen({
             </div>
           </div>
         )}
-        <form className="composer" onSubmit={submit}>
-          <textarea
-            ref={composerRef}
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if (shouldSubmitChatOnEnter(event.key, event.shiftKey)) {
-                event.preventDefault();
-                event.currentTarget.form?.requestSubmit();
-              }
-            }}
-            placeholder="Escreva sua mensagem..."
-            rows={1}
-            aria-label="Mensagem"
-          />
-          <div className="composer-bottom">
-            {!recordingUrl && recordingState === 'idle' && (
-              <button
-                type="button"
-                className="secondary-button small-button"
-                aria-label="Gravar áudio"
-                title={
-                  !microphoneEnabled
-                    ? 'Ative Usar microfone nas Configurações para gravar.'
-                    : busy
-                      ? 'Aguarde a resposta atual terminar.'
-                      : undefined
-                }
-                disabled={!microphoneEnabled || busy}
-                onClick={() => void startRecording()}
-              >
-                🎙
-              </button>
-            )}
-            {(recordingState === 'recording' || recordingState === 'paused') && (
-              <div className="audio-recording" role="status" aria-live="polite">
-                <strong>
-                  {recordingState === 'recording' ? 'Gravando' : 'Gravação pausada'} ·{' '}
-                  {Math.floor(recordingSeconds / 60)}:
-                  {String(recordingSeconds % 60).padStart(2, '0')}
-                </strong>
-                {recordingState === 'recording' && (
-                  <span className="audio-level" aria-label="Nível do microfone">
-                    <i style={{ transform: `scaleX(${recordingLevel})` }} />
-                  </span>
-                )}
-                <span>Nenhum áudio será enviado. A gravação para ao sair desta tela.</span>
-                {recordingState === 'recording' ? (
-                  <button type="button" onClick={pauseRecording}>
-                    Pausar
-                  </button>
-                ) : (
-                  <button type="button" onClick={resumeRecording}>
-                    Retomar
-                  </button>
-                )}
-                <button type="button" onClick={cancelRecording}>
-                  Cancelar
+        <MessageComposer
+          draft={draft}
+          setDraft={setDraft}
+          busy={busy}
+          onSubmit={submit}
+          onCancel={cancel}
+          textareaRef={composerRef}
+          footer={(sendButton) => (
+            <div className="composer-bottom">
+              {!recordingUrl && recordingState === 'idle' && (
+                <button
+                  type="button"
+                  className="secondary-button small-button"
+                  aria-label="Gravar áudio"
+                  title="Gravar áudio"
+                  onClick={() => void startRecording()}
+                >
+                  <Icon name="microphone" size={18} />
                 </button>
-                <button type="button" onClick={finishRecording}>
-                  Concluir
-                </button>
-              </div>
-            )}
-            {recordingUrl && recordingState === 'ready' && (
-              <div className="audio-recording" role="group" aria-label="Gravação local concluída">
-                <audio controls src={recordingUrl} />
-                {providerConfigured && supportsTranscription(providerId) && (
-                  <button type="button" onClick={() => setTranscriptionDialogOpen(true)}>
-                    Transcrever com {providerById(providerId)?.name ?? providerId}
-                  </button>
-                )}
-                <button type="button" onClick={discardRecording}>
-                  Descartar
-                </button>
-              </div>
-            )}
-            <span className="chat-composer-helper">
-              Enter envia · Shift + Enter quebra linha
-              {!microphoneEnabled && !recordingUrl && recordingState === 'idle' && (
-                <small>Gravação de áudio desativada em Configurações.</small>
               )}
-            </span>
-            <div className="chat-composer-actions">
-              <ScreenCapture
-                providerId={providerId}
-                providerModel={providerModel}
-                agentEnabled={agentEnabled}
-                agentAvailable={!agentUnavailableReason}
-                disabled={busy}
-                onAnalyze={onAnalyzeCapture}
-              />
-              <button
-                className={`send-button ${busy ? 'stop-button' : ''}`}
-                type={busy ? 'button' : 'submit'}
-                onClick={busy ? cancel : undefined}
-                disabled={!busy && !draft.trim()}
-                title={
-                  !busy && !draft.trim()
-                    ? 'Escreva uma mensagem para habilitar o envio.'
-                    : undefined
-                }
-                aria-label={busy ? 'Parar resposta' : 'Enviar mensagem'}
-              >
-                {busy ? 'Parar' : 'Enviar'}
-              </button>
+              {(recordingState === 'recording' || recordingState === 'paused') && (
+                <div className="audio-recording" role="status" aria-live="polite">
+                  <strong>
+                    {recordingState === 'recording' ? 'Gravando' : 'Gravação pausada'} ·{' '}
+                    {Math.floor(recordingSeconds / 60)}:
+                    {String(recordingSeconds % 60).padStart(2, '0')}
+                  </strong>
+                  {recordingState === 'recording' && (
+                    <span className="audio-level" aria-label="Nível do microfone">
+                      <i style={{ transform: `scaleX(${recordingLevel})` }} />
+                    </span>
+                  )}
+                  <span>Nenhum áudio será enviado. A gravação para ao sair desta tela.</span>
+                  {recordingState === 'recording' ? (
+                    <button type="button" onClick={pauseRecording}>
+                      Pausar
+                    </button>
+                  ) : (
+                    <button type="button" onClick={resumeRecording}>
+                      Retomar
+                    </button>
+                  )}
+                  <button type="button" onClick={cancelRecording}>
+                    Cancelar
+                  </button>
+                  <button type="button" onClick={finishRecording}>
+                    Concluir
+                  </button>
+                </div>
+              )}
+              {recordingUrl && recordingState === 'ready' && (
+                <div className="audio-recording" role="group" aria-label="Gravação local concluída">
+                  <audio controls src={recordingUrl} />
+                  {providerConfigured && supportsTranscription(providerId) && (
+                    <button type="button" onClick={() => setTranscriptionDialogOpen(true)}>
+                      Transcrever com {providerById(providerId)?.name ?? providerId}
+                    </button>
+                  )}
+                  <button type="button" onClick={discardRecording}>
+                    Descartar
+                  </button>
+                </div>
+              )}
+              <span className="chat-composer-helper">Enter envia · Shift + Enter quebra linha</span>
+              <div className="chat-composer-actions">{sendButton}</div>
             </div>
-          </div>
+          )}
+        >
           {recordingError && (
             <p className="audio-recording-error" role="alert">
               {recordingError}
@@ -977,7 +1036,20 @@ export function ConversationsScreen({
               </div>
             </div>
           )}
-        </form>
+        </MessageComposer>
+        <Modal
+          open={microphoneActivationOpen}
+          title="Ativar microfone?"
+          onClose={() => {
+            if (!microphoneActivationBusy) setMicrophoneActivationOpen(false);
+          }}
+        >
+          <MicrophoneActivationDialogContent
+            busy={microphoneActivationBusy}
+            onCancel={() => setMicrophoneActivationOpen(false)}
+            onActivate={() => void confirmMicrophoneActivation()}
+          />
+        </Modal>
         <p className="chat-disclaimer">
           As respostas podem conter imprecisões. As mensagens são enviadas ao provedor configurado.
         </p>
