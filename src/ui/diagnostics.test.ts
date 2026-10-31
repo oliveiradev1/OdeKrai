@@ -6,6 +6,7 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke: invokeMock, isTauri: () => true
 import { sanitizeDiagnosticDetails, startupInvoke } from './hooks/useAppEffects';
 import {
   diagnosticUserMessage,
+  observeDiagnosticOperation,
   removeDiagnostic,
   sanitizeDiagnosticDetails as sanitizeDetails,
   upsertDiagnostic,
@@ -14,6 +15,79 @@ import {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('diagnósticos da interface', () => {
+  it('registra início e conclusão de leitura antes e depois da operação', async () => {
+    const events: Parameters<Parameters<typeof observeDiagnosticOperation>[3]>[0][] = [];
+    const record = vi.fn(async (event) => {
+      events.push(event);
+    });
+    let clock = 100;
+
+    const result = await observeDiagnosticOperation(
+      'inspect_local_models',
+      'model_inventory',
+      () => {
+        expect(events.map((event) => event.event)).toEqual(['startup_command_start']);
+        clock = 137;
+        return ['modelo'];
+      },
+      record,
+      () => clock,
+      () => '123e4567-e89b-12d3-a456-426614174000',
+    );
+
+    expect(result).toEqual(['modelo']);
+    expect(events).toEqual([
+      {
+        event: 'startup_command_start',
+        command: 'inspect_local_models',
+        outcome: 'ok',
+        durationMs: 0,
+        section: 'computer',
+        category: 'model_inventory',
+        correlationId: '123e4567-e89b-12d3-a456-426614174000',
+      },
+      {
+        event: 'startup_command_finish',
+        command: 'inspect_local_models',
+        outcome: 'ok',
+        durationMs: 37,
+        section: 'computer',
+        category: 'model_inventory',
+        correlationId: '123e4567-e89b-12d3-a456-426614174000',
+      },
+    ]);
+  });
+
+  it('registra a categoria do erro sem gravar o caminho lançado pela operação', async () => {
+    const events: Parameters<Parameters<typeof observeDiagnosticOperation>[3]>[0][] = [];
+    const record = vi.fn((event) => events.push(event));
+    let clock = 3;
+
+    await expect(
+      observeDiagnosticOperation(
+        'read_model_folder',
+        'model_folder_storage',
+        () => {
+          clock = 11;
+          throw new Error('falha em C:\\Users\\Ana\\Models');
+        },
+        record,
+        () => clock,
+        () => '123e4567-e89b-12d3-a456-426614174000',
+      ),
+    ).rejects.toThrow('falha em C:\\Users\\Ana\\Models');
+
+    expect(events[1]).toMatchObject({
+      event: 'startup_command_finish',
+      command: 'read_model_folder',
+      outcome: 'error',
+      durationMs: 8,
+      section: 'computer',
+      category: 'model_folder_storage',
+    });
+    expect(JSON.stringify(events)).not.toContain('C:\\Users\\Ana');
+  });
+
   it('sanitiza stack traces sem descartar a origem do erro', () => {
     const error = new Error('Falha api_key=segredo-chave em ana@example.com');
     error.stack = `Error: ${error.message}\n    at run (C:\\Users\\Ana\\app.js:4:2)`;

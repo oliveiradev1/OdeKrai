@@ -3,6 +3,10 @@ import { invoke, isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-dialog';
 import {
+  observeDiagnosticOperation,
+  observeSynchronousDiagnosticOperation,
+} from '../../core/diagnostics';
+import {
   LOCAL_MODELS,
   formatBytes,
   isHardwareProfile,
@@ -26,9 +30,34 @@ function reportComputerError(command: string, error: unknown) {
   window.dispatchEvent(new ErrorEvent('error', { error: new Error(`${command}: ${detail}`) }));
 }
 
-function readSavedModelFolder() {
+function observeComputerRead<T>(
+  command: 'inspect_local_models' | 'get_hardware_profile' | 'read_model_folder',
+  category: 'model_inventory' | 'hardware_profile' | 'model_folder_storage',
+  operation: () => T | Promise<T>,
+) {
+  return observeDiagnosticOperation(command, category, operation, (event) =>
+    invoke('record_diagnostic_event', event),
+  );
+}
+
+function readSavedModelFolder(): { value: string; error: unknown | null } {
+  if (!isTauri()) {
+    try {
+      return { value: localStorage.getItem('odekrai.modelFolder') ?? '', error: null };
+    } catch (error) {
+      return { value: '', error };
+    }
+  }
   try {
-    return { value: localStorage.getItem('odekrai.modelFolder') ?? '', error: null };
+    return {
+      value: observeSynchronousDiagnosticOperation(
+        'read_model_folder',
+        'model_folder_storage',
+        () => localStorage.getItem('odekrai.modelFolder') ?? '',
+        (event) => invoke('record_diagnostic_event', event),
+      ),
+      error: null,
+    };
   } catch (error) {
     return { value: '', error };
   }
@@ -66,10 +95,17 @@ export function ComputerScreen({ embedded = false }: { embedded?: boolean }) {
     }
     setInventoryLoading(true);
     try {
-      const result: unknown = await invoke('inspect_local_models', { destination: folder });
-      if (!isLocalModelInventory(result)) {
-        throw new TypeError('Resposta IPC inválida em inspect_local_models.');
-      }
+      const result = await observeComputerRead(
+        'inspect_local_models',
+        'model_inventory',
+        async () => {
+          const response: unknown = await invoke('inspect_local_models', { destination: folder });
+          if (!isLocalModelInventory(response)) {
+            throw new TypeError('Resposta IPC inválida em inspect_local_models.');
+          }
+          return response;
+        },
+      );
       setInventory(result);
       setInventoryError('');
     } catch (error) {
@@ -111,12 +147,15 @@ export function ComputerScreen({ embedded = false }: { embedded?: boolean }) {
         active = false;
       };
     }
-    void invoke<unknown>('get_hardware_profile')
+    void observeComputerRead('get_hardware_profile', 'hardware_profile', async () => {
+      const result: unknown = await invoke('get_hardware_profile');
+      if (!isHardwareProfile(result)) {
+        throw new TypeError('Resposta IPC inválida em get_hardware_profile.');
+      }
+      return result;
+    })
       .then((result) => {
         if (!active) return;
-        if (!isHardwareProfile(result)) {
-          throw new TypeError('Resposta IPC inválida em get_hardware_profile.');
-        }
         setHardware(result);
         setError('');
       })

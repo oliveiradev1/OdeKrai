@@ -347,10 +347,33 @@ fn is_safe_diagnostic(event: &str, command: &str, outcome: &str) -> bool {
             | "set_pet_size"
             | "restore_pet"
             | "complete_startup"
+            | "inspect_local_models"
+            | "get_hardware_profile"
+            | "read_model_folder"
             | "window.onerror"
             | "unhandledrejection"
     );
     event_allowed && command_allowed && matches!(outcome, "ok" | "warning" | "error")
+}
+
+fn format_diagnostic_event_fields(
+    event: &str,
+    command: &str,
+    outcome: &str,
+    duration_ms: u64,
+    section: &str,
+    category: &str,
+    correlation_id: &str,
+) -> String {
+    format!(
+        "event={} command={} section={} category={} correlation_id={} result={} duration_ms={duration_ms}",
+        safe_token(event),
+        safe_token(command),
+        safe_token(section),
+        safe_token(category),
+        safe_token(correlation_id),
+        safe_token(outcome),
+    )
 }
 
 fn previous_run_incomplete(marker_exists: bool, contents: &[u8]) -> bool {
@@ -423,8 +446,14 @@ pub async fn record_diagnostic_event(
             "warning" => "diagnostic_warning",
             _ => "frontend_event",
         };
-        let fields = format!(
-            "event={event} command={command} section={section} category={category} correlation_id={correlation_id} result={outcome} duration_ms={duration_ms}"
+        let fields = format_diagnostic_event_fields(
+            &event,
+            &command,
+            &outcome,
+            duration_ms,
+            &section,
+            &category,
+            &correlation_id,
         );
         let _ = write_log(&logs.join("diagnostic.log"), line_kind, &fields);
     })
@@ -436,14 +465,21 @@ pub async fn record_diagnostic_event(
 fn is_safe_section(value: &str) -> bool {
     matches!(
         value,
-        "startup" | "profile" | "permissions" | "chat" | "pet" | "window"
+        "startup" | "profile" | "permissions" | "chat" | "pet" | "window" | "computer"
     )
 }
 
 fn is_safe_category(value: &str) -> bool {
     matches!(
         value,
-        "initialization" | "event_listener" | "window_error" | "promise_rejection" | "preference"
+        "initialization"
+            | "event_listener"
+            | "window_error"
+            | "promise_rejection"
+            | "preference"
+            | "model_inventory"
+            | "hardware_profile"
+            | "model_folder_storage"
     )
 }
 
@@ -498,6 +534,22 @@ mod tests {
             "save_profile",
             "error"
         ));
+        for command in [
+            "inspect_local_models",
+            "get_hardware_profile",
+            "read_model_folder",
+        ] {
+            assert!(is_safe_diagnostic("startup_command_start", command, "ok"));
+            assert!(is_safe_diagnostic(
+                "startup_command_finish",
+                command,
+                "error"
+            ));
+        }
+        assert!(is_safe_section("computer"));
+        assert!(is_safe_category("model_inventory"));
+        assert!(is_safe_category("hardware_profile"));
+        assert!(is_safe_category("model_folder_storage"));
 
         let untrusted_values = [
             "texto da conversa".to_string(),
@@ -517,6 +569,56 @@ mod tests {
             ));
             assert!(!is_safe_diagnostic(&value, "get_profile", "ok"));
         }
+    }
+
+    #[test]
+    fn computer_read_events_are_written_without_user_paths() {
+        let path = std::env::temp_dir().join(format!(
+            "odekrai-computer-diagnostics-{}-{}.log",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        for (event, outcome, duration_ms, category) in [
+            ("startup_command_start", "ok", 0, "model_inventory"),
+            ("startup_command_finish", "error", 37, "model_inventory"),
+            ("startup_command_start", "ok", 0, "hardware_profile"),
+            ("startup_command_finish", "ok", 18, "hardware_profile"),
+            ("startup_command_start", "ok", 0, "model_folder_storage"),
+            ("startup_command_finish", "ok", 2, "model_folder_storage"),
+        ] {
+            let command = match category {
+                "model_inventory" => "inspect_local_models",
+                "hardware_profile" => "get_hardware_profile",
+                _ => "read_model_folder",
+            };
+            let fields = format_diagnostic_event_fields(
+                event,
+                command,
+                outcome,
+                duration_ms,
+                "computer",
+                category,
+                "123e4567-e89b-12d3-a456-426614174000",
+            );
+            write_log(&path, "frontend_event", &fields).unwrap();
+        }
+
+        let contents = fs::read_to_string(&path).unwrap();
+        assert_eq!(contents.lines().count(), 6);
+        assert!(contents
+            .contains("command=inspect_local_models section=computer category=model_inventory"));
+        assert!(contents
+            .contains("command=get_hardware_profile section=computer category=hardware_profile"));
+        assert!(contents
+            .contains("command=read_model_folder section=computer category=model_folder_storage"));
+        assert!(contents.contains("result=error duration_ms=37"));
+        assert!(contents.contains("result=ok duration_ms=18"));
+        assert!(!contents.contains("C:\\Users\\"));
+        assert!(!contents.contains("/home/"));
+        fs::remove_file(path).unwrap();
     }
 
     #[test]

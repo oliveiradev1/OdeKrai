@@ -6,6 +6,106 @@ export type DiagnosticItem = {
   count: number;
 };
 
+export type DiagnosticOperationEvent = {
+  event: 'startup_command_start' | 'startup_command_finish';
+  command: string;
+  outcome: 'ok' | 'error';
+  durationMs: number;
+  section: 'computer';
+  category: 'model_inventory' | 'hardware_profile' | 'model_folder_storage';
+  correlationId: string;
+};
+
+export async function observeDiagnosticOperation<T>(
+  command: DiagnosticOperationEvent['command'],
+  category: DiagnosticOperationEvent['category'],
+  operation: () => T | Promise<T>,
+  record: (event: DiagnosticOperationEvent) => Promise<unknown> | unknown,
+  now: () => number = () => performance.now(),
+  createId: () => string = () => crypto.randomUUID(),
+): Promise<T> {
+  const started = now();
+  const correlationId = createId();
+  const write = (event: DiagnosticOperationEvent) => {
+    try {
+      void Promise.resolve(record(event)).catch(() => undefined);
+    } catch {
+      // A falha do log não altera o resultado da leitura original.
+    }
+  };
+  write({
+    event: 'startup_command_start',
+    command,
+    outcome: 'ok',
+    durationMs: 0,
+    section: 'computer',
+    category,
+    correlationId,
+  });
+  let outcome: DiagnosticOperationEvent['outcome'] = 'ok';
+  try {
+    return await operation();
+  } catch (error) {
+    outcome = 'error';
+    throw error;
+  } finally {
+    write({
+      event: 'startup_command_finish',
+      command,
+      outcome,
+      durationMs: Math.max(0, Math.round(now() - started)),
+      section: 'computer',
+      category,
+      correlationId,
+    });
+  }
+}
+
+export function observeSynchronousDiagnosticOperation<T>(
+  command: DiagnosticOperationEvent['command'],
+  category: DiagnosticOperationEvent['category'],
+  operation: () => T,
+  record: (event: DiagnosticOperationEvent) => Promise<unknown> | unknown,
+  now: () => number = () => performance.now(),
+  createId: () => string = () => crypto.randomUUID(),
+): T {
+  const started = now();
+  const correlationId = createId();
+  const write = (event: DiagnosticOperationEvent) => {
+    try {
+      void Promise.resolve(record(event)).catch(() => undefined);
+    } catch {
+      // A falha do log não altera o resultado da leitura original.
+    }
+  };
+  write({
+    event: 'startup_command_start',
+    command,
+    outcome: 'ok',
+    durationMs: 0,
+    section: 'computer',
+    category,
+    correlationId,
+  });
+  let outcome: DiagnosticOperationEvent['outcome'] = 'ok';
+  try {
+    return operation();
+  } catch (error) {
+    outcome = 'error';
+    throw error;
+  } finally {
+    write({
+      event: 'startup_command_finish',
+      command,
+      outcome,
+      durationMs: Math.max(0, Math.round(now() - started)),
+      section: 'computer',
+      category,
+      correlationId,
+    });
+  }
+}
+
 function redactMarkerValues(input: string, marker: RegExp): string {
   return input.replace(marker, (value) => {
     const prefix = value.match(
