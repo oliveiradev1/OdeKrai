@@ -12,6 +12,7 @@
         "Habilidades organizadas por famílias, com busca e detalhes.",
         "Captura de tela e microfone sempre sob sua confirmação.",
         "Discord: mensagens por webhook, sempre com aprovação.",
+        "Google Calendar: pode ser conectado após configurar um cliente OAuth próprio (identificador e escopo de agenda); Gmail e Sheets não estão disponíveis.",
         "Nuvem: ShardCloud (ver VMs; ligar e desligar com aprovação; comandos em lote aprovado; criação com limite mensal). Os demais provedores são planejados.",
         "Atualizações: aviso diário de versão nova com link para download. Não instala sozinho.",
         "Primeiro uso e modo desempenho.",

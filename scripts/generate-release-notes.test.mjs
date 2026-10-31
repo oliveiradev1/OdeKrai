@@ -126,10 +126,11 @@ describe('manifesto de notas de versão', () => {
           'Esta versão reorganiza o OdeKrai e traz as primeiras habilidades de agente que usam serviços externos.',
         changes: expect.arrayContaining([
           'Navegação: sidebar com Início, Conversas, Agenda, Habilidades e Conectores de IA. Perfil no rodapé e Configurações em janela com busca.',
+          'Google Calendar: pode ser conectado após configurar um cliente OAuth próprio (identificador e escopo de agenda); Gmail e Sheets não estão disponíveis.',
           'Campos de token ficam em formulário, sem sugestão de salvar pelo navegador.',
         ]),
       },
     ]);
-    expect(manifest.releases[0].changes).toHaveLength(12);
+    expect(manifest.releases[0].changes).toHaveLength(13);
   });
 });
