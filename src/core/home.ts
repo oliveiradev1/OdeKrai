@@ -81,11 +81,12 @@ export function createHomeSuggestions(context: HomeContext, limit = 4): HomeSugg
 
   if (calendarSkill) {
     for (const event of context.todayEvents) {
-      if (!event.title.trim()) continue;
+      const title = typeof event.title === 'string' ? event.title : '';
+      if (!title.trim()) continue;
       candidates.push({
         id: `event-${event.id}`,
-        label: `Preparar: ${event.title}`,
-        prompt: `Ajude-me a me preparar para “${event.title}”.`,
+        label: `Preparar: ${title}`,
+        prompt: `Ajude-me a me preparar para “${title}”.`,
         requirements: [
           { type: 'skill', id: 'calendar.list_events' },
           { type: 'skill-family', family: 'agenda_lembretes' },
@@ -120,11 +121,12 @@ export function createHomeSuggestions(context: HomeContext, limit = 4): HomeSugg
   }
 
   const recentConversation = context.recentConversations[0];
-  if (recentConversation?.title.trim()) {
+  const recentTitle = typeof recentConversation?.title === 'string' ? recentConversation.title : '';
+  if (recentConversation && recentTitle.trim()) {
     candidates.push({
       id: `conversation-${recentConversation.id}`,
-      label: `Explorar: ${recentConversation.title}`,
-      prompt: `Quero conversar mais sobre “${recentConversation.title}”.`,
+      label: `Explorar: ${recentTitle}`,
+      prompt: `Quero conversar mais sobre “${recentTitle}”.`,
       requirements: [{ type: 'conversation', id: recentConversation.id }],
     });
   }

@@ -2,7 +2,8 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { defaultSettings } from '../../core/settings';
 import { SettingsScreen } from './Settings';
-import { AboutSettings } from './AboutSettings';
+import { AboutBuildDetails, AboutSettings } from './AboutSettings';
+import { normalizeBuildInfo } from '../../core/build-info';
 
 describe('SettingsScreen', () => {
   it('monta as seções de preferências', () => {
@@ -52,5 +53,26 @@ describe('SettingsScreen', () => {
     expect(markup).toContain('Notas completas da versão');
     expect(markup).toContain('Verificar atualizações automaticamente');
     expect(markup).toContain('Verificar agora');
+  });
+
+  it('normaliza hash e data de build ausentes antes de exibi-los', () => {
+    const partialBuildInfo = normalizeBuildInfo({ version: '0.15.0' });
+    expect(partialBuildInfo).toEqual({
+      version: '0.15.0',
+      commit: '',
+      build_date: '',
+      webview_version: '',
+      windows_version: '',
+    });
+    expect(normalizeBuildInfo(undefined)).toBeNull();
+
+    const details = renderToStaticMarkup(
+      <AboutBuildDetails buildInfo={partialBuildInfo} onError={() => undefined} />,
+    );
+    expect(details).toContain('0.15.0');
+    expect(details).toContain('Commit');
+    expect(details).toContain('local');
+    expect(details).toContain('Data do build (UTC)');
+    expect(details).not.toContain('undefined');
   });
 });

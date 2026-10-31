@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { decideReleasePrompt } from './release-notes';
+import { decideReleasePrompt, normalizeReleaseNotesManifest } from './release-notes';
 
 describe('aviso de novidades da versão', () => {
   const base = {
@@ -9,6 +9,26 @@ describe('aviso de novidades da versão', () => {
     hasExistingPreferences: true,
     enabled: true,
   };
+
+  it('preenche com strings vazias os campos ausentes de notas e listas malformadas', () => {
+    expect(
+      normalizeReleaseNotesManifest({
+        currentVersion: '1.2.0',
+        releases: [{ version: '1.2.0', changes: [undefined, 'Mudança'] }],
+      }),
+    ).toEqual({
+      currentVersion: '1.2.0',
+      releases: [
+        {
+          version: '1.2.0',
+          title: '',
+          date: '',
+          summary: '',
+          changes: ['', 'Mudança'],
+        },
+      ],
+    });
+  });
 
   it('não reabre para a mesma versão já vista', () => {
     expect(decideReleasePrompt({ ...base, previousVersion: '1.2.0' })).toEqual({

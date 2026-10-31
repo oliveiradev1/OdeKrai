@@ -7,7 +7,7 @@ import { loadSettings } from '../../core/settings';
 import { stopLocalSpeech } from '../../core/speech';
 import { normalizeSoundPreferences, playSound } from '../../core/sounds';
 import type { ChatMessage } from '../../core/provider-messages';
-import { mergeApprovedProfile } from '../../core/identity';
+import { mergeApprovedProfile, normalizeProfileData } from '../../core/identity';
 import type { useAppState } from './useAppState';
 import type { Conversation } from '../screens/types';
 import type { ProfileData } from '../Profile';
@@ -154,9 +154,12 @@ export function useAppEffects(state: ReturnType<typeof useAppState>) {
       ]);
       if (!current) return;
       const [pet, permissions, savedProfile, home, history, credential] = results;
+      const currentProfile = normalizeProfileData(
+        savedProfile.status === 'fulfilled' ? savedProfile.value : undefined,
+      );
       if (pet.status === 'fulfilled') setSelectedPet(pet.value);
       if (permissions.status === 'fulfilled') setPermissionIndicator(permissions.value);
-      if (savedProfile.status === 'fulfilled') setProfile(savedProfile.value);
+      if (savedProfile.status === 'fulfilled') setProfile(currentProfile);
       if (home.status === 'fulfilled') setIdentityConfigured(home.value.configured);
       if (credential.status === 'fulfilled')
         setKeySavedForSession(credential.value || provider?.id === 'local');
@@ -177,10 +180,6 @@ export function useAppEffects(state: ReturnType<typeof useAppState>) {
           }
         }
       }
-      const currentProfile =
-        savedProfile.status === 'fulfilled'
-          ? savedProfile.value
-          : { displayName: '', nickname: '', avatarDataUrl: null };
       if (
         home.status === 'fulfilled' &&
         home.value.state === 'integra' &&
@@ -200,7 +199,7 @@ export function useAppEffects(state: ReturnType<typeof useAppState>) {
               { displayName: recovered.displayName, nickname: recovered.nickname },
               reportDiagnostic,
             );
-            setProfile(saved);
+            setProfile(normalizeProfileData(saved));
           }
         } catch {
           // O banner persistente identifica o comando que falhou.

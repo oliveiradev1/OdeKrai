@@ -37,7 +37,8 @@ describe('manifesto de notas de versão', () => {
       validNote.replaceAll('1.2.3', '1.1.0').replace('2026-10-29', '2026-10-28'),
     );
 
-    await expect(buildReleaseNotes(temporaryDirectory, '1.2.3')).resolves.toEqual({
+    const manifest = await buildReleaseNotes(temporaryDirectory, '1.2.3');
+    expect(manifest).toEqual({
       currentVersion: '1.2.3',
       releases: [
         {
@@ -56,6 +57,19 @@ describe('manifesto de notas de versão', () => {
         },
       ],
     });
+    for (const release of manifest.releases) {
+      expect(typeof release.version).toBe('string');
+      expect(typeof release.title).toBe('string');
+      expect(typeof release.date).toBe('string');
+      expect(typeof release.summary).toBe('string');
+      expect(release.version.trim()).not.toBe('');
+      expect(release.title.trim()).not.toBe('');
+      expect(release.date.trim()).not.toBe('');
+      expect(release.summary.trim()).not.toBe('');
+      expect(
+        release.changes.every((change) => typeof change === 'string' && change.length > 0),
+      ).toBe(true);
+    }
   });
 
   it('falha com erro explícito quando uma nota está mal formatada', async () => {
@@ -64,6 +78,29 @@ describe('manifesto de notas de versão', () => {
     await expect(buildReleaseNotes(temporaryDirectory, '1.2.3')).rejects.toThrow(
       'título deve seguir',
     );
+  });
+
+  it.each([
+    ['data ausente', validNote.replace('Data do marco: 2026-10-29.\n', ''), 'Data do marco'],
+    [
+      'resumo ausente',
+      validNote.replace('- Resumo escrito nas notas.', ''),
+      'Resumo para pessoas” ausente ou vazia',
+    ],
+    [
+      'item de lista vazio',
+      validNote.replace('- Recurso documentado.', '- '),
+      'itens de “Adicionado” não podem estar vazios',
+    ],
+    [
+      'item sem marcador',
+      validNote.replace('- Recurso documentado.', 'Recurso documentado.'),
+      'itens de “Adicionado” devem ser listas',
+    ],
+  ])('falha com mensagem clara quando falta %s', async (_name, note, message) => {
+    temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), 'odekrai-release-notes-'));
+    await writeFile(path.join(temporaryDirectory, 'v1.2.3.md'), note);
+    await expect(buildReleaseNotes(temporaryDirectory, '1.2.3')).rejects.toThrow(message);
   });
 
   it('falha quando a nota da versão embutida não existe', async () => {

@@ -10,6 +10,7 @@ import { MessageComposer } from '../MessageComposer';
 import type { ProfileData } from '../Profile';
 import { PetSprite } from '../PetSprite';
 import type { PetAnimationState } from '../../core/pets';
+import { normalizeProfileData } from '../../core/identity';
 
 export function Overview({
   draft,
@@ -56,7 +57,8 @@ export function Overview({
 }) {
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const recentConversations = conversations.slice(0, 3);
-  const name = profile.nickname.trim() || profile.displayName.trim();
+  const safeProfile = normalizeProfileData(profile);
+  const name = safeProfile.nickname.trim() || safeProfile.displayName.trim();
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();

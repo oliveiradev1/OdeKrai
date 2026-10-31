@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { initials, type ProfileData } from './Profile';
 import { Icon, type IconName } from './Icon';
 import type { Section } from './screens/types';
+import { normalizeProfileData } from '../core/identity';
 
 export const navigationItems: { id: Section; label: string; icon: IconName }[] = [
   { id: 'overview', label: 'Início', icon: 'home' },
@@ -170,7 +171,8 @@ export function SidebarProfileMenu({
   const [menuPosition, setMenuPosition] = useState<ReturnType<typeof positionProfileMenu> | null>(
     null,
   );
-  const displayName = profile.displayName.trim() || 'Seu perfil';
+  const safeProfile = normalizeProfileData(profile);
+  const displayName = safeProfile.displayName.trim() || 'Seu perfil';
 
   useEffect(() => {
     if (!open) {
@@ -284,16 +286,16 @@ export function SidebarProfileMenu({
         }}
       >
         <span className="avatar-small">
-          {profile.avatarDataUrl ? (
-            <img src={profile.avatarDataUrl} alt="" />
+          {safeProfile.avatarDataUrl ? (
+            <img src={safeProfile.avatarDataUrl} alt="" />
           ) : (
-            initials(profile.displayName)
+            initials(safeProfile.displayName)
           )}
           <span className="online-dot" />
         </span>
         <span className="profile-copy">
           <strong>{displayName}</strong>
-          <span>{profile.nickname.trim() || 'Editar perfil'}</span>
+          <span>{safeProfile.nickname.trim() || 'Editar perfil'}</span>
         </span>
       </button>
       {open &&

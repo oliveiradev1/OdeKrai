@@ -8,6 +8,34 @@ export type ReleaseNote = {
   changes: string[];
 };
 
+export type ReleaseNotesManifest = {
+  currentVersion: string;
+  releases: ReleaseNote[];
+};
+
+function stringOrEmpty(value: unknown): string {
+  return typeof value === 'string' ? value : '';
+}
+
+export function normalizeReleaseNotesManifest(value: unknown): ReleaseNotesManifest {
+  if (!value || typeof value !== 'object') return { currentVersion: '', releases: [] };
+  const manifest = value as { currentVersion?: unknown; releases?: unknown };
+  const releases = Array.isArray(manifest.releases) ? manifest.releases : [];
+  return {
+    currentVersion: stringOrEmpty(manifest.currentVersion),
+    releases: releases.map((value): ReleaseNote => {
+      const release = value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
+      return {
+        version: stringOrEmpty(release.version),
+        title: stringOrEmpty(release.title),
+        date: stringOrEmpty(release.date),
+        summary: stringOrEmpty(release.summary),
+        changes: Array.isArray(release.changes) ? release.changes.map(stringOrEmpty) : [],
+      };
+    }),
+  };
+}
+
 export type ReleasePromptDecision = {
   show: boolean;
   markSeen: boolean;

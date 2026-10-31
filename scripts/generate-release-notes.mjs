@@ -49,19 +49,28 @@ function parseReleaseNote(filename, source) {
     throw new Error(`${filename}: seção “## Resumo para pessoas” ausente ou vazia.`);
   const summary = summaryText
     .split(/\r?\n/)
-    .map((line) => line.replace(/^[-*]\s+/, '').trim())
+    .map((line) => line.replace(/^[-*](?:\s+|$)/, '').trim())
     .filter(Boolean)
     .join(' ');
+  if (!summary.trim()) {
+    throw new Error(`${filename}: a seção de resumo não pode estar vazia.`);
+  }
   const changes = [];
   for (const sectionName of ['Adicionado', 'Alterado', 'Corrigido']) {
     const content = sections.get(sectionName);
     if (!content) continue;
     for (const line of content.split(/\r?\n/)) {
       if (!line.trim()) continue;
+      if (/^[-*]$/.test(line.trim())) {
+        throw new Error(`${filename}: itens de “${sectionName}” não podem estar vazios.`);
+      }
       if (!/^[-*]\s+/.test(line)) {
         throw new Error(`${filename}: itens de “${sectionName}” devem ser listas com marcadores.`);
       }
       const change = line.replace(/^[-*]\s+/, '').trim();
+      if (!change) {
+        throw new Error(`${filename}: itens de “${sectionName}” não podem estar vazios.`);
+      }
       if (change.toLocaleLowerCase('pt-BR').startsWith('a lista completa dos commits abaixo')) {
         continue;
       }
@@ -74,7 +83,13 @@ function parseReleaseNote(filename, source) {
     );
   }
 
-  return { version: heading[1], title: heading[2].trim(), date, summary, changes };
+  return {
+    version: heading?.[1] ?? '',
+    title: heading?.[2]?.trim() ?? '',
+    date: date ?? '',
+    summary: summary ?? '',
+    changes: changes.map((change) => change ?? ''),
+  };
 }
 
 export async function buildReleaseNotes(directory, currentVersion) {

@@ -3,6 +3,15 @@ export type ConversationNotes = { instructions: string; slang: string };
 export type ApprovedProfile = { displayName: string; nickname: string };
 export type EditableProfile = ApprovedProfile & { avatarDataUrl: string | null };
 
+export function normalizeProfileData(value: unknown): EditableProfile {
+  const profile = value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
+  return {
+    displayName: typeof profile.displayName === 'string' ? profile.displayName : '',
+    nickname: typeof profile.nickname === 'string' ? profile.nickname : '',
+    avatarDataUrl: typeof profile.avatarDataUrl === 'string' ? profile.avatarDataUrl : null,
+  };
+}
+
 export function profileFromApprovedCore(content: string): ApprovedProfile | null {
   const displayName = content.match(/^- Nome: (.*)$/m)?.[1]?.trim() ?? '';
   const savedNickname = content.match(/^- Apelido: (.*)$/m)?.[1]?.trim() ?? '';
@@ -19,10 +28,11 @@ export function mergeApprovedProfile(
 ): EditableProfile | null {
   const approved = profileFromApprovedCore(approvedContent);
   if (!approved) return null;
+  const current = normalizeProfileData(profile);
   return {
-    displayName: profile.displayName.trim() ? profile.displayName : approved.displayName,
-    nickname: profile.nickname.trim() ? profile.nickname : approved.nickname,
-    avatarDataUrl: profile.avatarDataUrl,
+    displayName: current.displayName.trim() ? current.displayName : approved.displayName,
+    nickname: current.nickname.trim() ? current.nickname : approved.nickname,
+    avatarDataUrl: current.avatarDataUrl,
   };
 }
 

@@ -38,4 +38,21 @@ describe('modal de novidades da versão', () => {
     }
     expect(markup).toContain('Voltar às novidades');
   });
+
+  it('não quebra a renderização quando campos do manifesto estão ausentes', () => {
+    const markup = renderToStaticMarkup(
+      <ReleaseNotesContent
+        manifest={{
+          currentVersion: '1.2.3',
+          releases: [{ version: '1.2.3', changes: [undefined] }],
+        }}
+        showAllVersions
+        onShowAllVersions={vi.fn()}
+        onShowCurrent={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(markup).toContain('Versão 1.2.3');
+    expect(markup).not.toContain('undefined');
+  });
 });

@@ -84,6 +84,22 @@ describe('início do OdeKrai', () => {
     expect(createHomeSuggestions(context)).toEqual([]);
   });
 
+  it('ignora títulos ausentes em eventos e conversas sem quebrar sugestões', () => {
+    const malformed = {
+      ...emptyContext(),
+      agentAvailable: true,
+      activeSkills: [
+        { id: 'calendar.list_events', family: 'agenda_lembretes' as const, name: 'Agenda' },
+      ],
+      todayEvents: [{ id: 'event-1', start: '2030-01-01T10:00:00Z' }],
+      recentConversations: [{ id: 'conversation-1', preview: '', created_at: 1 }],
+    } as unknown as HomeContext;
+
+    const suggestions = createHomeSuggestions(malformed);
+    expect(suggestions.map(({ id }) => id)).not.toContain('event-event-1');
+    expect(suggestions.map(({ id }) => id)).not.toContain('conversation-conversation-1');
+  });
+
   it('preenche a mensagem com uma sugestão sem enviar automaticamente', () => {
     const suggestion = createHomeSuggestions({
       ...emptyContext(),
