@@ -1,13 +1,13 @@
-# Licença e distribuição de assets
+# Asset Licensing and Distribution
 
-O código e as dependências do aplicativo têm seus próprios termos de licença. Eles não concedem direito de redistribuir materiais visuais fornecidos pelo proprietário.
+The application code and dependencies are subject to their own license terms. Those terms do not grant permission to redistribute visual materials supplied by the owner.
 
-## Materiais privados do proprietário
+## Owner-provided private materials
 
-O modelo 3D e as referências visuais fornecidos pelo proprietário são privados. Não podem ser versionados nem incluídos em artefatos distribuídos. O runtime e o build do aplicativo não os consomem.
+The 3D model and visual references supplied by the owner are private. They must not be committed or included in distributed artifacts. The application runtime and build do not consume them.
 
-## Personagens Kenney
+## Kenney characters
 
-Os doze sprites usados pelo aplicativo são renderizações dos modelos Mini Characters da Kenney, distribuídos sob CC0. As imagens foram renderizadas em 512×512 px, com fundo transparente e pose de repouso. Origem, URL, licença e edição estão registradas em [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+The twelve sprites used by the application are renders of Kenney's Mini Characters models, distributed under CC0. The images were rendered at 512×512 px, with transparent backgrounds and idle poses. Their source, URL, license, and modifications are recorded in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
 
-O script de desenvolvimento `scripts/render-pets.mjs` recebe os modelos-fonte externos por parâmetro. Three.js é dependência de desenvolvimento, usada somente por esse script; não é importada pelo aplicativo. Os modelos-fonte e as texturas não devem ser adicionados ao repositório ou aos artefatos do aplicativo.
+The development script `scripts/render-pets.mjs` receives external source models as parameters. Three.js is a development dependency used only by this script; it is not imported by the application. Source models and textures must not be added to the repository or application artifacts.
