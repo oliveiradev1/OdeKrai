@@ -7,6 +7,47 @@ Este arquivo segue o formato Keep a Changelog. Todas as versões listadas são p
 - Conexão Google Calendar com habilidades Rust separadas, aprovação de escritas e escopo `calendar.events.owned`.
 - Habilidades de papel de parede com restauração pelo estado anterior e bloqueio do Windows com aprovação obrigatória; bloqueio negado para origem em conteúdo externo.
 
+## [v0.16.0]
+
+# v0.16.0: navegação nova, habilidades, Nuvem (ShardCloud) e aviso de atualização
+
+Esta versão reorganiza o OdeKrai e traz as primeiras habilidades de agente que usam serviços externos.
+
+Importante antes de instalar
+
+- O instalador não é assinado digitalmente. O Windows pode mostrar "O Windows protegeu o computador". Clique em "Mais informações" e depois em "Executar assim mesmo".
+- Esta é uma pré-lançamento. Algumas funções foram testadas só automaticamente; a parte visual e a de Windows ainda não foram validadas.
+
+Novidades
+
+- Navegação: sidebar com Início, Conversas, Agenda, Habilidades e Conectores de IA. Perfil no rodapé e Configurações em janela com busca.
+- Início, Conversas com cartões de ação e desfazer, painel de Atividades, paleta de comandos (Ctrl+K).
+- Habilidades organizadas por famílias, com busca e detalhes.
+- Captura de tela e microfone sempre sob sua confirmação.
+- Discord: mensagens por webhook, sempre com aprovação.
+- Nuvem: ShardCloud (ver VMs; ligar e desligar com aprovação; comandos em lote aprovado; criação com limite mensal). Os demais provedores são planejados.
+- Atualizações: aviso diário de versão nova com link para download. Não instala sozinho.
+- Primeiro uso e modo desempenho.
+
+Correções
+
+- Confirmações (apagar conversa, memória, credencial) usam diálogo do próprio app.
+- Links abrem no navegador pelo caminho validado.
+- Habilidades não ficam vazias quando uma tem erro.
+- Campos de token ficam em formulário, sem sugestão de salvar pelo navegador.
+
+Limitações conhecidas
+
+- Análise de imagens pela IA e voz em tempo real não estão disponíveis.
+- ShardCloud não foi testado com conta real.
+- Google Calendar, Gmail, Sheets e MCP não estão disponíveis.
+- Erro 429 vem do provedor: confira o uso e o plano da sua conta.
+
+Verificação
+
+- Testes automáticos no CI (status no commit final).
+- Validação visual e no Windows: pendente.
+
 ## [v0.15.0] — Ferramentas locais e análise visual — 2026-10-28
 
 ### Adicionado
@@ -158,3 +199,4 @@ Este arquivo segue o formato Keep a Changelog. Todas as versões listadas são p
 [v0.13.0]: https://github.com/Anceryx/OdeKrai/compare/v0.12.0...v0.13.0
 [v0.14.0]: https://github.com/Anceryx/OdeKrai/compare/v0.13.0...v0.14.0
 [v0.15.0]: https://github.com/Anceryx/OdeKrai/compare/v0.14.0...v0.15.0
+[v0.16.0]: https://github.com/Anceryx/OdeKrai/compare/v0.15.0...v0.16.0
