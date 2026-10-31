@@ -1,6 +1,16 @@
 {
-  "currentVersion": "0.16.0",
+  "currentVersion": "0.16.1",
   "releases": [
+    {
+      "version": "0.16.1",
+      "title": "Google Calendar e controles do Windows",
+      "date": "",
+      "summary": "Esta versão adiciona habilidades do Google Calendar e controles locais com aprovação.",
+      "changes": [
+        "Conexão Google Calendar com habilidades Rust separadas, aprovação de escritas e escopo `calendar.events.owned`.",
+        "Habilidades de papel de parede com restauração pelo estado anterior e bloqueio do Windows com aprovação obrigatória; bloqueio negado para origem em conteúdo externo."
+      ]
+    },
     {
       "version": "0.16.0",
       "title": "navegação nova, habilidades, Nuvem (ShardCloud) e aviso de atualização",

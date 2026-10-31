@@ -4,6 +4,14 @@ Este arquivo segue o formato Keep a Changelog. Todas as versões listadas são p
 
 ## [Não lançado]
 
+## [v0.16.1]
+
+# v0.16.1 — Google Calendar e controles do Windows
+
+Esta versão adiciona habilidades do Google Calendar e controles locais com aprovação.
+
+Novidades
+
 - Conexão Google Calendar com habilidades Rust separadas, aprovação de escritas e escopo `calendar.events.owned`.
 - Habilidades de papel de parede com restauração pelo estado anterior e bloqueio do Windows com aprovação obrigatória; bloqueio negado para origem em conteúdo externo.
 
@@ -201,3 +209,4 @@ Verificação
 [v0.14.0]: https://github.com/Anceryx/OdeKrai/compare/v0.13.0...v0.14.0
 [v0.15.0]: https://github.com/Anceryx/OdeKrai/compare/v0.14.0...v0.15.0
 [v0.16.0]: https://github.com/Anceryx/OdeKrai/compare/v0.15.0...v0.16.0
+[v0.16.1]: https://github.com/Anceryx/OdeKrai/compare/v0.16.0...v0.16.1
