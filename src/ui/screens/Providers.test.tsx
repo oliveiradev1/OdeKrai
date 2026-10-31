@@ -5,8 +5,22 @@ import { defaultProviderSettings, defaultSettings } from '../../core/settings';
 import { AI_PROVIDERS } from '../../core/providers';
 import { Icon } from '../Icon';
 import { ProvidersScreen } from './Providers';
+import { PROVIDER_TOOLS_HELP_TEXT, providerToolsBadgeLabel } from '../ProviderCatalog';
 
 describe('ProvidersScreen', () => {
+  it('usa um rótulo que indica suporte a ferramentas, sem sugerir conexão', () => {
+    expect(
+      providerToolsBadgeLabel({
+        streaming: true,
+        tools: true,
+        vision: false,
+        imageGeneration: false,
+        verified: true,
+      }),
+    ).toBe('Suporta ferramentas');
+    expect(PROVIDER_TOOLS_HELP_TEXT).toContain('não significa que o provedor esteja conectado');
+  });
+
   it('monta o catálogo', () => {
     const markup = renderToStaticMarkup(
       <ProvidersScreen

@@ -52,6 +52,14 @@ function localModelKey(baseUrl: string, modelId: string) {
   return JSON.stringify([baseUrl, modelId]);
 }
 
+export function providerToolsBadgeLabel(capabilities: ProviderCapabilities): string {
+  if (capabilities.tools) return 'Suporta ferramentas';
+  return capabilities.verified ? 'Sem suporte para este modelo' : 'Não verificado';
+}
+
+export const PROVIDER_TOOLS_HELP_TEXT =
+  'Indica compatibilidade do modelo com ferramentas; não significa que o provedor esteja conectado.';
+
 export function ProviderCatalog({
   settings,
   selectedId,
@@ -984,12 +992,9 @@ export function ProviderCatalog({
                         : 'ui-badge--warning')
                   }
                 >
-                  {effectiveCapabilities.tools
-                    ? 'Verificado'
-                    : effectiveCapabilities.verified
-                      ? 'Sem suporte para este modelo'
-                      : 'Não verificado'}
+                  {providerToolsBadgeLabel(effectiveCapabilities)}
                 </span>
+                <small>{PROVIDER_TOOLS_HELP_TEXT}</small>
               </p>
             )}
             {externalLinkError && (
@@ -1333,7 +1338,7 @@ export function ProviderCatalog({
                   <button
                     className="text-button"
                     type="button"
-                    disabled={!credentialAvailable || !draft.model.trim() || busy}
+                    disabled={!credentialAvailable || !(draft.model ?? '').trim() || busy}
                     onClick={() => void ping()}
                     title="Envia um teste curto ao provedor. Pode gerar cobrança."
                   >
