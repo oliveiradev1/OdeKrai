@@ -44,6 +44,18 @@ describe('seção informativa de nuvem', () => {
     expect(connectedMarkup).toContain('Conectado');
   });
 
+  it('submete o token por formulário e não permite preenchimento automático', () => {
+    const formStart = markup.indexOf('<form class="cloud-token-entry"');
+    const formEnd = markup.indexOf('</form>', formStart);
+    const formMarkup = markup.slice(formStart, formEnd);
+    expect(formStart).toBeGreaterThanOrEqual(0);
+    expect(formMarkup).toContain('id="shardcloud-token"');
+    expect(formMarkup).toContain('name="shardcloud-token"');
+    expect(formMarkup).toContain('type="password"');
+    expect(formMarkup).toContain('autoComplete="off"');
+    expect(formMarkup).toContain('type="submit"');
+  });
+
   it('marca consultas externas como não confiáveis sem inserir respostas como HTML', () => {
     expect(connectedMarkup).toContain('Dados externos da ShardCloud — não confiáveis');
     expect(connectedMarkup).not.toContain('dangerouslySetInnerHTML');

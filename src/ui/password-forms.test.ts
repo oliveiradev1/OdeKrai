@@ -8,6 +8,7 @@ describe('formulários de credenciais', () => {
       readFileSync(new URL('./PrivacyConfigurations.tsx', import.meta.url), 'utf8'),
       readFileSync(new URL('./SkillsScreen.tsx', import.meta.url), 'utf8'),
       readFileSync(new URL('./ProviderCatalog.tsx', import.meta.url), 'utf8'),
+      readFileSync(new URL('./CloudSettings.tsx', import.meta.url), 'utf8'),
     ];
     expect(sources[0]).toMatch(/<form[\s\S]*?type="password"[\s\S]*?<\/form>/);
     expect(sources[1]).toMatch(
@@ -22,6 +23,9 @@ describe('formulários de credenciais', () => {
     expect(sources[3]).toMatch(
       /className="provider-form"[\s\S]*?type=\{showKey \? 'text' : 'password'\}[\s\S]*?type="submit"/,
     );
-    for (const source of sources) expect(source).toContain('autoComplete="new-password"');
+    for (const source of sources.slice(0, 3)) expect(source).toContain('autoComplete="off"');
+    expect(sources[3]).toContain('autoComplete="new-password"');
+    expect(sources[4]).toContain('autoComplete="off"');
+    expect(sources[4]).toContain('className="cloud-token-entry"');
   });
 });

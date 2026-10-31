@@ -17,6 +17,7 @@ import {
 } from '../core/skills-catalog';
 import { Button, PageHeader, Toggle } from './DesignSystem';
 import { Icon } from './Icon';
+import { submitSecretForm } from './secret-form';
 import { RiskBadge } from './RiskBadge';
 import { PrivacyConfigurationSummary } from './PrivacyConfigurations';
 
@@ -788,6 +789,24 @@ function GoogleCalendarConnection({
   const [clientSecret, setClientSecret] = useState('');
   const [scopes, setScopes] = useState('');
 
+  async function saveGoogleCredentials(): Promise<boolean> {
+    setBusy(true);
+    try {
+      const nextStatus = await invoke<GoogleOAuthStatus>('google_oauth_connect', {
+        clientId,
+        clientSecret: clientSecret || null,
+        scopes: scopes.trim().split(/\s+/),
+      });
+      onStatusChange(nextStatus);
+      return true;
+    } catch (cause) {
+      onError(String(cause));
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <section className="skills-google-connection" aria-labelledby="skills-google-heading">
       <div className="skills-google-heading">
@@ -812,19 +831,7 @@ function GoogleCalendarConnection({
         <form
           className="skills-google-fields"
           onSubmit={(event) => {
-            event.preventDefault();
-            setBusy(true);
-            void invoke<GoogleOAuthStatus>('google_oauth_connect', {
-              clientId,
-              clientSecret: clientSecret || null,
-              scopes: scopes.trim().split(/\s+/),
-            })
-              .then((nextStatus) => {
-                onStatusChange(nextStatus);
-                setClientSecret('');
-              })
-              .catch((cause) => onError(String(cause)))
-              .finally(() => setBusy(false));
+            void submitSecretForm(event, saveGoogleCredentials, () => setClientSecret(''));
           }}
         >
           <label htmlFor="google-client-id">Identificador do cliente Google</label>
@@ -837,10 +844,11 @@ function GoogleCalendarConnection({
           <label htmlFor="google-client-secret">Chave opcional do cliente Google</label>
           <input
             id="google-client-secret"
+            name="google-client-secret"
             type="password"
             value={clientSecret}
             onChange={(event) => setClientSecret(event.target.value)}
-            autoComplete="new-password"
+            autoComplete="off"
           />
           <label htmlFor="google-oauth-scopes">
             Acessos solicitados pelo recurso que você vai usar

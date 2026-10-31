@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { CLOUD_LINK_CATEGORIES, openCloudLink } from '../core/cloud-links';
+import { submitSecretForm } from './secret-form';
 
 type ExternalData<T> = {
   sourceLabel: string;
@@ -132,21 +133,22 @@ export function CloudSettings({
     }
   }
 
-  async function saveToken() {
-    if (!isTauri()) return;
+  async function saveToken(): Promise<boolean> {
+    if (!isTauri()) return false;
     setBusy(true);
     setError(null);
     try {
       await invoke('save_shardcloud_token', { token });
-      setToken('');
       setTokenSaved(true);
       setConnected(false);
       setVms([]);
       setDetails(null);
       setMetrics(null);
       setDistros(null);
+      return true;
     } catch (reason) {
       setError(safeUiError(reason));
+      return false;
     } finally {
       setBusy(false);
     }
@@ -338,21 +340,27 @@ export function CloudSettings({
             </div>
           </div>
         ) : (
-          <div className="cloud-token-entry">
+          <form
+            className="cloud-token-entry"
+            onSubmit={(event) => {
+              void submitSecretForm(event, saveToken, () => setToken(''));
+            }}
+          >
             <label htmlFor="shardcloud-token">Token da ShardCloud</label>
             <input
               id="shardcloud-token"
+              name="shardcloud-token"
               type="password"
-              autoComplete="new-password"
+              autoComplete="off"
               value={token}
               onChange={(event) => setToken(event.target.value)}
               placeholder="Cole o token da ShardCloud"
               spellCheck={false}
             />
-            <button type="button" disabled={busy || !token.trim()} onClick={() => void saveToken()}>
+            <button type="submit" disabled={busy || !token.trim()}>
               {busy ? 'Salvando…' : 'Salvar token'}
             </button>
-          </div>
+          </form>
         )}
 
         {error && (

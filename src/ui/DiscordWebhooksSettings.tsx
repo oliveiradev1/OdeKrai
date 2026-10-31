@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { Button } from './DesignSystem';
 import { Icon } from './Icon';
+import { submitSecretForm } from './secret-form';
 import {
   revokeDiscordIntegration,
   saveDiscordIntegration,
@@ -34,19 +35,21 @@ export function DiscordWebhooksSettings({ onChanged }: { onChanged?: () => Promi
     void refresh();
   }, [refresh]);
 
-  async function save() {
+  async function save(): Promise<boolean> {
     setBusy(true);
     try {
       await saveDiscordIntegration(name, url, authorized, connectionTested, invoke);
-      setName('');
-      setUrl('');
-      setAuthorized(false);
-      setConnectionTested(false);
       setNotice('Integração configurada. A URL não será exibida novamente.');
       await refresh();
-      await onChanged?.();
+      try {
+        await onChanged?.();
+      } catch (cause) {
+        setError(String(cause));
+      }
+      return true;
     } catch (cause) {
       setError(String(cause));
+      return false;
     } finally {
       setBusy(false);
     }
@@ -105,13 +108,19 @@ export function DiscordWebhooksSettings({ onChanged }: { onChanged?: () => Promi
       )}
       <form
         onSubmit={(event) => {
-          event.preventDefault();
-          void testConnection();
+          void submitSecretForm(event, save, () => {
+            setName('');
+            setUrl('');
+            setAuthorized(false);
+            setConnectionTested(false);
+          });
         }}
       >
         <label className="discord-secret-field">
           Nome do destino
           <input
+            id="discord-webhook-name"
+            name="discord-webhook-name"
             value={name}
             maxLength={60}
             autoComplete="off"
@@ -124,8 +133,10 @@ export function DiscordWebhooksSettings({ onChanged }: { onChanged?: () => Promi
         <label className="discord-secret-field">
           Endereço de conexão do Discord
           <input
+            id="discord-webhook-url"
+            name="discord-webhook-url"
             type="password"
-            autoComplete="new-password"
+            autoComplete="off"
             value={url}
             onChange={(event) => {
               setUrl(event.target.value);
@@ -146,17 +157,17 @@ export function DiscordWebhooksSettings({ onChanged }: { onChanged?: () => Promi
           <Button
             variant="secondary"
             disabled={busy || !isTauri() || !url || !authorized}
-            type="submit"
+            type="button"
+            onClick={() => void testConnection()}
           >
             Testar conexão
           </Button>
           <Button
             variant="secondary"
-            type="button"
+            type="submit"
             disabled={
               busy || !isTauri() || !name.trim() || !url || !authorized || !connectionTested
             }
-            onClick={() => void save()}
           >
             Autorizar e salvar
           </Button>

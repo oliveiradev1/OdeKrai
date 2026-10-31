@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { defaultSettings } from '../core/settings';
 import { PrivacyConfigurationSummary, PrivacyConfigurations } from './PrivacyConfigurations';
 import { ConfirmationProvider } from './ConfirmationProvider';
+import { DiscordWebhooksSettings } from './DiscordWebhooksSettings';
 
 describe('configurações de privacidade', () => {
   it('mantém os controles em Privacidade e o resumo de Habilidades somente para leitura', () => {
@@ -70,5 +71,32 @@ describe('configurações de privacidade', () => {
     for (const command of ['discord_test_connection', 'discord_save', 'discord_remove']) {
       expect(discordCommands).toContain(command);
     }
+  });
+
+  it('mantém os segredos MCP em formulários de gravação com nomes e IDs próprios', () => {
+    const ui = readFileSync(new URL('./PrivacyConfigurations.tsx', import.meta.url), 'utf8');
+    expect(ui).toContain('submitSecretForm(event, addServer');
+    expect(ui).toContain('() => saveServerSecret(server, key)');
+    expect(ui).toContain('id={`mcp-new-secret-${key}`}');
+    expect(ui).toContain('name={`mcp-new-secret-${key}`}');
+    expect(ui).toContain('id={`mcp-secret-${server.id}-${key}`}');
+    expect(ui).toContain('name={`mcp-secret-${server.id}-${key}`}');
+    expect(ui.match(/autoComplete="off"/g)).toHaveLength(2);
+  });
+
+  it('submete a URL do Discord pelo formulário de gravação e testa sem recarregar', () => {
+    const markup = renderToStaticMarkup(<DiscordWebhooksSettings />);
+    const formStart = markup.indexOf('<form>');
+    const formEnd = markup.indexOf('</form>', formStart);
+    const formMarkup = markup.slice(formStart, formEnd);
+    expect(formStart).toBeGreaterThanOrEqual(0);
+    expect(formMarkup).toContain('id="discord-webhook-url"');
+    expect(formMarkup).toContain('name="discord-webhook-url"');
+    expect(formMarkup).toContain('type="password"');
+    expect(formMarkup).toContain('autoComplete="off"');
+    expect(formMarkup).toContain('Autorizar e salvar');
+    expect(formMarkup).toContain('Testar conexão');
+    const source = readFileSync(new URL('./DiscordWebhooksSettings.tsx', import.meta.url), 'utf8');
+    expect(source).toContain('submitSecretForm(event, save');
   });
 });

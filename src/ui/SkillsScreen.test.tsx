@@ -145,6 +145,15 @@ describe('catálogo de habilidades', () => {
     }
   });
 
+  it('mantém a chave opcional do Google dentro do formulário e limpa após salvar', () => {
+    const source = readFileSync(new URL('./SkillsScreen.tsx', import.meta.url), 'utf8');
+    expect(source).toContain('submitSecretForm(event, saveGoogleCredentials');
+    expect(source).toContain('id="google-client-secret"');
+    expect(source).toContain('name="google-client-secret"');
+    expect(source).toContain('autoComplete="off"');
+    expect(source).toContain("() => setClientSecret('')");
+  });
+
   it('exibe somente as famílias e habilidades recebidas do registro simulado', () => {
     const markup = renderToStaticMarkup(
       <SkillsCatalogView
