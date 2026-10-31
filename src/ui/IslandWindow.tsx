@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type FormEvent } from 'react';
 import { emit, listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -324,9 +324,44 @@ export function IslandWindow() {
     }
   };
   const state = snapshot.state;
+  const petHitTestEnabled = settings.companion.freeMode && state !== 'expanded';
+  useEffect(() => {
+    let disposed = false;
+    const sprite = document.querySelector<HTMLElement>('.island-mascot-renderer');
+    const updateHitTest = () => {
+      if (disposed) return;
+      const rect = sprite?.getBoundingClientRect();
+      void invoke('set_pet_hit_test', {
+        enabled: petHitTestEnabled && Boolean(rect),
+        x: rect?.left ?? 0,
+        y: rect?.top ?? 0,
+        width: rect?.width ?? 0,
+        height: rect?.height ?? 0,
+      }).catch(() => {
+        console.warn('[OdeKrai diagnóstico] Não foi possível atualizar a área de clique do pet.');
+      });
+    };
+    updateHitTest();
+    const observer = sprite ? new ResizeObserver(updateHitTest) : undefined;
+    if (sprite) observer?.observe(sprite);
+    window.addEventListener('resize', updateHitTest);
+    return () => {
+      disposed = true;
+      observer?.disconnect();
+      window.removeEventListener('resize', updateHitTest);
+      void invoke('set_pet_hit_test', {
+        enabled: false,
+        x: 0,
+        y: 0,
+        width: 0,
+        height: 0,
+      }).catch(() => undefined);
+    };
+  }, [petHitTestEnabled, settings.companion.size]);
   return (
     <main
       className={`floating-island ${settings.companion.freeMode ? 'free-mode' : 'island-mode'} state-${state} ${settings.reduceMotion ? 'reduce-motion' : ''}`}
+      style={{ '--companion-scale': settings.companion.size } as CSSProperties}
     >
       <div
         className="island-shell"

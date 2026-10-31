@@ -3,7 +3,8 @@ import { petWindowLayout } from './pet-layout';
 
 describe('geometria da janela do pet', () => {
   it('mantém o modo Livre próximo do tamanho do mascote e acomoda o comando rápido expandido', () => {
-    expect(petWindowLayout(true, false, 1)).toEqual({ width: 128, height: 128 });
+    expect(petWindowLayout(true, false, 1)).toEqual({ width: 82, height: 82 });
+    expect(petWindowLayout(true, false, 0.75)).toEqual({ width: 62, height: 62 });
     expect(petWindowLayout(true, true, 1)).toEqual({ width: 380, height: 330 });
   });
 

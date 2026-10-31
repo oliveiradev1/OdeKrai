@@ -1,5 +1,5 @@
-// A animação direcional da janela usa uma abordagem inspirada na ilha Windows
-// de Coucou; geometria reimplementada para os contratos nativos do OdeKrai.
+// A animação direcional e o hit-test da janela usam abordagens estudadas em
+// windows/src-tauri/src/island.rs, de Coucou; geometria e contratos nativos reimplementados.
 // Referência MIT: Louis-CFM/coucou, windows-v0.5.3, © Louis Raillé, 2026.
 use pet_position::{fit_size, WindowPosition, WindowSize};
 use std::{
@@ -136,6 +136,7 @@ pub mod mcp;
 mod mcp_registry;
 mod memory_skills;
 mod pet_alerts;
+mod pet_hit_test;
 mod pet_position;
 mod policy;
 mod productivity;
@@ -244,11 +245,16 @@ mod feature_window_lifecycle_tests {
 
 #[cfg(test)]
 mod pet_window_focus_tests {
-    use super::PET_WINDOW_FOCUSABLE;
+    use super::{
+        PET_WINDOW_CLOSABLE, PET_WINDOW_FOCUSABLE, PET_WINDOW_SHADOW, PET_WINDOW_SKIP_TASKBAR,
+    };
 
     #[test]
     fn pet_window_does_not_take_keyboard_focus() {
         const { assert!(!PET_WINDOW_FOCUSABLE) };
+        const { assert!(!PET_WINDOW_CLOSABLE) };
+        const { assert!(!PET_WINDOW_SHADOW) };
+        const { assert!(PET_WINDOW_SKIP_TASKBAR) };
     }
 }
 
@@ -327,6 +333,122 @@ struct PetPositionStore {
 const PET_POSITION_FILE: &str = "pet-position.json";
 const PET_POSITION_WRITE_INTERVAL: Duration = Duration::from_secs(1);
 const PET_WINDOW_FOCUSABLE: bool = false;
+const PET_WINDOW_CLOSABLE: bool = false;
+const PET_WINDOW_SHADOW: bool = false;
+const PET_WINDOW_SKIP_TASKBAR: bool = true;
+
+#[derive(Default)]
+struct PetHitTestState {
+    rect: Mutex<Option<pet_hit_test::SpriteRect>>,
+    enabled: AtomicBool,
+    last_ignore: Mutex<Option<bool>>,
+}
+
+#[cfg(windows)]
+fn cursor_position_physical() -> Option<(f64, f64)> {
+    use windows_sys::Win32::{Foundation::POINT, UI::WindowsAndMessaging::GetCursorPos};
+
+    let mut point = POINT { x: 0, y: 0 };
+    // A posição global do cursor é consultada somente para decidir a passagem
+    // de cliques da janela transparente do pet.
+    (unsafe { GetCursorPos(&mut point) } != 0).then_some((f64::from(point.x), f64::from(point.y)))
+}
+
+#[cfg(not(windows))]
+fn cursor_position_physical() -> Option<(f64, f64)> {
+    None
+}
+
+async fn monitor_pet_hit_test(app: tauri::AppHandle) {
+    loop {
+        let mut active = false;
+        if let (Some(window), Some(state)) = (
+            app.get_webview_window("pet"),
+            app.try_state::<PetHitTestState>(),
+        ) {
+            let visible = window.is_visible().unwrap_or(false);
+            let enabled = state.enabled.load(Ordering::SeqCst);
+            active = cfg!(windows) && visible && enabled;
+            let ignore = if active {
+                let rect = state.rect.lock().ok().and_then(|guard| *guard);
+                match (
+                    rect,
+                    cursor_position_physical(),
+                    window.outer_position().ok(),
+                    window.scale_factor().ok(),
+                ) {
+                    (Some(rect), Some((cursor_x, cursor_y)), Some(position), Some(scale))
+                        if scale.is_finite() && scale > 0.0 =>
+                    {
+                        let x = (cursor_x - f64::from(position.x)) / scale;
+                        let y = (cursor_y - f64::from(position.y)) / scale;
+                        !pet_hit_test::contains(rect, x, y)
+                    }
+                    _ => cfg!(windows),
+                }
+            } else {
+                false
+            };
+            if let Ok(mut previous) = state.last_ignore.lock() {
+                if *previous != Some(ignore) {
+                    if window.set_ignore_cursor_events(ignore).is_ok() {
+                        *previous = Some(ignore);
+                    }
+                }
+            }
+        } else if let Some(state) = app.try_state::<PetHitTestState>() {
+            if let Ok(mut previous) = state.last_ignore.lock() {
+                *previous = None;
+            }
+        }
+        tokio::time::sleep(if active {
+            Duration::from_millis(16)
+        } else {
+            Duration::from_millis(200)
+        })
+        .await;
+    }
+}
+
+#[tauri::command]
+fn set_pet_hit_test(
+    caller: tauri::WebviewWindow,
+    state: tauri::State<'_, PetHitTestState>,
+    enabled: bool,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+) -> Result<(), String> {
+    require_caller(&caller, &["pet"])?;
+    if enabled {
+        if ![x, y, width, height].into_iter().all(f64::is_finite)
+            || x.abs() > 10_000.0
+            || y.abs() > 10_000.0
+            || !(1.0..=500.0).contains(&width)
+            || !(1.0..=500.0).contains(&height)
+        {
+            return Err("Área visível do pet inválida.".into());
+        }
+        *state
+            .rect
+            .lock()
+            .map_err(|_| "Estado de cliques do pet indisponível.".to_string())? =
+            Some(pet_hit_test::SpriteRect {
+                x,
+                y,
+                width,
+                height,
+            });
+    } else {
+        *state
+            .rect
+            .lock()
+            .map_err(|_| "Estado de cliques do pet indisponível.".to_string())? = None;
+    }
+    state.enabled.store(enabled, Ordering::SeqCst);
+    Ok(())
+}
 
 fn pet_position_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
     app.path()
@@ -686,14 +808,15 @@ async fn ensure_pet_window(app: &tauri::AppHandle) -> Result<WebviewWindow, Stri
     }
     let window = WebviewWindowBuilder::new(app, "pet", WebviewUrl::App("index.html".into()))
         .title("Pet do OdeKrai")
-        .inner_size(280.0, 104.0)
+        .inner_size(82.0, 82.0)
         .decorations(false)
         .transparent(true)
-        .shadow(false)
+        .shadow(PET_WINDOW_SHADOW)
+        .closable(PET_WINDOW_CLOSABLE)
         .always_on_top(true)
         .focusable(PET_WINDOW_FOCUSABLE)
         .resizable(false)
-        .skip_taskbar(true)
+        .skip_taskbar(PET_WINDOW_SKIP_TASKBAR)
         .visible(false)
         .build()
         .map_err(|_| "Não foi possível preparar a janela do pet.".to_string())?;
@@ -923,8 +1046,8 @@ async fn set_pet_size(
     require_caller(&caller, &["main", "pet"])?;
     if !width.is_finite()
         || !height.is_finite()
-        || !(80.0..=420.0).contains(&width)
-        || !(80.0..=360.0).contains(&height)
+        || !(60.0..=420.0).contains(&width)
+        || !(60.0..=360.0).contains(&height)
     {
         return Err("Dimensão inválida".into());
     }
@@ -994,6 +1117,7 @@ pub fn run() -> Result<(), tauri::Error> {
         .manage(providers::ProviderRequests::default())
         .manage(local_models::Downloads::default())
         .manage(PetPositionStore::default())
+        .manage(PetHitTestState::default())
         .manage(security::SecurityState::new(true))
         .manage(shardcloud::ShardCloudState::default())
         .manage(tray::CloseBehaviorState::default())
@@ -1003,6 +1127,7 @@ pub fn run() -> Result<(), tauri::Error> {
         .manage(mcp_registry::McpRuntime::default())
         .manage(google_oauth::GoogleOAuthState::default())
         .setup(|app| {
+            tauri::async_runtime::spawn(monitor_pet_hit_test(app.handle().clone()));
             reminders::start_scheduler(app.handle());
             load_pet_position(app.handle());
             let startup_state = diagnostics::setup(app.handle()).unwrap_or_else(|error| {
@@ -1062,6 +1187,7 @@ pub fn run() -> Result<(), tauri::Error> {
             set_pet_position,
             set_pet_topmost,
             set_pet_size,
+            set_pet_hit_test,
             pet_alerts::get_pet_alert_state,
             pet_alerts::enqueue_pet_activity,
             pet_alerts::dismiss_pet_alert,

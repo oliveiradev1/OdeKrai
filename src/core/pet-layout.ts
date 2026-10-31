@@ -11,7 +11,7 @@ export function petWindowLayout(
   const dimensions = freeMode
     ? expanded
       ? { width: 380, height: 330 }
-      : { width: 128, height: 128 }
+      : { width: 82, height: 82 }
     : expanded
       ? { width: 420, height: 330 }
       : { width: 280, height: 104 };

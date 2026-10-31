@@ -6,7 +6,7 @@
 
 Referência examinada: [Louis-CFM/coucou](https://github.com/Louis-CFM/coucou), clone local `C:\Users\Daniel oliveira\Documents\Projetos Olivera\coucou\coucou`, tag `windows-v0.5.3`, commit `47d1c2da12bf1dce8fb28b825757d497c1e1d88d`. A licença MIT (`LICENSE`, copyright Louis Raillé, 2026) abrange o código-fonte. `LICENSE-ASSETS.md` reserva os nomes Coucou e Mochi, o personagem, ícones, sons e imagens/GIFs/vídeos. Esses nomes, personagem, ícones, sons e mídias não podem ser copiados para OdeKrai.
 
-`src-tauri/src/lib.rs` e `src-tauri/src/pet_position.rs` reimplementam a transição direcional de janela com base no estudo da abordagem Windows do Coucou; os contratos de posição, escala, persistência e janelas são próprios do OdeKrai. Aviso nos arquivos adaptados: “Referência MIT: Louis-CFM/coucou, windows-v0.5.3, © Louis Raillé, 2026.” Nenhum trecho-fonte, nome, personagem, ícone, som ou mídia foi copiado. As restrições de `LICENSE-ASSETS.md` permanecem aplicáveis.
+`src-tauri/src/lib.rs` e `src-tauri/src/pet_position.rs` reimplementam a transição direcional de janela; `src-tauri/src/pet_hit_test.rs` implementa hit-test para passagem de cliques em área transparente, com base no estudo de `windows/src-tauri/src/island.rs` do Coucou. A geometria e os contratos de posição, escala, persistência, janelas e hit-test são próprios do OdeKrai. Os arquivos adaptados incluem o aviso “Referência MIT: Louis-CFM/coucou, windows-v0.5.3, © Louis Raillé, 2026.” Nenhum trecho-fonte, nome, personagem, ícone, som ou mídia foi copiado. As restrições de `LICENSE-ASSETS.md` permanecem aplicáveis.
 
 ```text
 MIT License

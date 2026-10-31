@@ -233,8 +233,8 @@ export function useAppEffects(state: ReturnType<typeof useAppState>) {
                 await startupInvoke<void>(
                   'set_pet_size',
                   {
-                    width: (companion.freeMode ? 176 : 280) * companion.size,
-                    height: (companion.freeMode ? 176 : 150) * companion.size,
+                    width: (companion.freeMode ? 82 : 280) * companion.size,
+                    height: (companion.freeMode ? 82 : 150) * companion.size,
                   },
                   reportDiagnostic,
                 );

@@ -33,17 +33,20 @@ describe('transparência da janela do pet', () => {
     );
   });
 
-  it('preserva a superfície visual da Ilha e não altera a área nativa de clique', () => {
+  it('preserva a superfície visual da Ilha e limita click-through ao modo Livre recolhido', () => {
     expect(styles).toMatch(
       /\.island-shell\s*\{[^}]*background:[\s\S]*?box-shadow: 0 6px 22px #0008;/,
     );
     expect(islandWindow).toContain("settings.companion.freeMode ? 'free-mode' : 'island-mode'");
     expect(islandWindow).toContain('data-tauri-drag-region={settings.companion.freeMode ?');
-    expect(nativeWindow).toMatch(
-      /\.decorations\(false\)[\s\S]*?\.transparent\(true\)[\s\S]*?\.shadow\(false\)/,
-    );
-    expect(nativeWindow).not.toMatch(
-      /ignore_cursor_events|set_ignore_cursor|setIgnoreCursorEvents/i,
-    );
+    expect(nativeWindow).toMatch(/\.decorations\(false\)[\s\S]*?\.transparent\(true\)/);
+    expect(nativeWindow).toContain('.shadow(PET_WINDOW_SHADOW)');
+    expect(nativeWindow).toContain('.focusable(PET_WINDOW_FOCUSABLE)');
+    expect(nativeWindow).toContain('.closable(PET_WINDOW_CLOSABLE)');
+    expect(nativeWindow).toContain('.skip_taskbar(PET_WINDOW_SKIP_TASKBAR)');
+    expect(nativeWindow).toContain('window.set_ignore_cursor_events(ignore)');
+    expect(islandWindow).toContain('settings.companion.freeMode && state !==');
+    expect(islandWindow).toContain('enabled: false');
+    expect(nativeWindow).toContain('inner_size(82.0, 82.0)');
   });
 });

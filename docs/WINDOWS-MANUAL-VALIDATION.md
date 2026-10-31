@@ -30,7 +30,7 @@ Use o executável Tauri gerado para Windows, com o mesmo perfil, escala de tela,
 1. Em Configurações > Aparência, compare animações com **Reduzir animações** ligado e desligado.
 2. Altere o modo do Windows para reduzir movimento e deixe o app em **Automático**. Confirme que a justificativa informa movimento reduzido. Depois teste perfil com até 8 GiB de RAM ou até 4 núcleos lógicos e confirme o motivo correspondente.
 3. Teste **Ligado** e **Desligado**. Em Ligado, confirme ausência de sombras grandes, fundos de gradiente, translucidez das superfícies de UI e movimento dos sprites/modais. Os dois estados devem manter as mesmas ações e dados.
-4. Repita a verificação do sprite na janela do pet e confirme que a janela continua respondendo ao ponteiro. Restaure a configuração original do Windows ao terminar.
+4. No modo Livre recolhido, clique no sprite e na margem ao redor: o pet deve responder. Clique em áreas transparentes ao redor e confirme que a janela subjacente recebe o clique. Repita com DPI 100%, 125% e 150% e em cada monitor. No modo Ilha, confirme que a cápsula continua recebendo eventos normalmente. Restaure a configuração original do Windows ao terminar.
 5. Confira texto, foco, bordas e cores de estado em todas as superfícies usadas. Use as razões de contraste de `DESIGN-SYSTEM.md` como referência e registre qualquer exceção visual.
 
 ## Medições de runtime

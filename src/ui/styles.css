@@ -3550,6 +3550,9 @@ html.island-window-html body.island-window-body {
   place-items: center;
   padding: 0;
 }
+.floating-island.free-mode:not(.state-expanded) {
+  padding: calc(3px * var(--companion-scale, 1));
+}
 .free-mode .island-shell {
   width: 100%;
   min-height: 0;
@@ -3575,6 +3578,14 @@ html[data-performance='on'] .free-mode .island-shell {
 .free-mode .island-mascot {
   width: 100%;
   height: 100%;
+}
+.free-mode:not(.state-expanded) .island-mascot {
+  width: calc(62px * var(--companion-scale, 1));
+  height: calc(68px * var(--companion-scale, 1));
+}
+.free-mode:not(.state-expanded) .island-mascot .pet-sprite {
+  width: calc(66px * var(--companion-scale, 1));
+  height: calc(66px * var(--companion-scale, 1));
 }
 .free-mode .island-expanded {
   left: 4px;

@@ -152,8 +152,8 @@ export function AssistantScreen({
   const [retryPetAction, setRetryPetAction] = useState<(() => void) | null>(null);
   async function applyPosition(next: AppSettings['companion']) {
     if (!isTauri() || !next.enabled) return;
-    const width = (next.freeMode ? 176 : 280) * next.size;
-    const height = (next.freeMode ? 176 : 150) * next.size;
+    const width = (next.freeMode ? 82 : 280) * next.size;
+    const height = (next.freeMode ? 82 : 150) * next.size;
     const right = next.position.endsWith('right');
     const bottom = next.position.startsWith('bottom');
     const x = next.coordinates?.x ?? (right ? Math.max(0, screen.availWidth - width - 28) : 28);
@@ -233,8 +233,8 @@ export function AssistantScreen({
           companion.coordinates?.y ?? Math.max(0, screen.availHeight - 190 * companion.size);
         await invoke('set_pet_position', { x, y, size: companion.size });
         await invoke('set_pet_size', {
-          width: (freeMode ? 176 : 280) * companion.size,
-          height: (freeMode ? 176 : 150) * companion.size,
+          width: (freeMode ? 82 : 280) * companion.size,
+          height: (freeMode ? 82 : 150) * companion.size,
         });
         await invoke('set_pet_position', { x, y, size: companion.size });
       }
