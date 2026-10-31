@@ -52,6 +52,30 @@ describe('preferências persistidas', () => {
     expect(JSON.parse(storage.get('odekrai.settings.v2') ?? '{}')).not.toHaveProperty('provider');
   });
 
+  it('migra provedor salvo sem model para string vazia', () => {
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) =>
+        key === 'odekrai.settings.v2'
+          ? JSON.stringify({
+              ...defaultSettings,
+              activeProviderId: 'openai',
+              providers: {
+                openai: {
+                  providerId: 'openai',
+                  name: 'OpenAI',
+                  baseUrl: 'https://api.openai.com/v1',
+                  authMode: 'bearer',
+                  enabled: true,
+                },
+              },
+            })
+          : null,
+      setItem: () => undefined,
+    });
+
+    expect(loadSettings().providers.openai.model).toBe('');
+  });
+
   it('preserva o resultado sanitizado do último teste do conector ao carregar preferências', () => {
     vi.stubGlobal('localStorage', {
       getItem: (key: string) =>

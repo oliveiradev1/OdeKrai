@@ -56,4 +56,28 @@ describe('resumos das seções do modal Configurações', () => {
     expect(markup).not.toContain('Reduzir animações');
     expect(markup).not.toContain('Usar mascote nas respostas');
   });
+
+  it('tolera configurações persistidas sem model e resume modelo vazio', () => {
+    const legacySettings = {
+      ...defaultSettings,
+      activeProviderId: 'openai',
+      fallbackProviderIds: ['anthropic'],
+      providers: {
+        openai: { ...defaultProviderSettings('openai'), model: undefined },
+        anthropic: { ...defaultProviderSettings('anthropic'), model: undefined },
+      },
+    } as unknown as typeof defaultSettings;
+
+    expect(summarizeConnectors(legacySettings)).toEqual({
+      providerName: 'OpenAI',
+      model: null,
+      enabled: true,
+      fallbackCount: 0,
+    });
+    expect(
+      renderToStaticMarkup(
+        <ConnectorsSettingsSummary settings={legacySettings} onOpenPage={() => undefined} />,
+      ),
+    ).toContain('OpenAI');
+  });
 });

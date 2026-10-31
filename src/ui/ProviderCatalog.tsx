@@ -166,10 +166,10 @@ export function ProviderCatalog({
     let current = true;
     const baseCapabilities = catalogEntry?.capabilities ?? null;
     setEffectiveCapabilities(baseCapabilities);
-    if (isTauri() && draft.model.trim()) {
+    if (isTauri() && (draft.model ?? '').trim()) {
       void invoke<ProviderCapabilities>('get_provider_capabilities', {
         providerId: selected.id,
-        model: draft.model.trim(),
+        model: (draft.model ?? '').trim(),
       })
         .then((result) => {
           if (current) setEffectiveCapabilities(result);
@@ -189,12 +189,12 @@ export function ProviderCatalog({
   const readyToSave =
     selected.integration !== 'guide' &&
     Boolean(
-      (draft.baseUrl.trim() || selected.region) &&
+      ((draft.baseUrl ?? '').trim() || selected.region) &&
       (selected.id === 'local' || secret.trim() || credentialAvailable),
     );
   const readyToTest =
     selected.integration !== 'guide' &&
-    Boolean(draft.model.trim() && (selected.id === 'local' || credentialAvailable));
+    Boolean((draft.model ?? '').trim() && (selected.id === 'local' || credentialAvailable));
   function updateDraft(field: keyof ProviderSettings, value: string) {
     setDraft((current) => {
       const { lastTest: _lastTest, ...withoutLastTest } = current;
@@ -218,7 +218,7 @@ export function ProviderCatalog({
   function endpointForDraft() {
     return selected.region
       ? `https://bedrock-runtime.${(draft.region ?? '').trim()}.amazonaws.com/openai/v1`
-      : draft.baseUrl.trim();
+      : (draft.baseUrl ?? '').trim();
   }
   async function configure(test: boolean) {
     if (!isTauri()) {
@@ -450,7 +450,7 @@ export function ProviderCatalog({
     const config = settings.providers[provider.id] ?? defaultProviderSettings(provider.id);
     onSelect(provider);
     setDetailsOpen(true);
-    if (!config.model.trim()) {
+    if (!(config.model ?? '').trim()) {
       setNotice('Escolha um modelo antes de testar a conexão.');
       return;
     }

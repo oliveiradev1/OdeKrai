@@ -310,12 +310,12 @@ export function summarizeConnectors(settings: AppSettings) {
     providerName: providerId
       ? (providerById(providerId)?.name ?? 'Provedor selecionado')
       : 'Nenhum provedor principal selecionado',
-    model: configuration?.model.trim() || null,
+    model: configuration?.model?.trim() || null,
     enabled: configuration?.enabled !== false,
     fallbackCount: settings.fallbackProviderIds.filter(
       (fallbackId) =>
         settings.providers[fallbackId]?.enabled !== false &&
-        Boolean(settings.providers[fallbackId]?.model.trim()),
+        Boolean(settings.providers[fallbackId]?.model?.trim()),
     ).length,
   };
 }
