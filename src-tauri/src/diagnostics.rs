@@ -28,6 +28,8 @@ pub fn setup(app: &AppHandle) -> Result<StartupState, Box<dyn std::error::Error>
     let app_data = app.path().app_data_dir()?;
     let logs = app_data.join("logs");
     fs::create_dir_all(&logs)?;
+    let diagnostic_log = logs.join("diagnostic.log");
+    install_panic_hook(diagnostic_log.clone());
     let marker = app_data.join("initialization-status.txt");
     let marker_exists = marker.exists();
     let contents = if marker_exists {
@@ -37,9 +39,9 @@ pub fn setup(app: &AppHandle) -> Result<StartupState, Box<dyn std::error::Error>
     };
     let previous_run_incomplete = previous_run_incomplete(marker_exists, &contents);
     fs::write(&marker, b"incomplete")?;
-    write_log(&logs.join("diagnostic.log"), "setup_started", "")?;
+    write_log(&diagnostic_log, "setup_started", "")?;
     write_log(
-        &logs.join("diagnostic.log"),
+        &diagnostic_log,
         "build",
         &format!(
             "version={} commit={} date={} webview_version={}",
@@ -54,6 +56,51 @@ pub fn setup(app: &AppHandle) -> Result<StartupState, Box<dyn std::error::Error>
         marker,
         started: Instant::now(),
     })
+}
+
+fn install_panic_hook(diagnostic_log: PathBuf) {
+    std::panic::set_hook(Box::new(move |panic| {
+        let payload_type =
+            if panic.payload().is::<String>() || panic.payload().is::<&'static str>() {
+                "string"
+            } else {
+                "other"
+            };
+        let location = panic.location();
+        let record = format_panic_record(
+            payload_type,
+            location.map(std::panic::Location::file),
+            location.map(std::panic::Location::line),
+            location.map(std::panic::Location::column),
+        );
+        let _ = write_log(&diagnostic_log, "panic", &record);
+    }));
+}
+
+fn format_panic_record(
+    payload_type: &str,
+    source_file: Option<&str>,
+    line: Option<u32>,
+    column: Option<u32>,
+) -> String {
+    let payload_type = if payload_type == "string" { "string" } else { "other" };
+    let source = source_file
+        .and_then(|file| file.rsplit(['/', '\\']).next())
+        .filter(|file| {
+            !file.is_empty()
+                && file.len() <= 128
+                && file
+                    .chars()
+                    .all(|character| {
+                        character.is_ascii_alphanumeric() || "._-".contains(character)
+                    })
+        })
+        .unwrap_or("unknown");
+    format!(
+        "panic_type={payload_type} source={source} line={} column={}",
+        line.unwrap_or_default(),
+        column.unwrap_or_default()
+    )
 }
 
 pub fn log_event(app: &AppHandle, event: &str, command: &str, outcome: &str, duration_ms: u64) {
@@ -412,6 +459,22 @@ fn is_safe_correlation_id(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn panic_record_includes_safe_type_and_location_without_payload_or_user_path() {
+        let record = format_panic_record(
+            "string",
+            Some(r"C:\Users\private-user\source\main.rs"),
+            Some(42),
+            Some(7),
+        );
+        assert_eq!(
+            record,
+            "panic_type=string source=main.rs line=42 column=7"
+        );
+        assert!(!record.contains("private-user"));
+        assert!(!record.contains("secret-token"));
+    }
 
     #[test]
     fn safe_tokens_remove_payload_characters_and_limit_length() {
