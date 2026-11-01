@@ -2215,6 +2215,59 @@ select:focus-visible {
   color: var(--color-success);
   border-color: var(--color-border-strong);
 }
+.public-mcp-status--connecting {
+  color: var(--color-accent);
+}
+.public-mcp-status--error {
+  color: var(--color-danger);
+  border-color: var(--color-danger);
+}
+.public-mcp-card-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.public-mcp-actions-menu {
+  position: relative;
+}
+.public-mcp-actions-menu summary {
+  cursor: pointer;
+  color: var(--color-text-secondary);
+  padding: 8px 12px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  list-style: none;
+}
+.public-mcp-actions-menu summary::-webkit-details-marker {
+  display: none;
+}
+.public-mcp-actions-menu summary:focus-visible {
+  box-shadow: var(--shadow-focus);
+  outline-offset: 2px;
+}
+.public-mcp-actions-menu-items {
+  position: absolute;
+  z-index: 2;
+  top: calc(100% + 4px);
+  right: 0;
+  display: grid;
+  min-width: 190px;
+  gap: var(--space-1);
+  padding: var(--space-2);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-card);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-card);
+}
+.public-mcp-error {
+  color: var(--color-danger);
+}
+.public-mcp-status--configured {
+  color: var(--color-text-secondary);
+}
+.public-mcp-status--available {
+  color: var(--color-text-secondary);
+}
 .public-mcp-status--not_available {
   color: var(--color-text-muted);
 }

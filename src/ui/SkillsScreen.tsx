@@ -34,6 +34,7 @@ import {
   getPublicMcpStatus,
   publicOAuthServiceKey,
   publicMcpCatalog,
+  publicMcpErrorMessage,
   publicMcpStatusLabels,
   type PublicMcpCatalogEntry,
   type OAuthRegistrationOptions,
@@ -69,6 +70,7 @@ type SkillsCatalogViewProps = {
   ) => Promise<boolean>;
   onSaveGitHubToken?: (server: PublicMcpServer & { id: string }, token: string) => Promise<boolean>;
   onRemoveGitHubToken?: (server: PublicMcpServer & { id: string }) => Promise<boolean>;
+  onRemovePublicMcp?: (server: PublicMcpServer & { id: string }) => Promise<boolean>;
   onConnectGitHubOAuth?: (
     server: (PublicMcpServer & { id: string }) | undefined,
     clientId: string,
@@ -137,6 +139,7 @@ export function SkillsCatalogView({
   onConfigurePublicMcp,
   onSaveGitHubToken,
   onRemoveGitHubToken,
+  onRemovePublicMcp,
   onConnectGitHubOAuth,
   onDisconnectGitHubOAuth,
   onTestPublicMcp,
@@ -384,6 +387,7 @@ export function SkillsCatalogView({
                     onConfigure={onConfigurePublicMcp}
                     onSaveGitHubToken={onSaveGitHubToken}
                     onRemoveGitHubToken={onRemoveGitHubToken}
+                    onRemovePublicMcp={onRemovePublicMcp}
                     onConnectGitHubOAuth={onConnectGitHubOAuth}
                     onDisconnectGitHubOAuth={onDisconnectGitHubOAuth}
                     onTest={onTestPublicMcp}
@@ -407,6 +411,7 @@ function PublicMcpServiceCard({
   onConfigure,
   onSaveGitHubToken,
   onRemoveGitHubToken,
+  onRemovePublicMcp,
   onConnectGitHubOAuth,
   onDisconnectGitHubOAuth,
   onTest,
@@ -419,12 +424,14 @@ function PublicMcpServiceCard({
   onConfigure?: SkillsCatalogViewProps['onConfigurePublicMcp'];
   onSaveGitHubToken?: SkillsCatalogViewProps['onSaveGitHubToken'];
   onRemoveGitHubToken?: SkillsCatalogViewProps['onRemoveGitHubToken'];
+  onRemovePublicMcp?: SkillsCatalogViewProps['onRemovePublicMcp'];
   onConnectGitHubOAuth?: SkillsCatalogViewProps['onConnectGitHubOAuth'];
   onDisconnectGitHubOAuth?: SkillsCatalogViewProps['onDisconnectGitHubOAuth'];
   onTest?: SkillsCatalogViewProps['onTestPublicMcp'];
 }) {
   const formId = useId();
   const [expanded, setExpanded] = useState(false);
+  const [connecting, setConnecting] = useState(false);
   const [endpoint, setEndpoint] = useState(service.endpoint);
   const [authentication, setAuthentication] = useState<'oauth' | 'bearer'>(
     (service.name === 'GitHub'
@@ -460,6 +467,7 @@ function PublicMcpServiceCard({
     registrationOptions,
     busy || clientSecretBusy,
   );
+  const isConnecting = connecting || status === 'connecting';
 
   useEffect(() => {
     if (!service.authenticationMethods.includes('oauth') || !isTauri()) return;
@@ -476,7 +484,7 @@ function PublicMcpServiceCard({
         }
       })
       .catch((cause) => {
-        if (current) setOauthError(String(cause));
+        if (current) setOauthError(publicMcpErrorMessage(cause));
       });
     return () => {
       current = false;
@@ -495,7 +503,7 @@ function PublicMcpServiceCard({
         if (current) setGithubAccount(account);
       })
       .catch((cause) => {
-        if (current) setGithubNotice(`Não foi possível consultar a conta GitHub: ${String(cause)}`);
+        if (current) setGithubNotice(publicMcpErrorMessage(cause));
       })
       .finally(() => {
         if (current) setGithubAccountLoading(false);
@@ -517,7 +525,7 @@ function PublicMcpServiceCard({
       setClientSecret('');
       setOauthClientSettings({ ...oauthClientSettings, clientSecretSaved: true });
     } catch (cause) {
-      setOauthError(String(cause));
+      setOauthError(publicMcpErrorMessage(cause));
     } finally {
       setClientSecretBusy(false);
     }
@@ -534,18 +542,21 @@ function PublicMcpServiceCard({
       setOauthClientSettings({ ...oauthClientSettings, clientSecretSaved: false });
       setClientSecret('');
     } catch (cause) {
-      setOauthError(String(cause));
+      setOauthError(publicMcpErrorMessage(cause));
     } finally {
       setClientSecretBusy(false);
     }
   }
 
   async function openOfficialLink(url: string) {
-    if (!isTauri()) return;
+    if (!isTauri()) {
+      setLinkError('Abra esta ação no aplicativo OdeKrai para usar o navegador do sistema.');
+      return;
+    }
     try {
       await invoke('open_external_link', { url });
     } catch (cause) {
-      setLinkError(String(cause));
+      setLinkError(publicMcpErrorMessage(cause));
     }
   }
 
@@ -555,6 +566,7 @@ function PublicMcpServiceCard({
     if (authentication === 'oauth' && !canConnectWithOAuth(registrationOptions, clientId, busy)) {
       return;
     }
+    setConnecting(true);
     try {
       if (await onConfigure(service, endpoint, authentication, token, clientId, scopes)) {
         setClientId('');
@@ -562,6 +574,7 @@ function PublicMcpServiceCard({
         setExpanded(false);
       }
     } finally {
+      setConnecting(false);
       if (authentication === 'bearer') setToken('');
     }
   }
@@ -580,7 +593,7 @@ function PublicMcpServiceCard({
       });
       setRegistrationOptions(options);
     } catch (cause) {
-      setOauthError(String(cause));
+      setOauthError(publicMcpErrorMessage(cause));
     } finally {
       setCheckingOAuth(false);
     }
@@ -589,10 +602,13 @@ function PublicMcpServiceCard({
   async function connectGitHubOAuth() {
     if (!oauthClientSettings || !onConnectGitHubOAuth || !githubOAuthReady) return;
     setGithubNotice('');
+    setConnecting(true);
     try {
       await onConnectGitHubOAuth(server, oauthClientSettings.clientId, 'read:user');
     } catch (cause) {
-      setGithubNotice(`Não foi possível conectar ao GitHub: ${String(cause)}`);
+      setGithubNotice(publicMcpErrorMessage(cause));
+    } finally {
+      setConnecting(false);
     }
   }
 
@@ -607,7 +623,54 @@ function PublicMcpServiceCard({
           'Conta desconectada. As credenciais locais foram removidas do Gerenciador de Credenciais.',
       );
     } catch (cause) {
-      setGithubNotice(`Não foi possível desconectar a conta GitHub: ${String(cause)}`);
+      setGithubNotice(publicMcpErrorMessage(cause));
+    }
+  }
+
+  async function connectOrConfigure() {
+    if (busy || connecting) return;
+    if (service.status === 'not_available') {
+      await openOfficialLink(service.documentationUrl);
+      return;
+    }
+    if (isGitHub && oauthClientSettings && githubOAuthReady && onConnectGitHubOAuth) {
+      await connectGitHubOAuth();
+      return;
+    }
+    if (status === 'error' && service.authenticationMethods.includes('oauth')) {
+      setAuthentication('oauth');
+      setExpanded(true);
+      return;
+    }
+    if (
+      server &&
+      onTest &&
+      (status === 'connected' ||
+        !service.authenticationMethods.includes('oauth') ||
+        (status === 'configured' && server.enabled))
+    ) {
+      setConnecting(true);
+      try {
+        await onTest(server);
+      } catch (cause) {
+        setGithubNotice(publicMcpErrorMessage(cause));
+      } finally {
+        setConnecting(false);
+      }
+      return;
+    }
+    setExpanded(true);
+  }
+
+  async function disconnectPublicService() {
+    if (!server || busy || !onRemovePublicMcp) return;
+    setConnecting(true);
+    try {
+      if (await onRemovePublicMcp(server)) setGithubNotice('Servidor desconectado.');
+    } catch (cause) {
+      setGithubNotice(publicMcpErrorMessage(cause));
+    } finally {
+      setConnecting(false);
     }
   }
 
@@ -618,12 +681,21 @@ function PublicMcpServiceCard({
           <h3>{service.name}</h3>
           <p>{service.supplier}</p>
         </div>
-        <span className={`public-mcp-status public-mcp-status--${status}`} role="status">
-          {publicMcpStatusLabels[status]}
+        <span
+          className={`public-mcp-status public-mcp-status--${isConnecting ? 'connecting' : status}`}
+          role="status"
+          aria-live="polite"
+        >
+          {isConnecting ? publicMcpStatusLabels.connecting : publicMcpStatusLabels[status]}
         </span>
       </div>
       {service.programStatus && (
         <p className="public-mcp-program-status">{service.programStatus}</p>
+      )}
+      {status === 'error' && (
+        <p className="public-mcp-error" role="alert">
+          {publicMcpErrorMessage(server?.status)}
+        </p>
       )}
       {isGoogleWorkspace && (
         <section className="public-mcp-google-setup" aria-label={`Configuração de ${service.name}`}>
@@ -638,13 +710,6 @@ function PublicMcpServiceCard({
               <li key={step}>{step}</li>
             ))}
           </ol>
-          <Button
-            type="button"
-            variant="secondary"
-            onClick={() => void openOfficialLink(service.documentationUrl)}
-          >
-            Abrir guia oficial do {service.name}
-          </Button>
           {linkError && <p role="alert">{linkError}</p>}
         </section>
       )}
@@ -664,35 +729,9 @@ function PublicMcpServiceCard({
           {status === 'connected' && githubAccountLoading && (
             <p role="status">Verificando conta…</p>
           )}
-          {status === 'connected' && githubAccount && onDisconnectGitHubOAuth && (
-            <Button
-              type="button"
-              variant="secondary"
-              disabled={busy}
-              onClick={() => void disconnectGitHubOAuth()}
-            >
-              Desconectar
-            </Button>
-          )}
-          {status !== 'connected' || (!githubAccount && !githubAccountLoading) ? (
-            <Button
-              type="button"
-              disabled={!githubOAuthReady || busy || !onConnectGitHubOAuth}
-              onClick={() => void connectGitHubOAuth()}
-            >
-              Conectar com GitHub
-            </Button>
-          ) : null}
           {oauthClientSettings && !oauthClientSettings.clientId.trim() && (
             <p role="status">
-              Este aplicativo ainda precisa de um OAuth App GitHub registrado pelo desenvolvedor.{' '}
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={() => void openOfficialLink(oauthClientSettings.guideUrl)}
-              >
-                Abrir guia oficial
-              </Button>
+              Este aplicativo ainda precisa de um OAuth App GitHub registrado pelo desenvolvedor.
             </p>
           )}
           {oauthClientSettings?.clientSecretRequired && oauthClientSettings.clientId.trim() && (
@@ -766,15 +805,8 @@ function PublicMcpServiceCard({
               (!oauthClientSettings.dynamicRegistration ||
                 registrationOptions?.dynamicRegistration === false) && (
                 <p role="status">
-                  Este serviço ainda não foi configurado para o OdeKrai. Veja o guia ({' '}
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    onClick={() => void openOfficialLink(oauthClientSettings.guideUrl)}
-                  >
-                    abrir documentação oficial
-                  </Button>
-                  ).
+                  Este serviço ainda não foi configurado para o OdeKrai. Veja a documentação no menu
+                  Ações.
                 </p>
               )}
             {oauthClientSettings.clientSecretRequired &&
@@ -841,11 +873,6 @@ function PublicMcpServiceCard({
                   conectar.
                 </p>
               )}
-            {!oauthClientSettings.clientId.trim() && !oauthClientSettings.dynamicRegistration && (
-              <Button type="button" variant="secondary" disabled>
-                Conectar
-              </Button>
-            )}
             {oauthError && <p role="alert">{oauthError}</p>}
           </div>
         )}
@@ -871,13 +898,6 @@ function PublicMcpServiceCard({
               <li key={step}>{step}</li>
             ))}
           </ol>
-          <Button
-            type="button"
-            variant="secondary"
-            onClick={() => void openOfficialLink(service.documentationUrl)}
-          >
-            Ver guia oficial do {service.name}
-          </Button>
           {linkError && <p role="alert">{linkError}</p>}
         </section>
       )}
@@ -889,63 +909,114 @@ function PublicMcpServiceCard({
               <li key={permission}>{permission}</li>
             ))}
           </ul>
-          <Button
-            type="button"
-            variant="secondary"
-            onClick={() => void openOfficialLink(service.tokenCreationUrl!)}
-          >
-            Criar token pessoal no GitHub
-          </Button>
           {linkError && <p role="alert">{linkError}</p>}
         </div>
       )}
-      {status === 'not_available' && (
+      {service.status === 'not_available' && (
         <p className="public-mcp-unavailable">
-          Este serviço ainda não pode ser configurado no OdeKrai por uma limitação de
-          compatibilidade.
+          A conexão deste serviço depende da inclusão do OdeKrai no catálogo MCP do fornecedor.
+          Consulte os requisitos pela documentação no menu Ações.
         </p>
       )}
-      {isGitHub && (
-        <Button
-          type="button"
-          variant="secondary"
-          disabled={busy}
-          aria-expanded={expanded}
-          aria-controls={formId}
-          onClick={() => {
-            setAuthentication('bearer');
-            setExpanded((open) => !open);
-          }}
-        >
-          {expanded ? 'Fechar opção avançada' : 'Usar token pessoal (avançado)'}
-        </Button>
-      )}
-      {!isGitHub && status === 'available' && onConfigure && (
-        <Button
-          type="button"
-          variant="secondary"
-          disabled={busy}
-          aria-expanded={expanded}
-          aria-controls={formId}
-          onClick={() => setExpanded((open) => !open)}
-        >
-          Configurar
-        </Button>
-      )}
-      {isGoogleWorkspace && server && onConfigure && (
-        <Button
-          type="button"
-          variant="secondary"
-          disabled={busy}
-          onClick={() => {
-            setAuthentication('oauth');
-            setRegistrationOptions({ dynamicRegistration: false });
-            setExpanded(true);
-          }}
-        >
-          Autorizar novamente com Google
-        </Button>
-      )}
+      <div className="public-mcp-card-actions">
+        {(service.status === 'not_available' ||
+          onConfigure ||
+          (server && onTest) ||
+          (isGitHub && onConnectGitHubOAuth)) && (
+          <Button
+            type="button"
+            variant="primary"
+            disabled={busy || isConnecting}
+            aria-busy={isConnecting}
+            onClick={() => void connectOrConfigure()}
+          >
+            {isConnecting ? 'Conectando…' : 'Conectar'}
+          </Button>
+        )}
+        <details className="public-mcp-actions-menu">
+          <summary aria-label={`Ações de ${service.name}`}>Ações</summary>
+          <div className="public-mcp-actions-menu-items">
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => void openOfficialLink(service.documentationUrl)}
+            >
+              Ver documentação
+            </Button>
+            {service.tokenCreationUrl && (
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => void openOfficialLink(service.tokenCreationUrl!)}
+              >
+                Criar token pessoal
+              </Button>
+            )}
+            {isGitHub && (
+              <Button
+                type="button"
+                variant="secondary"
+                disabled={busy || connecting}
+                aria-expanded={expanded}
+                aria-controls={formId}
+                onClick={() => {
+                  setAuthentication('bearer');
+                  setExpanded((open) => !open);
+                }}
+              >
+                {expanded && authentication === 'bearer' ? 'Fechar opção de token' : 'Usar token'}
+              </Button>
+            )}
+            {!isGitHub && onConfigure && (
+              <Button
+                type="button"
+                variant="secondary"
+                disabled={busy || connecting}
+                aria-expanded={expanded}
+                aria-controls={formId}
+                onClick={() => setExpanded((open) => !open)}
+              >
+                {expanded
+                  ? 'Fechar configuração'
+                  : server && (status === 'connected' || status === 'error')
+                    ? 'Conectar novamente'
+                    : 'Configurar serviço'}
+              </Button>
+            )}
+            {isGoogleWorkspace && server && onConfigure && (
+              <Button
+                type="button"
+                variant="secondary"
+                disabled={busy || connecting}
+                onClick={() => {
+                  setAuthentication('oauth');
+                  setRegistrationOptions({ dynamicRegistration: false });
+                  setExpanded(true);
+                }}
+              >
+                Autorizar novamente
+              </Button>
+            )}
+            {server &&
+              (isGitHub
+                ? (githubAccount && onDisconnectGitHubOAuth) || onRemovePublicMcp
+                : onRemovePublicMcp) && (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={busy || connecting}
+                  onClick={() =>
+                    void (isGitHub && githubAccount && onDisconnectGitHubOAuth
+                      ? disconnectGitHubOAuth()
+                      : disconnectPublicService())
+                  }
+                >
+                  Desconectar
+                </Button>
+              )}
+          </div>
+        </details>
+      </div>
       {expanded && (!isGitHub || !server || isGoogleWorkspace) && onConfigure && (
         <form id={formId} className="public-mcp-form" onSubmit={(event) => void submit(event)}>
           <label>
@@ -1068,7 +1139,7 @@ function PublicMcpServiceCard({
                     : !canConnectWithOAuth(registrationOptions, clientId, busy))))
             }
           >
-            {authentication === 'oauth' ? 'Conectar e testar' : 'Salvar e testar conexão'}
+            {connecting ? 'Conectando…' : 'Conectar'}
           </Button>
         </form>
       )}
@@ -1085,16 +1156,6 @@ function PublicMcpServiceCard({
             onRemove={onRemoveGitHubToken}
           />
         )}
-      {status === 'configured' && server && onTest && (
-        <Button
-          type="button"
-          variant="secondary"
-          disabled={busy}
-          onClick={() => void onTest(server)}
-        >
-          Testar conexão
-        </Button>
-      )}
       {status === 'connected' && !githubAccount && (
         <p className="public-mcp-connected">Teste MCP concluído.</p>
       )}
@@ -1490,9 +1551,11 @@ function SkillFamilyDetails({
 
 export function SkillsScreen({
   onOpenPrivacy,
+  onRemovePublicMcp,
   initialFamily,
 }: {
   onOpenPrivacy: () => void;
+  onRemovePublicMcp: (server: { id: string }) => Promise<string | null>;
   initialFamily?: SkillFamily;
 }) {
   const [skills, setSkills] = useState<CatalogSkill[]>([]);
@@ -1622,7 +1685,7 @@ export function SkillsScreen({
           `Este servidor exige um identificador de cliente. Veja a documentação do serviço (${service.documentationUrl}) para criá-lo.`,
         );
       } else {
-        setError(`Não foi possível configurar ou testar ${service.name}: ${detail}`);
+        setError(publicMcpErrorMessage(cause));
       }
       await refreshMcpServers().catch(() => undefined);
       return false;
@@ -1648,7 +1711,7 @@ export function SkillsScreen({
       await refreshMcpServers().catch(() => undefined);
       return true;
     } catch (cause) {
-      setError(`Não foi possível testar a conexão MCP: ${String(cause)}`);
+      setError(publicMcpErrorMessage(cause));
       await refreshMcpServers().catch(() => undefined);
       return false;
     } finally {
@@ -1667,7 +1730,7 @@ export function SkillsScreen({
       await refreshMcpServers().catch(() => undefined);
       return true;
     } catch (cause) {
-      setError(`Não foi possível salvar o token do GitHub: ${String(cause)}`);
+      setError(publicMcpErrorMessage(cause));
       return false;
     } finally {
       setMcpBusy(false);
@@ -1682,7 +1745,23 @@ export function SkillsScreen({
       await refreshMcpServers().catch(() => undefined);
       return true;
     } catch (cause) {
-      setError(`Não foi possível remover o token do GitHub: ${String(cause)}`);
+      setError(publicMcpErrorMessage(cause));
+      return false;
+    } finally {
+      setMcpBusy(false);
+    }
+  }
+
+  async function removePublicMcp(server: PublicMcpServer & { id: string }): Promise<boolean> {
+    setMcpBusy(true);
+    setError('');
+    try {
+      const warning = await onRemovePublicMcp(server);
+      if (warning) setError('A conexão foi removida, mas o provedor não confirmou a revogação.');
+      await refreshMcpServers().catch(() => undefined);
+      return true;
+    } catch (cause) {
+      setError(publicMcpErrorMessage(cause));
       return false;
     } finally {
       setMcpBusy(false);
@@ -1714,7 +1793,7 @@ export function SkillsScreen({
       await refreshMcpServers().catch(() => undefined);
       return true;
     } catch (cause) {
-      setError(`Não foi possível conectar ao GitHub: ${String(cause)}`);
+      setError(publicMcpErrorMessage(cause));
       await refreshMcpServers().catch(() => undefined);
       throw cause;
     } finally {
@@ -1766,6 +1845,7 @@ export function SkillsScreen({
       onRemoveGitHubToken={removeGitHubToken}
       onConnectGitHubOAuth={connectGitHubOAuth}
       onDisconnectGitHubOAuth={disconnectGitHubOAuth}
+      onRemovePublicMcp={removePublicMcp}
       onTestPublicMcp={testPublicMcp}
       prerequisites={prerequisites}
       initialFamily={initialFamily}

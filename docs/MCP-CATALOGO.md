@@ -16,14 +16,11 @@ Pesquisa realizada em 1º de novembro de 2026. O arquivo `src/core/mcp-service-c
 
 Todos os sete serviços têm servidor oficial confirmado; portanto, nenhum recebeu o status “sem servidor oficial confirmado”. “Não disponível” descreve uma limitação atual do cliente OdeKrai ou uma restrição documentada ao cliente, não a inexistência do servidor do fornecedor.
 
-## Estado mostrado na interface
+## Estado e ações dos cartões
 
-- **Disponível para configurar:** há endpoint oficial e método de autenticação compatível com o fluxo atual. A pessoa ainda precisa iniciar a configuração.
-- **Configurado:** servidor salvo, mas a última chamada de teste não comprovou conexão.
-- **Conectado:** o comando `mcp_test_connection` concluiu com sucesso e o runtime ainda informa o servidor ativo. Apenas salvar URL ou credencial nunca produz este estado.
-- **Não disponível:** existe uma limitação de compatibilidade/restrição, descrita acima.
+Todos os cartões usam a mesma estrutura: nome e fornecedor, um estado (**Disponível**, **Configure o serviço**, **Conectando**, **Conectado** ou **Erro**), ação principal **Conectar** e menu secundário **Ações**. Nesse menu ficam **Ver documentação**, ações de credenciais compatíveis com o serviço e **Desconectar** quando há uma conexão removível. Um serviço que aguarda inclusão no catálogo do fornecedor continua exibindo **Configure o serviço** e o botão Conectar abre o guia oficial com os requisitos; ele não simula uma conexão.
 
-Nos cartões configuráveis, “Configurar” abre os campos de URL e autenticação. A configuração e o teste de conexão só acontecem após envio explícito desse formulário. Tokens são enviados ao Gerenciador de Credenciais pelo comando Rust já existente; o frontend os limpa após salvar. Não há instalação automática de pacote ou processo local.
+O estado **Conectado** só aparece depois que `mcp_test_connection` termina com sucesso e o runtime ainda informa o servidor ativo. Durante conexão, Conectar fica desativado e mostra **Conectando…**. Erros OAuth e HTTP são reduzidos a mensagens acionáveis, sem apresentar o corpo da resposta do servidor. OAuth e Bearer permanecem específicos dos serviços indicados em **Autenticação**; o formulário só apresenta os métodos declarados no catálogo. Tokens são enviados ao Gerenciador de Credenciais pelo comando Rust existente e o frontend os limpa após salvar.
 
 ## Evidências dos requisitos e ressalvas
 
@@ -43,7 +40,7 @@ Trechos oficiais consultados:
 - Os cartões Google mostram as etapas de configuração por serviço. O fluxo usa um consentimento por endpoint, escopos fixos calculados no Rust e não envia `include_granted_scopes`; cada endpoint armazena sua autorização separadamente no Gerenciador de Credenciais. Como o cliente Google configurado no app deve aceitar o retorno local, os cartões instruem cadastrar `http://127.0.0.1:43117/callback`; a documentação geral do Google para apps desktop confirma o padrão de loopback em IP e a validação do redirect URI. O client ID embutido ainda está vazio neste checkout, por isso o serviço não pode ser conectado até o cliente público ser configurado pelo distribuidor do OdeKrai. O segredo informado pelo usuário fica somente no Credential Manager.
 - Escopos usados: Gmail `gmail.readonly` e `gmail.compose` (o guia oficial os lista como necessários ao Gmail MCP); Calendar `calendar.calendarlist.readonly`, `calendar.events.freebusy` e `calendar.events.readonly` (lista oficial do Calendar MCP); Sheets `spreadsheets.readonly` (escopo oficial de leitura aceito pelas ferramentas de leitura). A autorização adiciona `access_type=offline` e `prompt=consent`, conforme orientação do Google para receber refresh token e renovar consentimento; não usa autorização incremental.
 - Gmail: a referência oficial MCP lista `create_draft`, ferramentas de leitura e ferramentas de rótulos, sem ferramenta de envio. O escopo `gmail.compose` também permite operações de envio na API Gmail; por isso o OdeKrai libera somente `create_draft` e ferramentas de leitura conhecidas, bloqueando rótulos, envio e nomes de ferramenta não reconhecidos. O envio continua indisponível; a pessoa pode revisar e enviar o rascunho dentro do Gmail.
-- Quando um refresh Google retorna `401` ou `invalid_grant`, o erro orienta conectar novamente o serviço; o cartão oferece **Autorizar novamente com Google**. A conexão real e o comportamento do cliente OAuth ainda exigem validação no Windows com credenciais próprias e inscrição no programa.
+- Quando um refresh Google retorna `401` ou `invalid_grant`, o cartão orienta uma nova conexão; o menu **Ações** oferece **Autorizar novamente**. A conexão real e o comportamento do cliente OAuth ainda exigem validação no Windows com credenciais próprias e inscrição no programa.
 
 Trechos oficiais consultados para Google Workspace (1º de novembro de 2026):
 
@@ -70,7 +67,7 @@ Trechos oficiais consultados para Lovable (1º de novembro de 2026):
 
 - O guia confirma que o servidor MCP está em `https://mcp.lovable.dev` e distingue clientes que executam no computador e fazem callback em `localhost`/`127.0.0.1`; para esses, afirma que “It registers with Lovable automatically”. Como o OdeKrai cria o listener OAuth em `127.0.0.1` e seu callback usa esse endereço, ele se enquadra no critério documentado. A documentação não garante que o fluxo do OdeKrai já foi aceito/validado em execução real; o cartão, portanto, ainda verifica os metadados antes de liberar Conectar. Fonte: [Lovable MCP server](https://docs.lovable.dev/integrations/lovable-mcp-server).
 
-No cartão do GitHub, **Conectar com GitHub** usa `mcp_oauth_authorize`; o login vem do endpoint autenticado `/user`, é guardado junto à autorização no Gerenciador de Credenciais e nunca inclui access token na interface. **Usar token pessoal (avançado)** mantém o PAT no Gerenciador de Credenciais, sem leitura pelo frontend. Respostas HTTP 401 e 403 mostram uma mensagem fixa sem o corpo bruto da resposta.
+No cartão do GitHub, **Conectar** usa `mcp_oauth_authorize`; o login vem do endpoint autenticado `/user`, é guardado junto à autorização no Gerenciador de Credenciais e nunca inclui access token na interface. **Ações > Usar token** mantém o PAT no Gerenciador de Credenciais, sem leitura pelo frontend. Erros HTTP/OAuth mostram mensagens curtas, como **O serviço recusou a autorização**, sem o corpo bruto da resposta.
 
 ## Comportamento e segurança
 

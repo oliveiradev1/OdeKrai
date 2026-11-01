@@ -140,12 +140,35 @@ describe('catálogo público de servidores MCP', () => {
     ).toBe('configured');
     expect(
       getPublicMcpStatus(github, [{ endpoint: github.endpoint, enabled: true, status: 'Erro' }]),
-    ).toBe('configured');
+    ).toBe('error');
     expect(
       getPublicMcpStatus(github, [
         { endpoint: github.endpoint, enabled: true, status: 'Conectado' },
       ]),
     ).toBe('connected');
+    expect(
+      getPublicMcpStatus(github, [
+        { endpoint: github.endpoint, enabled: true, status: 'Connecting' },
+      ]),
+    ).toBe('connecting');
+    expect(
+      getPublicMcpStatus(github, [{ endpoint: github.endpoint, enabled: true, status: 'Error' }]),
+    ).toBe('error');
+  });
+
+  it('usa mensagens curtas para erros OAuth e nunca devolve a resposta bruta', async () => {
+    const { publicMcpErrorMessage } = await import('./mcp-service-catalog');
+    expect(publicMcpErrorMessage('HTTP 401: secret raw response')).toBe(
+      'O serviço recusou a autorização',
+    );
+    expect(publicMcpErrorMessage('request timeout')).toBe('A conexão expirou, tente de novo');
+    expect(publicMcpErrorMessage('insufficient_scope: private body')).toBe(
+      'Permissão insuficiente',
+    );
+    expect(publicMcpErrorMessage('missing permission')).toBe('Permissão insuficiente');
+    expect(publicMcpErrorMessage('unexpected <private response>')).toBe(
+      'Não foi possível conectar. Confira a configuração e tente de novo.',
+    );
   });
 
   it('não exige client ID quando há registro dinâmico e só libera conexão sem isso quando não há', () => {

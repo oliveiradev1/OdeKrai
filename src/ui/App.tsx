@@ -2143,6 +2143,9 @@ function MainApp() {
                   key={requestedSkillFamily?.requestId ?? 'all-families'}
                   initialFamily={requestedSkillFamily?.family}
                   onOpenPrivacy={() => navigate('permissions')}
+                  onRemovePublicMcp={async (server) =>
+                    await invoke<string | null>('mcp_remove_server', { serverId: server.id })
+                  }
                 />
               )}
               {section === 'companion' && (

@@ -1,7 +1,7 @@
 import catalog from './mcp-service-catalog.json';
 
 export type PublicMcpCatalogEntry = (typeof catalog)[number];
-export type PublicMcpStatus = 'available' | 'configured' | 'connected' | 'not_available';
+export type PublicMcpStatus = 'available' | 'configured' | 'connecting' | 'connected' | 'error';
 export type OAuthRegistrationOptions = { dynamicRegistration: boolean };
 export type PublicOAuthClientSettings = {
   service: string;
@@ -62,16 +62,34 @@ export function getPublicMcpStatus(
     (server) => server.endpoint === service.endpoint || server.name === service.name,
   );
   if (configuredServer) {
-    return configuredServer.enabled && configuredServer.status === 'Conectado'
-      ? 'connected'
-      : 'configured';
+    if (configuredServer.status === 'Conectado' && configuredServer.enabled) return 'connected';
+    if (/connecting|conectando/i.test(configuredServer.status)) return 'connecting';
+    if (/error|erro|falha/i.test(configuredServer.status)) return 'error';
+    return 'configured';
   }
-  return service.status === 'available_to_configure' ? 'available' : 'not_available';
+  return service.status === 'available_to_configure' ? 'available' : 'configured';
 }
 
 export const publicMcpStatusLabels: Record<PublicMcpStatus, string> = {
-  available: 'Disponível para configurar',
-  configured: 'Configurado',
+  available: 'Disponível',
+  configured: 'Configure o serviço',
+  connecting: 'Conectando',
   connected: 'Conectado',
-  not_available: 'Não disponível',
+  error: 'Erro',
 };
+
+export function publicMcpErrorMessage(cause: unknown): string {
+  const detail = String(cause).toLocaleLowerCase('pt-BR');
+  if (
+    /401|403|invalid.?grant|unauthorized|forbidden|token.*recus|authorization denied/.test(detail)
+  ) {
+    return 'O serviço recusou a autorização';
+  }
+  if (/timeout|timed out|tempo limite|expirou|expired|cancelad/.test(detail)) {
+    return 'A conexão expirou, tente de novo';
+  }
+  if (/insufficient|permission|permissão|scope|escopo/.test(detail)) {
+    return 'Permissão insuficiente';
+  }
+  return 'Não foi possível conectar. Confira a configuração e tente de novo.';
+}
