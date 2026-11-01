@@ -60,7 +60,7 @@ describe('catálogo público de servidores MCP', () => {
     if (!github) throw new Error('Serviço GitHub ausente do catálogo.');
 
     expect(github.endpoint).toBe('https://api.githubcopilot.com/mcp/');
-    expect(github.transport).toBe('HTTP com token Bearer (PAT)');
+    expect(github.transport).toBe('Streamable HTTP');
     expect(github.documentationUrl).toContain('docs.github.com/');
     expect(github.tokenCreationUrl).toBe('https://github.com/settings/personal-access-tokens/new');
     expect(github.tokenPermissions).toEqual(
@@ -158,6 +158,30 @@ describe('catálogo público de servidores MCP', () => {
     ).toBe(true);
     expect(
       canConnectToPublicOAuth(
+        {
+          ...blankStaticSettings,
+          service: 'github',
+          clientId: 'github-public-client',
+          clientSecretRequired: true,
+          clientSecretSaved: false,
+        },
+        { dynamicRegistration: false },
+      ),
+    ).toBe(false);
+    expect(
+      canConnectToPublicOAuth(
+        {
+          ...blankStaticSettings,
+          service: 'github',
+          clientId: 'github-public-client',
+          clientSecretRequired: true,
+          clientSecretSaved: true,
+        },
+        { dynamicRegistration: false },
+      ),
+    ).toBe(true);
+    expect(
+      canConnectToPublicOAuth(
         { ...blankStaticSettings, dynamicRegistration: true, clientSecretRequired: false },
         { dynamicRegistration: true },
       ),
@@ -174,7 +198,13 @@ describe('catálogo público de servidores MCP', () => {
       allowedGuideDomains: string[];
       services: Record<
         string,
-        { clientId: string; guideUrl: string; clientSecret?: string; client_secret?: string }
+        {
+          clientId: string;
+          guideUrl: string;
+          clientSecretRequired: boolean;
+          clientSecret?: string;
+          client_secret?: string;
+        }
       >;
     };
     expect(Object.keys(oauth.services).sort()).toEqual([
@@ -192,6 +222,7 @@ describe('catálogo público de servidores MCP', () => {
       expect(service).not.toHaveProperty('clientSecret');
       expect(service).not.toHaveProperty('client_secret');
     }
+    expect(oauth.services.github.clientSecretRequired).toBe(true);
   });
 
   it('mantém Notion como configurado até o OAuth e o teste MCP concluírem', () => {

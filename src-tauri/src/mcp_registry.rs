@@ -1068,6 +1068,51 @@ pub async fn mcp_remove_server(
     Ok(crate::mcp_oauth::removal_warning(revoked))
 }
 
+#[tauri::command]
+pub async fn mcp_oauth_disconnect_github(
+    app: tauri::AppHandle,
+    caller: tauri::WebviewWindow,
+    server_id: String,
+    runtime: State<'_, McpRuntime>,
+) -> Result<Option<String>, String> {
+    crate::require_main(&caller)?;
+    let server = get_server(&app, &server_id)?;
+    if server.name != "GitHub"
+        || server.endpoint.as_deref() != Some("https://api.githubcopilot.com/mcp/")
+    {
+        return Err(
+            "A desconexão OAuth está disponível somente para o servidor oficial do GitHub.".into(),
+        );
+    }
+    let stored = crate::mcp_oauth::load(&server_id)?
+        .ok_or("Não há uma conta OAuth do GitHub conectada neste servidor.")?;
+    if stored.service.as_deref() != Some("github") {
+        return Err("A credencial deste servidor não pertence ao OAuth do GitHub.".into());
+    }
+
+    let access_token = runtime
+        .1
+        .lock()
+        .map_err(|_| "Estado OAuth MCP indisponível.".to_string())?
+        .remove(&server_id)
+        .map(|access| access.value);
+    set_enabled_internal(&app, &server_id, false)?;
+    runtime.remove_connection(&server_id)?;
+
+    let revoke_server_id = server_id.clone();
+    let revoked = tokio::task::spawn_blocking(move || {
+        crate::mcp_oauth::revoke_before_remove(&revoke_server_id, access_token.as_deref())
+    })
+    .await
+    .unwrap_or(false);
+    crate::mcp_oauth::remove(&server_id)?;
+    let _ = app.emit("skills-updated", ());
+    Ok((!revoked).then(|| {
+        "A conta foi desconectada deste dispositivo, mas o GitHub não confirmou a revogação do token. Revogue o acesso no GitHub, se necessário."
+            .into()
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

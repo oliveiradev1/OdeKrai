@@ -361,11 +361,8 @@ describe('catálogo de habilidades', () => {
         onRemoveGitHubToken={async () => true}
       />,
     );
-    expect(markup).toContain('Substituir token pessoal do GitHub');
-    expect(markup).toContain('type="password"');
-    expect(markup).toContain('autoComplete="off"');
-    expect(markup).toContain('Salvar token');
-    expect(markup).toContain('Remover token');
+    expect(markup).toContain('Usar token pessoal (avançado)');
+    expect(markup).not.toContain('Substituir token pessoal do GitHub');
     expect(markup).toContain('Criar token pessoal no GitHub');
     expect(markup).toContain('https://api.githubcopilot.com/mcp/');
     expect(markup).toContain('Metadata: Read');
@@ -378,6 +375,66 @@ describe('catálogo de habilidades', () => {
     expect(source).toContain('event.preventDefault()');
     expect(source).toContain("readOnly={service.name === 'GitHub'}");
     expect(source).toContain('endpoint !== service.endpoint');
+    expect(source).toMatch(
+      /isGitHub\s*&&\s*server\s*&&\s*expanded\s*&&\s*authentication === 'bearer'/,
+    );
+  });
+
+  it('prioriza OAuth no cartão GitHub, limita a leitura e preserva o PAT como opção avançada', () => {
+    const markup = renderToStaticMarkup(
+      <SkillsCatalogView
+        skills={registryFixture}
+        initialTab="publico"
+        onFamilyToggle={noOperation}
+        onSkillToggle={noOperation}
+        onOverrideToggle={noOperation}
+        onConfigurePublicMcp={async () => true}
+      />,
+    );
+    const githubCard = markup.slice(
+      markup.indexOf('<h3>GitHub</h3>'),
+      markup.indexOf('<h3>Figma</h3>'),
+    );
+    expect(githubCard).toContain('Conectar com GitHub');
+    expect(githubCard).toContain('read:user');
+    expect(githubCard).toContain('modo somente leitura');
+    expect(githubCard).toContain('Usar token pessoal (avançado)');
+    expect(githubCard).toMatch(/<button[^>]*disabled=""[^>]*>Conectar com GitHub/);
+
+    const source = readFileSync(new URL('./SkillsScreen.tsx', import.meta.url), 'utf8');
+    expect(source).toContain("invoke('mcp_oauth_authorize'");
+    expect(source).toContain("invoke<string | null>('mcp_oauth_github_account'");
+    expect(source).toContain("invoke<string | null>('mcp_oauth_disconnect_github'");
+    expect(source).toContain(
+      "onConnectGitHubOAuth(server, oauthClientSettings.clientId, 'read:user')",
+    );
+  });
+
+  it('exibe conta conectada e fornece desconexão OAuth separada do gerenciamento PAT', () => {
+    const markup = renderToStaticMarkup(
+      <SkillsCatalogView
+        skills={registryFixture}
+        initialTab="publico"
+        mcpServers={[
+          {
+            id: 'server-github',
+            name: 'GitHub',
+            endpoint: 'https://api.githubcopilot.com/mcp/',
+            enabled: true,
+            status: 'Conectado',
+          },
+        ]}
+        githubOAuthAccount="octocat"
+        onFamilyToggle={noOperation}
+        onSkillToggle={noOperation}
+        onOverrideToggle={noOperation}
+        onDisconnectGitHubOAuth={async () => null}
+      />,
+    );
+    expect(markup).toContain('Conectado');
+    expect(markup).toContain('Conectado como <strong>@octocat</strong>');
+    expect(markup).toContain('Desconectar');
+    expect(markup).not.toContain('Substituir token pessoal do GitHub');
   });
 
   it('lê o cliente OAuth público do Rust e guarda segredo apenas no Credential Manager', () => {
@@ -388,6 +445,8 @@ describe('catálogo de habilidades', () => {
     );
     expect(source).toContain("invoke('mcp_oauth_save_public_client_secret'");
     expect(source).toContain("invoke('mcp_oauth_remove_public_client_secret'");
+    expect(source).toContain('Segredo do OAuth App do GitHub');
+    expect(source).toContain('oauthClientSettings?.clientSecretRequired');
     expect(source).toContain('Este serviço ainda não foi configurado para o OdeKrai. Veja o guia');
     expect(source).toContain(
       '!oauthClientSettings.clientId.trim() && !oauthClientSettings.dynamicRegistration',

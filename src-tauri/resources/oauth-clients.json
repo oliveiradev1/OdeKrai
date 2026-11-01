@@ -11,7 +11,7 @@
       "clientId": "",
       "guideUrl": "https://docs.github.com/en/copilot/how-tos/copilot-in-your-ide/customize-copilot/extend-copilot-with-tools-and-context/set-up-the-github-mcp-server",
       "dynamicRegistration": false,
-      "clientSecretRequired": false,
+      "clientSecretRequired": true,
       "endpoints": ["https://api.githubcopilot.com/mcp/"]
     },
     "figma": {

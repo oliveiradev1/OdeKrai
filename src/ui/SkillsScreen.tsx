@@ -57,6 +57,7 @@ type SkillsCatalogViewProps = {
   googleConnection?: ReactNode;
   prerequisites?: SkillPrerequisites;
   mcpServers?: Array<PublicMcpServer & { id: string }>;
+  githubOAuthAccount?: string | null;
   mcpBusy?: boolean;
   onConfigurePublicMcp?: (
     service: PublicMcpCatalogEntry,
@@ -68,6 +69,12 @@ type SkillsCatalogViewProps = {
   ) => Promise<boolean>;
   onSaveGitHubToken?: (server: PublicMcpServer & { id: string }, token: string) => Promise<boolean>;
   onRemoveGitHubToken?: (server: PublicMcpServer & { id: string }) => Promise<boolean>;
+  onConnectGitHubOAuth?: (
+    server: (PublicMcpServer & { id: string }) | undefined,
+    clientId: string,
+    scopes: string,
+  ) => Promise<boolean>;
+  onDisconnectGitHubOAuth?: (server: PublicMcpServer & { id: string }) => Promise<string | null>;
   onTestPublicMcp?: (server: PublicMcpServer & { id: string }) => Promise<boolean>;
 };
 
@@ -125,10 +132,13 @@ export function SkillsCatalogView({
   googleConnection,
   prerequisites = { folderAvailable: true, appCount: 0, googleConnected: null },
   mcpServers = [],
+  githubOAuthAccount,
   mcpBusy = false,
   onConfigurePublicMcp,
   onSaveGitHubToken,
   onRemoveGitHubToken,
+  onConnectGitHubOAuth,
+  onDisconnectGitHubOAuth,
   onTestPublicMcp,
 }: SkillsCatalogViewProps) {
   const [query, setQuery] = useState('');
@@ -369,10 +379,13 @@ export function SkillsCatalogView({
                     service={service}
                     status={getPublicMcpStatus(service, mcpServers)}
                     server={server}
+                    githubOAuthAccount={githubOAuthAccount}
                     busy={mcpBusy}
                     onConfigure={onConfigurePublicMcp}
                     onSaveGitHubToken={onSaveGitHubToken}
                     onRemoveGitHubToken={onRemoveGitHubToken}
+                    onConnectGitHubOAuth={onConnectGitHubOAuth}
+                    onDisconnectGitHubOAuth={onDisconnectGitHubOAuth}
                     onTest={onTestPublicMcp}
                   />
                 );
@@ -389,19 +402,25 @@ function PublicMcpServiceCard({
   service,
   status,
   server,
+  githubOAuthAccount: initialGitHubAccount,
   busy,
   onConfigure,
   onSaveGitHubToken,
   onRemoveGitHubToken,
+  onConnectGitHubOAuth,
+  onDisconnectGitHubOAuth,
   onTest,
 }: {
   service: PublicMcpCatalogEntry;
   status: ReturnType<typeof getPublicMcpStatus>;
   server?: PublicMcpServer & { id: string };
+  githubOAuthAccount?: string | null;
   busy: boolean;
   onConfigure?: SkillsCatalogViewProps['onConfigurePublicMcp'];
   onSaveGitHubToken?: SkillsCatalogViewProps['onSaveGitHubToken'];
   onRemoveGitHubToken?: SkillsCatalogViewProps['onRemoveGitHubToken'];
+  onConnectGitHubOAuth?: SkillsCatalogViewProps['onConnectGitHubOAuth'];
+  onDisconnectGitHubOAuth?: SkillsCatalogViewProps['onDisconnectGitHubOAuth'];
   onTest?: SkillsCatalogViewProps['onTestPublicMcp'];
 }) {
   const formId = useId();
@@ -426,6 +445,15 @@ function PublicMcpServiceCard({
   const [checkingOAuth, setCheckingOAuth] = useState(false);
   const [oauthError, setOauthError] = useState('');
   const [linkError, setLinkError] = useState('');
+  const [githubAccount, setGithubAccount] = useState<string | null>(initialGitHubAccount ?? null);
+  const [githubAccountLoading, setGithubAccountLoading] = useState(false);
+  const [githubNotice, setGithubNotice] = useState('');
+  const isGitHub = service.name === 'GitHub';
+  const githubOAuthReady = canConnectToPublicOAuth(
+    oauthClientSettings,
+    { dynamicRegistration: false },
+    busy || clientSecretBusy,
+  );
   const publicOAuthReady = canConnectToPublicOAuth(
     oauthClientSettings,
     registrationOptions,
@@ -450,6 +478,28 @@ function PublicMcpServiceCard({
       current = false;
     };
   }, [service]);
+
+  useEffect(() => {
+    if (!isGitHub || !server || status !== 'connected' || !isTauri()) {
+      setGithubAccount(null);
+      return;
+    }
+    let current = true;
+    setGithubAccountLoading(true);
+    void invoke<string | null>('mcp_oauth_github_account', { serverId: server.id })
+      .then((account) => {
+        if (current) setGithubAccount(account);
+      })
+      .catch((cause) => {
+        if (current) setGithubNotice(`Não foi possível consultar a conta GitHub: ${String(cause)}`);
+      })
+      .finally(() => {
+        if (current) setGithubAccountLoading(false);
+      });
+    return () => {
+      current = false;
+    };
+  }, [isGitHub, server?.id, status]);
 
   async function saveOAuthClientSecret() {
     if (!oauthClientSettings || !clientSecret.trim() || !isTauri()) return;
@@ -532,6 +582,31 @@ function PublicMcpServiceCard({
     }
   }
 
+  async function connectGitHubOAuth() {
+    if (!oauthClientSettings || !onConnectGitHubOAuth || !githubOAuthReady) return;
+    setGithubNotice('');
+    try {
+      await onConnectGitHubOAuth(server, oauthClientSettings.clientId, 'read:user');
+    } catch (cause) {
+      setGithubNotice(`Não foi possível conectar ao GitHub: ${String(cause)}`);
+    }
+  }
+
+  async function disconnectGitHubOAuth() {
+    if (!server || !onDisconnectGitHubOAuth) return;
+    setGithubNotice('');
+    try {
+      const warning = await onDisconnectGitHubOAuth(server);
+      setGithubAccount(null);
+      setGithubNotice(
+        warning ??
+          'Conta desconectada. As credenciais locais foram removidas do Gerenciador de Credenciais.',
+      );
+    } catch (cause) {
+      setGithubNotice(`Não foi possível desconectar a conta GitHub: ${String(cause)}`);
+    }
+  }
+
   return (
     <article className="public-mcp-card">
       <div className="public-mcp-card-heading">
@@ -546,10 +621,117 @@ function PublicMcpServiceCard({
       {service.programStatus && (
         <p className="public-mcp-program-status">{service.programStatus}</p>
       )}
+      {isGitHub && (
+        <div className="public-mcp-github-oauth">
+          <p>
+            O OdeKrai pedirá somente <code>read:user</code> para identificar a conta. A conexão do
+            servidor fica em modo somente leitura; não são solicitadas permissões de escrita.
+            Confira as permissões exibidas pelo GitHub antes de autorizar. Sem permissões de
+            repositório, dados privados podem não ficar disponíveis.
+          </p>
+          {status === 'connected' && githubAccount && (
+            <p className="public-mcp-connected" role="status">
+              Conectado como <strong>@{githubAccount}</strong>
+            </p>
+          )}
+          {status === 'connected' && githubAccountLoading && (
+            <p role="status">Verificando conta…</p>
+          )}
+          {status === 'connected' && githubAccount && onDisconnectGitHubOAuth && (
+            <Button
+              type="button"
+              variant="secondary"
+              disabled={busy}
+              onClick={() => void disconnectGitHubOAuth()}
+            >
+              Desconectar
+            </Button>
+          )}
+          {status !== 'connected' || (!githubAccount && !githubAccountLoading) ? (
+            <Button
+              type="button"
+              disabled={!githubOAuthReady || busy || !onConnectGitHubOAuth}
+              onClick={() => void connectGitHubOAuth()}
+            >
+              Conectar com GitHub
+            </Button>
+          ) : null}
+          {oauthClientSettings && !oauthClientSettings.clientId.trim() && (
+            <p role="status">
+              Este aplicativo ainda precisa de um OAuth App GitHub registrado pelo desenvolvedor.{' '}
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => void openOfficialLink(oauthClientSettings.guideUrl)}
+              >
+                Abrir guia oficial
+              </Button>
+            </p>
+          )}
+          {oauthClientSettings?.clientSecretRequired && oauthClientSettings.clientId.trim() && (
+            <form
+              className="public-mcp-oauth-secret-form"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void saveOAuthClientSecret();
+              }}
+            >
+              <label>
+                Segredo do OAuth App do GitHub
+                <input
+                  id={`${formId}-github-oauth-client-secret`}
+                  name={`${formId}-github-oauth-client-secret`}
+                  type="password"
+                  autoComplete="off"
+                  value={clientSecret}
+                  onChange={(event) => setClientSecret(event.target.value)}
+                />
+                <small>
+                  O GitHub exige o segredo para trocar o código OAuth. Ele fica no Gerenciador de
+                  Credenciais e não volta a ser exibido. Use um app dedicado ao OdeKrai; o segredo
+                  fica acessível a quem usa este dispositivo.
+                </small>
+              </label>
+              {oauthClientSettings.clientSecretSaved ? (
+                <>
+                  <span role="status">Segredo salvo</span>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    disabled={clientSecretBusy}
+                    onClick={() => void removeOAuthClientSecret()}
+                  >
+                    Remover segredo
+                  </Button>
+                  {clientSecret.trim() && (
+                    <Button type="submit" variant="secondary" disabled={clientSecretBusy}>
+                      Substituir segredo
+                    </Button>
+                  )}
+                </>
+              ) : (
+                <Button
+                  type="submit"
+                  variant="secondary"
+                  disabled={clientSecretBusy || !clientSecret.trim()}
+                >
+                  Salvar segredo
+                </Button>
+              )}
+            </form>
+          )}
+          {githubNotice && (
+            <p role={githubNotice.startsWith('Não foi possível') ? 'alert' : 'status'}>
+              {githubNotice}
+            </p>
+          )}
+        </div>
+      )}
       {service.authenticationMethods.includes('oauth') && !oauthClientSettings && oauthError && (
         <p role="alert">{oauthError}</p>
       )}
       {service.authenticationMethods.includes('oauth') &&
+        !isGitHub &&
         oauthClientSettings &&
         endpoint === service.endpoint && (
           <div className="public-mcp-oauth-client-setup">
@@ -664,158 +846,176 @@ function PublicMcpServiceCard({
           {linkError && <p role="alert">{linkError}</p>}
         </div>
       )}
-      {service.name === 'GitHub' && server && onSaveGitHubToken && onRemoveGitHubToken && (
-        <GitHubTokenManager
-          server={server}
-          busy={busy}
-          onSave={onSaveGitHubToken}
-          onRemove={onRemoveGitHubToken}
-        />
-      )}
       {status === 'not_available' && (
         <p className="public-mcp-unavailable">
           Este serviço ainda não pode ser configurado no OdeKrai por uma limitação de
           compatibilidade.
         </p>
       )}
-      {status === 'available' && onConfigure && (
-        <>
-          <Button
-            type="button"
-            variant="secondary"
-            disabled={busy}
-            aria-expanded={expanded}
-            aria-controls={formId}
-            onClick={() => setExpanded((open) => !open)}
-          >
-            Configurar
-          </Button>
-          {expanded && (
-            <form id={formId} className="public-mcp-form" onSubmit={(event) => void submit(event)}>
-              <label>
-                URL do servidor
-                <input
-                  type="url"
-                  value={endpoint}
-                  required
-                  readOnly={service.name === 'GitHub'}
-                  onChange={(event) => {
-                    setEndpoint(event.target.value);
-                    setClientId('');
-                    setRegistrationOptions(null);
-                    setOauthError('');
-                    setLinkError('');
-                  }}
-                />
-              </label>
-              <label>
-                Autenticação
-                <select
-                  value={authentication}
-                  onChange={(event) => setAuthentication(event.target.value as 'oauth' | 'bearer')}
-                >
-                  {service.authenticationMethods.map((method) => (
-                    <option key={method} value={method}>
-                      {method === 'oauth' ? 'OAuth' : 'Token Bearer'}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              {authentication === 'bearer' && (
-                <label>
-                  {service.name === 'GitHub' ? 'Token pessoal do GitHub (PAT)' : 'Token Bearer'}
-                  <input
-                    id={`${formId}-bearer-token`}
-                    name={`${formId}-bearer-token`}
-                    type="password"
-                    autoComplete="off"
-                    value={token}
-                    required
-                    onChange={(event) => setToken(event.target.value)}
-                  />
-                  <small>
-                    O token é salvo no Gerenciador de Credenciais e não volta a ser exibido.
-                  </small>
-                </label>
-              )}
-              {authentication === 'oauth' && (
-                <div className="public-mcp-oauth-options">
-                  {service.oauthRegistrationNote && (
-                    <div className="public-mcp-oauth-guide">
-                      <p>{service.oauthRegistrationNote}</p>
-                      {service.oauthSteps && (
-                        <ol>
-                          {service.oauthSteps.map((step) => (
-                            <li key={step}>{step}</li>
-                          ))}
-                        </ol>
-                      )}
-                    </div>
+      {isGitHub && (
+        <Button
+          type="button"
+          variant="secondary"
+          disabled={busy}
+          aria-expanded={expanded}
+          aria-controls={formId}
+          onClick={() => {
+            setAuthentication('bearer');
+            setExpanded((open) => !open);
+          }}
+        >
+          {expanded ? 'Fechar opção avançada' : 'Usar token pessoal (avançado)'}
+        </Button>
+      )}
+      {!isGitHub && status === 'available' && onConfigure && (
+        <Button
+          type="button"
+          variant="secondary"
+          disabled={busy}
+          aria-expanded={expanded}
+          aria-controls={formId}
+          onClick={() => setExpanded((open) => !open)}
+        >
+          Configurar
+        </Button>
+      )}
+      {expanded && (!isGitHub || !server) && onConfigure && (
+        <form id={formId} className="public-mcp-form" onSubmit={(event) => void submit(event)}>
+          <label>
+            URL do servidor
+            <input
+              type="url"
+              value={endpoint}
+              required
+              readOnly={service.name === 'GitHub'}
+              onChange={(event) => {
+                setEndpoint(event.target.value);
+                setClientId('');
+                setRegistrationOptions(null);
+                setOauthError('');
+                setLinkError('');
+              }}
+            />
+          </label>
+          <label>
+            Autenticação
+            <select
+              value={authentication}
+              onChange={(event) => setAuthentication(event.target.value as 'oauth' | 'bearer')}
+            >
+              {service.authenticationMethods.map((method) => (
+                <option key={method} value={method}>
+                  {method === 'oauth' ? 'OAuth' : 'Token Bearer'}
+                </option>
+              ))}
+            </select>
+          </label>
+          {authentication === 'bearer' && (
+            <label>
+              {service.name === 'GitHub' ? 'Token pessoal do GitHub (PAT)' : 'Token Bearer'}
+              <input
+                id={`${formId}-bearer-token`}
+                name={`${formId}-bearer-token`}
+                type="password"
+                autoComplete="off"
+                value={token}
+                required
+                onChange={(event) => setToken(event.target.value)}
+              />
+              <small>
+                O token é salvo no Gerenciador de Credenciais e não volta a ser exibido.
+              </small>
+            </label>
+          )}
+          {authentication === 'oauth' && (
+            <div className="public-mcp-oauth-options">
+              {service.oauthRegistrationNote && (
+                <div className="public-mcp-oauth-guide">
+                  <p>{service.oauthRegistrationNote}</p>
+                  {service.oauthSteps && (
+                    <ol>
+                      {service.oauthSteps.map((step) => (
+                        <li key={step}>{step}</li>
+                      ))}
+                    </ol>
                   )}
-                  {endpoint !== service.endpoint && (
-                    <label>
-                      Identificador do cliente OAuth
-                      <input
-                        type="text"
-                        name={`${formId}-oauth-client-id`}
-                        id={`${formId}-oauth-client-id`}
-                        autoComplete="off"
-                        value={clientId}
-                        onChange={(event) => setClientId(event.target.value)}
-                      />
-                      <small>Opcional quando o servidor oferece registro dinâmico.</small>
-                    </label>
-                  )}
-                  {endpoint === service.endpoint && oauthClientSettings?.clientId.trim() && (
-                    <p role="status">Identificador público configurado para este serviço.</p>
-                  )}
-                  <label>
-                    Escopos OAuth (opcional)
-                    <input
-                      type="text"
-                      name={`${formId}-oauth-scopes`}
-                      id={`${formId}-oauth-scopes`}
-                      value={scopes}
-                      onChange={(event) => setScopes(event.target.value)}
-                      placeholder="Separados por espaço"
-                    />
-                  </label>
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    disabled={checkingOAuth || busy || !endpoint.startsWith('https://')}
-                    onClick={() => void checkOAuthRegistration()}
-                  >
-                    {checkingOAuth ? 'Verificando…' : 'Verificar opções OAuth'}
-                  </Button>
-                  {registrationOptions?.dynamicRegistration && (
-                    <p role="status">
-                      Registro dinâmico disponível. O identificador será registrado e salvo com a
-                      autorização.
-                    </p>
-                  )}
-                  {oauthError && <p role="alert">{oauthError}</p>}
-                  {linkError && <p role="alert">{linkError}</p>}
                 </div>
               )}
+              {endpoint !== service.endpoint && (
+                <label>
+                  Identificador do cliente OAuth
+                  <input
+                    type="text"
+                    name={`${formId}-oauth-client-id`}
+                    id={`${formId}-oauth-client-id`}
+                    autoComplete="off"
+                    value={clientId}
+                    onChange={(event) => setClientId(event.target.value)}
+                  />
+                  <small>Opcional quando o servidor oferece registro dinâmico.</small>
+                </label>
+              )}
+              {endpoint === service.endpoint && oauthClientSettings?.clientId.trim() && (
+                <p role="status">Identificador público configurado para este serviço.</p>
+              )}
+              <label>
+                Escopos OAuth (opcional)
+                <input
+                  type="text"
+                  name={`${formId}-oauth-scopes`}
+                  id={`${formId}-oauth-scopes`}
+                  value={scopes}
+                  onChange={(event) => setScopes(event.target.value)}
+                  placeholder="Separados por espaço"
+                />
+              </label>
               <Button
-                type="submit"
-                disabled={
-                  !onConfigure ||
-                  busy ||
-                  (authentication === 'oauth' &&
-                    (!oauthClientSettings ||
-                      (endpoint === service.endpoint
-                        ? !publicOAuthReady
-                        : !canConnectWithOAuth(registrationOptions, clientId, busy))))
-                }
+                type="button"
+                variant="secondary"
+                disabled={checkingOAuth || busy || !endpoint.startsWith('https://')}
+                onClick={() => void checkOAuthRegistration()}
               >
-                {authentication === 'oauth' ? 'Conectar e testar' : 'Salvar e testar conexão'}
+                {checkingOAuth ? 'Verificando…' : 'Verificar opções OAuth'}
               </Button>
-            </form>
+              {registrationOptions?.dynamicRegistration && (
+                <p role="status">
+                  Registro dinâmico disponível. O identificador será registrado e salvo com a
+                  autorização.
+                </p>
+              )}
+              {oauthError && <p role="alert">{oauthError}</p>}
+              {linkError && <p role="alert">{linkError}</p>}
+            </div>
           )}
-        </>
+          <Button
+            type="submit"
+            disabled={
+              !onConfigure ||
+              busy ||
+              (authentication === 'oauth' &&
+                (!oauthClientSettings ||
+                  (endpoint === service.endpoint
+                    ? !publicOAuthReady
+                    : !canConnectWithOAuth(registrationOptions, clientId, busy))))
+            }
+          >
+            {authentication === 'oauth' ? 'Conectar e testar' : 'Salvar e testar conexão'}
+          </Button>
+        </form>
       )}
+      {isGitHub &&
+        server &&
+        expanded &&
+        authentication === 'bearer' &&
+        onSaveGitHubToken &&
+        onRemoveGitHubToken && (
+          <GitHubTokenManager
+            server={server}
+            busy={busy}
+            onSave={onSaveGitHubToken}
+            onRemove={onRemoveGitHubToken}
+          />
+        )}
       {status === 'configured' && server && onTest && (
         <Button
           type="button"
@@ -826,7 +1026,9 @@ function PublicMcpServiceCard({
           Testar conexão
         </Button>
       )}
-      {status === 'connected' && <p className="public-mcp-connected">Teste MCP concluído.</p>}
+      {status === 'connected' && !githubAccount && (
+        <p className="public-mcp-connected">Teste MCP concluído.</p>
+      )}
     </article>
   );
 }
@@ -1413,6 +1615,55 @@ export function SkillsScreen({
     }
   }
 
+  async function connectGitHubOAuth(
+    server: (PublicMcpServer & { id: string }) | undefined,
+    clientId: string,
+    scopes: string,
+  ): Promise<boolean> {
+    const service = publicMcpCatalog.find((item) => item.name === 'GitHub');
+    if (!service) return false;
+    if (!server) {
+      return configurePublicMcp(service, service.endpoint, 'oauth', '', clientId, scopes);
+    }
+    if (server.endpoint !== service.endpoint) {
+      throw new Error('O endereço salvo não corresponde ao servidor oficial do GitHub.');
+    }
+    setMcpBusy(true);
+    setError('');
+    try {
+      await invoke('mcp_oauth_authorize', {
+        serverId: server.id,
+        clientId: clientId.trim() || null,
+        scopes,
+      });
+      await invoke('mcp_test_connection', { serverId: server.id, confirmed: true });
+      await refreshMcpServers().catch(() => undefined);
+      return true;
+    } catch (cause) {
+      setError(`Não foi possível conectar ao GitHub: ${String(cause)}`);
+      await refreshMcpServers().catch(() => undefined);
+      throw cause;
+    } finally {
+      setMcpBusy(false);
+    }
+  }
+
+  async function disconnectGitHubOAuth(
+    server: PublicMcpServer & { id: string },
+  ): Promise<string | null> {
+    if (!isTauri()) throw new Error('A desconexão OAuth só está disponível no aplicativo OdeKrai.');
+    setMcpBusy(true);
+    try {
+      const warning = await invoke<string | null>('mcp_oauth_disconnect_github', {
+        serverId: server.id,
+      });
+      await refreshMcpServers().catch(() => undefined);
+      return warning;
+    } finally {
+      setMcpBusy(false);
+    }
+  }
+
   return (
     <SkillsCatalogView
       skills={skills}
@@ -1439,6 +1690,8 @@ export function SkillsScreen({
       onConfigurePublicMcp={configurePublicMcp}
       onSaveGitHubToken={saveGitHubToken}
       onRemoveGitHubToken={removeGitHubToken}
+      onConnectGitHubOAuth={connectGitHubOAuth}
+      onDisconnectGitHubOAuth={disconnectGitHubOAuth}
       onTestPublicMcp={testPublicMcp}
       prerequisites={prerequisites}
       initialFamily={initialFamily}

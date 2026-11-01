@@ -92,6 +92,9 @@ impl HttpTransport for ReqwestTransport {
             .header("MCP-Protocol-Version", PROTOCOL_VERSION)
             .header("Mcp-Method", method)
             .json(&body);
+        if is_github_remote(endpoint) {
+            request = request.header("X-MCP-Readonly", "true");
+        }
         if let Some(name) = name {
             request = request.header("Mcp-Name", encode_header_value(name)?);
         }
@@ -120,6 +123,10 @@ impl HttpTransport for ReqwestTransport {
             body: bytes,
         })
     }
+}
+
+fn is_github_remote(endpoint: &Url) -> bool {
+    endpoint.host_str() == Some("api.githubcopilot.com")
 }
 
 impl McpHttpClient {
@@ -396,6 +403,14 @@ mod tests {
         assert!(validate_endpoint("http://example.org/mcp").is_err());
         assert!(validate_endpoint("https://user:pass@example.org/mcp").is_err());
         assert!(validate_endpoint("https://example.org/mcp?access_token=secret").is_err());
+    }
+
+    #[test]
+    fn github_remote_is_forced_into_read_only_mode() {
+        let github = Url::parse("https://api.githubcopilot.com/mcp/").unwrap();
+        let other = Url::parse("https://mcp.example/mcp").unwrap();
+        assert!(is_github_remote(&github));
+        assert!(!is_github_remote(&other));
     }
 
     #[test]

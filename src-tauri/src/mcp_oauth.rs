@@ -19,7 +19,10 @@ use url::Url;
 const SERVICE: &str = "site.anceryx.odekrai.mcp";
 const CALLBACK_TIMEOUT: Duration = Duration::from_secs(180);
 const MAX_METADATA_BYTES: usize = 256 * 1024;
+const MAX_GITHUB_PROFILE_BYTES: usize = 64 * 1024;
 const OAUTH_CLIENTS_JSON: &str = include_str!("../resources/oauth-clients.json");
+const GITHUB_API_USER: &str = "https://api.github.com/user";
+const GITHUB_API_REVOKE_GRANT: &str = "https://api.github.com/applications/";
 
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -142,6 +145,8 @@ pub(crate) struct StoredOAuth {
     pub client_secret: Option<String>,
     #[serde(default)]
     pub service: Option<String>,
+    #[serde(default)]
+    pub github_login: Option<String>,
     pub token_endpoint: String,
     #[serde(default)]
     pub revocation_endpoint: Option<String>,
@@ -245,6 +250,132 @@ fn safe_http() -> Result<Client, String> {
         .timeout(Duration::from_secs(15))
         .build()
         .map_err(|_| "Não foi possível preparar a conexão segura de autorização MCP.".into())
+}
+
+struct GitHubProfileReply {
+    status: StatusCode,
+    url: Url,
+    body: Vec<u8>,
+}
+
+trait GitHubProfileTransport {
+    fn get_user(&mut self, token: &str) -> Result<GitHubProfileReply, String>;
+}
+
+trait GitHubGrantRevocationTransport {
+    fn revoke_grant(
+        &mut self,
+        client_id: &str,
+        client_secret: &str,
+        access_token: &str,
+    ) -> Result<StatusCode, ()>;
+}
+
+struct ReqwestGitHubProfileTransport(Client);
+
+impl GitHubProfileTransport for ReqwestGitHubProfileTransport {
+    fn get_user(&mut self, token: &str) -> Result<GitHubProfileReply, String> {
+        let mut response = self
+            .0
+            .get(GITHUB_API_USER)
+            .bearer_auth(token)
+            .header(reqwest::header::ACCEPT, "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .header("User-Agent", concat!("OdeKrai/", env!("CARGO_PKG_VERSION")))
+            .send()
+            .map_err(|_| "Não foi possível identificar a conta GitHub autorizada.".to_string())?;
+        let status = response.status();
+        let url = response.url().clone();
+        let mut body = Vec::new();
+        response
+            .by_ref()
+            .take((MAX_GITHUB_PROFILE_BYTES + 1) as u64)
+            .read_to_end(&mut body)
+            .map_err(|_| "Não foi possível ler a conta GitHub autorizada.".to_string())?;
+        Ok(GitHubProfileReply { status, url, body })
+    }
+}
+
+struct ReqwestGitHubGrantRevocationTransport(Client);
+
+impl GitHubGrantRevocationTransport for ReqwestGitHubGrantRevocationTransport {
+    fn revoke_grant(
+        &mut self,
+        client_id: &str,
+        client_secret: &str,
+        access_token: &str,
+    ) -> Result<StatusCode, ()> {
+        let mut endpoint = Url::parse(GITHUB_API_REVOKE_GRANT).map_err(|_| ())?;
+        endpoint
+            .path_segments_mut()
+            .map_err(|_| ())?
+            .push(client_id)
+            .push("grant");
+        let response = self
+            .0
+            .delete(endpoint.clone())
+            .basic_auth(client_id, Some(client_secret))
+            .header(reqwest::header::ACCEPT, "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2026-03-10")
+            .header("User-Agent", concat!("OdeKrai/", env!("CARGO_PKG_VERSION")))
+            .json(&json!({ "access_token": access_token }))
+            .send()
+            .map_err(|_| ())?;
+        if response.url() != &endpoint || response.status().is_redirection() {
+            return Err(());
+        }
+        Ok(response.status())
+    }
+}
+
+fn github_account_with(
+    token: &str,
+    transport: &mut impl GitHubProfileTransport,
+) -> Result<String, String> {
+    let response = transport.get_user(token)?;
+    if response.url.as_str() != GITHUB_API_USER || response.status.is_redirection() {
+        return Err(
+            "O GitHub tentou redirecionar a consulta da conta; a resposta foi recusada.".into(),
+        );
+    }
+    if response.status != StatusCode::OK {
+        return Err(
+            "O GitHub não permitiu identificar a conta autorizada. Reconecte e confira a permissão read:user."
+                .into(),
+        );
+    }
+    if response.body.len() > MAX_GITHUB_PROFILE_BYTES {
+        return Err("A resposta de perfil do GitHub excedeu o limite seguro.".into());
+    }
+    let body: Value = serde_json::from_slice(&response.body)
+        .map_err(|_| "A resposta de perfil do GitHub está inválida.".to_string())?;
+    let login = body
+        .get("login")
+        .and_then(Value::as_str)
+        .filter(|login| {
+            !login.is_empty()
+                && login.len() <= 39
+                && login
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        })
+        .ok_or("O GitHub não retornou um nome de conta válido.")?;
+    Ok(login.to_owned())
+}
+
+fn github_grant_revoked_with(
+    client_id: &str,
+    client_secret: &str,
+    access_token: &str,
+    transport: &mut impl GitHubGrantRevocationTransport,
+) -> bool {
+    transport
+        .revoke_grant(client_id, client_secret, access_token)
+        .is_ok_and(|status| status == StatusCode::NO_CONTENT)
+}
+
+pub(crate) fn github_oauth_read_scopes() -> &'static str {
+    "read:user"
 }
 
 fn validate_https(raw: &str) -> Result<Url, String> {
@@ -999,7 +1130,7 @@ fn revoke_tokens_with(
     transport: &mut impl RevocationTransport,
 ) -> bool {
     let Some(raw_endpoint) = stored.revocation_endpoint.as_deref() else {
-        return true;
+        return false;
     };
     let Ok(endpoint) = validate_https(raw_endpoint) else {
         return false;
@@ -1010,6 +1141,9 @@ fn revoke_tokens_with(
     }
     if let Some(token) = access_token {
         tokens.push((token, "access_token"));
+    }
+    if tokens.is_empty() {
+        return false;
     }
     tokens.into_iter().fold(true, |all_revoked, (token, hint)| {
         let revoked = transport
@@ -1025,8 +1159,40 @@ pub(crate) fn revoke_before_remove(server_id: &str, access_token: Option<&str>) 
         Ok(None) => return true,
         Err(_) => return false,
     };
+    if stored.service.as_deref() == Some("github") {
+        let client_secret = load_public_client_secret("github")
+            .ok()
+            .flatten()
+            .or_else(|| stored.client_secret.clone());
+        let Some(client_secret) = client_secret else {
+            return false;
+        };
+        let Ok(client) = safe_http() else {
+            return false;
+        };
+        let mut transport = ReqwestGitHubGrantRevocationTransport(client);
+        if access_token.is_some_and(|token| {
+            github_grant_revoked_with(
+                &stored.client_id,
+                &client_secret,
+                token,
+                &mut transport,
+            )
+        }) {
+            return true;
+        }
+        let Ok(refreshed) = refresh_access(server_id) else {
+            return false;
+        };
+        return github_grant_revoked_with(
+            &stored.client_id,
+            &client_secret,
+            &refreshed.value,
+            &mut transport,
+        );
+    }
     if stored.revocation_endpoint.is_none() {
-        return true;
+        return false;
     }
     let Ok(client) = safe_http() else {
         return false;
@@ -1144,12 +1310,21 @@ fn run_authorization(
         &resource,
         effective_client_secret,
     )?;
+    let github_login = if service.as_deref() == Some("github") {
+        Some(github_account_with(
+            &access_token,
+            &mut ReqwestGitHubProfileTransport(client.clone()),
+        )?)
+    } else {
+        None
+    };
     let stored = StoredOAuth {
         issuer,
         resource,
         client_id: registered_client.client_id,
         client_secret: registered_client.client_secret,
         service,
+        github_login,
         token_endpoint: metadata.token_endpoint,
         revocation_endpoint: metadata.revocation_endpoint,
         refresh_token,
@@ -1242,6 +1417,21 @@ pub fn mcp_oauth_public_client_settings(
 }
 
 #[tauri::command]
+pub fn mcp_oauth_github_account(
+    caller: tauri::WebviewWindow,
+    server_id: String,
+) -> Result<Option<String>, String> {
+    crate::require_main(&caller)?;
+    let Some(stored) = load(&server_id)? else {
+        return Ok(None);
+    };
+    if stored.service.as_deref() != Some("github") {
+        return Ok(None);
+    }
+    Ok(stored.github_login)
+}
+
+#[tauri::command]
 pub fn mcp_oauth_save_public_client_secret(
     caller: tauri::WebviewWindow,
     service: String,
@@ -1278,6 +1468,129 @@ pub fn mcp_oauth_remove_public_client_secret(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct MockGitHubProfile(GitHubProfileReply, Option<String>);
+
+    struct MockGitHubGrantRevocation {
+        status: Result<StatusCode, ()>,
+        last_token: Option<String>,
+        last_client_id: Option<String>,
+    }
+
+    impl GitHubGrantRevocationTransport for MockGitHubGrantRevocation {
+        fn revoke_grant(
+            &mut self,
+            client_id: &str,
+            _client_secret: &str,
+            access_token: &str,
+        ) -> Result<StatusCode, ()> {
+            self.last_client_id = Some(client_id.to_owned());
+            self.last_token = Some(access_token.to_owned());
+            self.status
+        }
+    }
+
+    impl GitHubProfileTransport for MockGitHubProfile {
+        fn get_user(&mut self, token: &str) -> Result<GitHubProfileReply, String> {
+            if let Some(expected) = self.1.as_deref() {
+                assert_eq!(token, expected);
+            }
+            Ok(GitHubProfileReply {
+                status: self.0.status,
+                url: self.0.url.clone(),
+                body: self.0.body.clone(),
+            })
+        }
+    }
+
+    fn mock_github_profile(status: StatusCode, body: &[u8]) -> MockGitHubProfile {
+        MockGitHubProfile(
+            GitHubProfileReply {
+                status,
+                url: Url::parse(GITHUB_API_USER).unwrap(),
+                body: body.to_vec(),
+            },
+            Some("access-token-fixture".into()),
+        )
+    }
+
+    #[test]
+    fn github_oauth_uses_only_read_user_scope_by_default() {
+        assert_eq!(github_oauth_read_scopes(), "read:user");
+        assert!(!github_oauth_read_scopes().split_whitespace().any(|scope| {
+            matches!(scope, "repo" | "write:repo_hook" | "admin:org" | "user")
+        }));
+    }
+
+    #[test]
+    fn github_account_is_read_from_simulated_profile_without_logging_token() {
+        let mut profile = mock_github_profile(StatusCode::OK, br#"{"login":"octocat"}"#);
+        assert_eq!(
+            github_account_with("access-token-fixture", &mut profile).unwrap(),
+            "octocat"
+        );
+        let mut denied = mock_github_profile(
+            StatusCode::FORBIDDEN,
+            b"access-token-fixture was rejected",
+        );
+        let error = github_account_with("access-token-fixture", &mut denied).unwrap_err();
+        assert!(!error.contains("access-token-fixture"));
+        assert!(!error.contains("was rejected"));
+    }
+
+    #[test]
+    fn github_account_rejects_redirect_and_invalid_login() {
+        let mut redirected = mock_github_profile(StatusCode::FOUND, br#"{"login":"octocat"}"#);
+        redirected.0.url = Url::parse("https://attacker.example/user").unwrap();
+        assert!(github_account_with("token", &mut redirected)
+            .unwrap_err()
+            .contains("redirecionar"));
+        let mut invalid = mock_github_profile(StatusCode::OK, br#"{"login":"octo cat"}"#);
+        assert!(github_account_with("token", &mut invalid).is_err());
+    }
+
+    #[test]
+    fn github_disconnect_revokes_token_with_the_registered_app_credentials() {
+        let mut server = MockGitHubGrantRevocation {
+            status: Ok(StatusCode::NO_CONTENT),
+            last_token: None,
+            last_client_id: None,
+        };
+        assert!(github_grant_revoked_with(
+            "github-client-id",
+            "github-client-secret",
+            "github-access-token",
+            &mut server,
+        ));
+        assert_eq!(server.last_client_id.as_deref(), Some("github-client-id"));
+        assert_eq!(server.last_token.as_deref(), Some("github-access-token"));
+    }
+
+    #[test]
+    fn github_disconnect_does_not_claim_revocation_without_confirmation() {
+        let mut server = MockGitHubGrantRevocation {
+            status: Ok(StatusCode::UNAUTHORIZED),
+            last_token: None,
+            last_client_id: None,
+        };
+        assert!(!github_grant_revoked_with(
+            "github-client-id",
+            "github-client-secret",
+            "github-access-token",
+            &mut server,
+        ));
+        let mut unavailable = MockGitHubGrantRevocation {
+            status: Err(()),
+            last_token: None,
+            last_client_id: None,
+        };
+        assert!(!github_grant_revoked_with(
+            "github-client-id",
+            "github-client-secret",
+            "github-access-token",
+            &mut unavailable,
+        ));
+    }
     use std::collections::VecDeque;
 
     #[test]
@@ -1287,6 +1600,7 @@ mod tests {
         for name in ["github", "figma", "lovable", "notion", "google"] {
             assert!(catalog.services.contains_key(name), "serviço ausente: {name}");
         }
+        assert!(catalog.services["github"].client_secret_required);
         for definition in catalog.services.values() {
             assert!(definition.client_id.is_empty());
             validate_guide_url(&definition.guide_url, &catalog.allowed_guide_domains).unwrap();
@@ -1360,10 +1674,19 @@ mod tests {
             client_id: "public-client".into(),
             client_secret: None,
             service: None,
+            github_login: None,
             token_endpoint: "https://auth.example/token".into(),
             revocation_endpoint: Some("https://auth.example/revoke".into()),
             refresh_token: Some("refresh-secret-fixture".into()),
         }
+    }
+
+    #[test]
+    fn older_oauth_credential_without_github_account_still_loads() {
+        let mut value = serde_json::to_value(stored_oauth()).unwrap();
+        value.as_object_mut().unwrap().remove("githubLogin");
+        let stored: StoredOAuth = serde_json::from_value(value).unwrap();
+        assert_eq!(stored.github_login, None);
     }
 
     #[test]
@@ -1465,6 +1788,65 @@ mod tests {
             client_id_metadata_document_supported: false,
             issuer_parameter_supported: false,
         }
+    }
+
+    #[test]
+    fn github_authorization_requests_read_user_only() {
+        let metadata = registration_metadata(None);
+        let authorization = build_authorization_url(
+            &metadata,
+            "github-client",
+            "http://127.0.0.1:43210/callback",
+            "state-fixture",
+            "pkce-fixture",
+            "https://api.githubcopilot.com/mcp/",
+            Some(github_oauth_read_scopes()),
+        )
+        .unwrap();
+        let url = Url::parse(&authorization).unwrap();
+        let query: std::collections::HashMap<_, _> = url.query_pairs().into_owned().collect();
+        assert_eq!(query.get("scope").map(String::as_str), Some("read:user"));
+        assert_eq!(query.get("code_challenge_method").map(String::as_str), Some("S256"));
+        assert_eq!(query.get("state").map(String::as_str), Some("state-fixture"));
+    }
+
+    #[test]
+    fn github_simulated_authorization_server_flow_keeps_state_and_pkce() {
+        let metadata = registration_metadata(None);
+        let client = register_client_with(
+            &metadata,
+            "http://127.0.0.1:43210/callback",
+            Some("github-client"),
+            Some(github_oauth_read_scopes()),
+            |_, _| panic!("cliente GitHub pré-configurado não usa registro dinâmico"),
+        )
+        .unwrap();
+        let auth_url = build_authorization_url(
+            &metadata,
+            &client.client_id,
+            "http://127.0.0.1:43210/callback",
+            "state-fixture",
+            "pkce-challenge-fixture",
+            "https://api.githubcopilot.com/mcp/",
+            Some(github_oauth_read_scopes()),
+        )
+        .unwrap();
+        let auth_url = Url::parse(&auth_url).unwrap();
+        let query: std::collections::HashMap<_, _> = auth_url.query_pairs().into_owned().collect();
+        assert_eq!(query.get("client_id").map(String::as_str), Some("github-client"));
+        assert_eq!(query.get("scope").map(String::as_str), Some("read:user"));
+        assert_eq!(query.get("code_challenge_method").map(String::as_str), Some("S256"));
+        assert_eq!(query.get("code_challenge").map(String::as_str), Some("pkce-challenge-fixture"));
+        assert_eq!(
+            parse_callback_target(
+                "/callback?state=state-fixture&code=authorization-code",
+                "state-fixture",
+                "https://auth.example",
+                false,
+            )
+            .unwrap(),
+            "authorization-code"
+        );
     }
 
     #[test]
@@ -1591,15 +1973,27 @@ mod tests {
     }
 
     #[test]
-    fn removal_without_tokens_does_not_call_revocation_server() {
+    fn removal_without_tokens_is_not_reported_as_revoked() {
         let mut stored = stored_oauth();
         stored.refresh_token = None;
         let mut server = SimulatedRevocationServer {
             statuses: VecDeque::new(),
             submitted_tokens: Vec::new(),
         };
-        assert!(revoke_tokens_with(&stored, None, &mut server));
+        assert!(!revoke_tokens_with(&stored, None, &mut server));
         assert!(server.submitted_tokens.is_empty());
+    }
+
+    #[test]
+    fn missing_revocation_endpoint_is_not_reported_as_revoked() {
+        let mut stored = stored_oauth();
+        stored.revocation_endpoint = None;
+        let mut server = SimulatedRevocationServer {
+            statuses: Default::default(),
+            submitted_tokens: Vec::new(),
+        };
+        assert!(!revoke_tokens_with(&stored, None, &mut server));
+        assert_eq!(server.submitted_tokens.len(), 0);
     }
 
     #[test]

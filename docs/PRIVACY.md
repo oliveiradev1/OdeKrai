@@ -21,6 +21,25 @@ envia a ele o refresh token e, se ainda estiver em memória, o access token. Mes
 falhar, a credencial local e a conexão em memória são removidas; o app mostra um aviso para revogar
 o token no painel do provedor.
 
+Ao conectar o GitHub por OAuth, o OdeKrai solicita somente o escopo `read:user` para obter o login
+da conta pelo endpoint fixo `https://api.github.com/user`; a chamada usa o access token apenas no
+Rust, não segue redirecionamentos e não guarda a resposta bruta. O login fica junto à autorização
+no Gerenciador de Credenciais. As chamadas MCP do GitHub enviam `X-MCP-Readonly: true` para limitar
+as ferramentas disponibilizadas pelo servidor às de leitura. O GitHub recebe o endereço IP normal
+da conexão e o pedido autenticado de perfil. Desconectar apaga a autorização local e tenta a
+revogação anunciada pelo emissor; quando ela não estiver disponível ou falhar, o app avisa que a
+revogação remota não foi confirmada.
+
+O GitHub exige o segredo do GitHub App/OAuth App para trocar o código de autorização. A pessoa o
+informa na tela de Habilidades; o OdeKrai o guarda no Gerenciador de Credenciais, nunca no SQLite,
+no log ou no contexto do modelo, e limpa o campo após salvar. O segredo fica disponível ao usuário
+local do dispositivo, por isso use um app dedicado ao OdeKrai e não um segredo compartilhado com
+outros sistemas. Ao desconectar, o app envia o access token ao endpoint oficial de revogação do
+GitHub (`DELETE /applications/{client_id}/grant` em `api.github.com`), autenticando com o client ID
+e o segredo do app; o endereço IP fica visível ao GitHub como em qualquer pedido HTTPS. O token e o
+segredo não são registrados em logs. Se o GitHub não confirmar a revogação, o app remove as
+credenciais locais e mostra um aviso para revogar no GitHub.
+
 ShardCloud oferece consultas de leitura e, pelo agente, ações de iniciar/parar VM e execução de
 comandos remotos mediante aprovação nativa obrigatória.
 Salvar o token não faz uma chamada de rede. Ele é enviado pelo cabeçalho `Authorization: Bearer` ao

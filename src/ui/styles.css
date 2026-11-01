@@ -2262,6 +2262,7 @@ select:focus-visible {
 }
 .public-mcp-oauth-options,
 .public-mcp-oauth-guide,
+.public-mcp-github-oauth,
 .public-mcp-token-guide,
 .public-mcp-token-manager {
   display: grid;
