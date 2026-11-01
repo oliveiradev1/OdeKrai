@@ -1551,6 +1551,23 @@ select:focus-visible {
   padding: 14px;
   background: var(--color-surface-raised, #15171c);
 }
+.cloud-capability-summary {
+  display: grid;
+  gap: 6px;
+  margin: 12px 0;
+}
+.cloud-capability-summary h4,
+.cloud-capability-summary p {
+  margin: 0;
+}
+.cloud-capability-summary h4 {
+  color: var(--color-text);
+  font-size: 13px;
+}
+.cloud-capability-summary p {
+  color: var(--color-text-muted);
+  line-height: 1.5;
+}
 .cloud-pending-action pre {
   max-height: 240px;
   overflow: auto;
