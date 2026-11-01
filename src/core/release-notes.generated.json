@@ -1,6 +1,23 @@
 {
-  "currentVersion": "0.16.1",
+  "currentVersion": "0.17.0",
   "releases": [
+    {
+      "version": "0.17.0",
+      "title": "Conectores MCP, Nuvem e IA local",
+      "date": "",
+      "summary": "Esta versão amplia os conectores MCP e de hospedagem e melhora a configuração de modelos locais.",
+      "changes": [
+        "MCP remoto por HTTP com OAuth/PKCE ou token, catálogo de serviços públicos e ferramentas desativadas até ativação explícita; ações de ferramentas passam pelo fluxo de aprovação.",
+        "GitHub com OAuth de leitura ou token pessoal; Notion, Lovable e Google Workspace exibem os requisitos de configuração documentados. Figma não conecta enquanto o OdeKrai não estiver no catálogo do fornecedor.",
+        "Nuvem: consultas de VMs e recursos disponíveis em ShardCloud e Hostinger; ações remotas implementadas exigem aprovação. As operações disponíveis em cada provedor estão listadas em Configurações > Nuvem.",
+        "IA local: modelos baixados podem ser verificados sob demanda; Meu computador orienta a iniciar um servidor compatível e permite procurar o serviço numa porta local informada.",
+        "A interface identifica ShardCloud e Hostinger como integrações em teste.",
+        "Chamadas de conexão e inspeção MCP que podem bloquear foram movidas para trabalho assíncrono.",
+        "Segredos OAuth não aparecem no Debug e as saídas de conectores continuam tratadas como dados externos.",
+        "Diagnóstico registra eventos da busca por modelos locais sem incluir caminhos completos.",
+        "Testes de prazo de ações Hostinger usam servidor simulado controlado."
+      ]
+    },
     {
       "version": "0.16.1",
       "title": "Google Calendar e controles do Windows",
