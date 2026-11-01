@@ -84,9 +84,9 @@ fn oauth_client_catalog() -> Result<OAuthClientCatalog, String> {
 fn validate_guide_url(url: &str, allowed_domains: &[String]) -> Result<(), String> {
     let guide = Url::parse(url).map_err(|_| "A URL de um guia OAuth está inválida.".to_string())?;
     if guide.scheme() != "https"
-        || !guide.host_str().is_some_and(|host| {
-            allowed_domains.iter().any(|allowed| allowed == host)
-        })
+        || !guide
+            .host_str()
+            .is_some_and(|host| allowed_domains.iter().any(|allowed| allowed == host))
     {
         return Err("A URL de um guia OAuth precisa usar HTTPS em domínio permitido.".into());
     }
@@ -98,7 +98,11 @@ fn oauth_service_for_endpoint(
 ) -> Result<Option<(String, OAuthClientDefinition)>, String> {
     let catalog = oauth_client_catalog()?;
     for (service, definition) in catalog.services {
-        if definition.endpoints.iter().any(|candidate| candidate == endpoint) {
+        if definition
+            .endpoints
+            .iter()
+            .any(|candidate| candidate == endpoint)
+        {
             return Ok(Some((service, definition)));
         }
     }
@@ -117,9 +121,7 @@ fn load_public_client_secret(service: &str) -> Result<Option<String>, String> {
     match public_client_secret_credential(service)?.get_password() {
         Ok(secret) => Ok(Some(secret)),
         Err(keyring::Error::NoEntry) => Ok(None),
-        Err(_) => Err(
-            "Não foi possível ler o segredo OAuth no Gerenciador de Credenciais.".into(),
-        ),
+        Err(_) => Err("Não foi possível ler o segredo OAuth no Gerenciador de Credenciais.".into()),
     }
 }
 
@@ -224,7 +226,10 @@ impl std::fmt::Debug for ServerMetadata {
                 "client_id_metadata_document_supported",
                 &self.client_id_metadata_document_supported,
             )
-            .field("issuer_parameter_supported", &self.issuer_parameter_supported)
+            .field(
+                "issuer_parameter_supported",
+                &self.issuer_parameter_supported,
+            )
             .finish()
     }
 }
@@ -746,8 +751,7 @@ fn parse_refresh_response(
             .and_then(|tokens| tokens.error.as_deref());
         return Err(refresh_failure_message(status, oauth_error, google_workspace).into());
     }
-    let tokens = parsed_tokens
-        .ok_or("Resposta de renovação OAuth inválida. Conecte novamente.")?;
+    let tokens = parsed_tokens.ok_or("Resposta de renovação OAuth inválida. Conecte novamente.")?;
     if let Some(error) = tokens.error.as_deref() {
         return Err(refresh_failure_message(status, Some(error), google_workspace).into());
     }
@@ -1204,11 +1208,7 @@ pub(crate) fn refresh_access(server_id: &str) -> Result<OAuthAccessToken, String
         return Err("Redirecionamento na renovação OAuth foi recusado. Conecte novamente.".into());
     }
     let (status, _, body) = bounded_json(response)?;
-    let tokens = parse_refresh_response(
-        status,
-        body,
-        stored.service.as_deref() == Some("google"),
-    )?;
+    let tokens = parse_refresh_response(status, body, stored.service.as_deref() == Some("google"))?;
     let access_token = tokens
         .access_token
         .filter(|token| {
@@ -1314,12 +1314,7 @@ pub(crate) fn revoke_before_remove(server_id: &str, access_token: Option<&str>) 
         };
         let mut transport = ReqwestGitHubGrantRevocationTransport(client);
         if access_token.is_some_and(|token| {
-            github_grant_revoked_with(
-                &stored.client_id,
-                &client_secret,
-                token,
-                &mut transport,
-            )
+            github_grant_revoked_with(&stored.client_id, &client_secret, token, &mut transport)
         }) {
             return true;
         }
@@ -1402,9 +1397,10 @@ fn run_authorization(
         return Err("O recurso OAuth anunciado não corresponde ao endpoint MCP cadastrado.".into());
     }
     let (issuer, mut metadata) = discover_authorization_server(&client, &resource_metadata)?;
-    if service_config.as_ref().is_some_and(|config| {
-        !config.dynamic_registration || effective_client_id.is_some()
-    }) {
+    if service_config
+        .as_ref()
+        .is_some_and(|config| !config.dynamic_registration || effective_client_id.is_some())
+    {
         metadata.registration_endpoint = None;
     }
     let callback_port = if service.as_deref() == Some("google") {
@@ -1419,11 +1415,8 @@ fn run_authorization(
         .map_err(|_| "Não foi possível ler a porta local OAuth.".to_string())?
         .port();
     let redirect_uri = loopback_callback_uri(port);
-    let requested_scopes = service_scopes(
-        endpoint.as_str(),
-        service_config.as_ref(),
-        requested_scopes,
-    )?;
+    let requested_scopes =
+        service_scopes(endpoint.as_str(), service_config.as_ref(), requested_scopes)?;
     let registered_client = register_client(
         &client,
         &metadata,
@@ -1673,9 +1666,9 @@ mod tests {
     #[test]
     fn github_oauth_uses_only_read_user_scope_by_default() {
         assert_eq!(github_oauth_read_scopes(), "read:user");
-        assert!(!github_oauth_read_scopes().split_whitespace().any(|scope| {
-            matches!(scope, "repo" | "write:repo_hook" | "admin:org" | "user")
-        }));
+        assert!(!github_oauth_read_scopes()
+            .split_whitespace()
+            .any(|scope| { matches!(scope, "repo" | "write:repo_hook" | "admin:org" | "user") }));
     }
 
     #[test]
@@ -1685,10 +1678,8 @@ mod tests {
             github_account_with("access-token-fixture", &mut profile).unwrap(),
             "octocat"
         );
-        let mut denied = mock_github_profile(
-            StatusCode::FORBIDDEN,
-            b"access-token-fixture was rejected",
-        );
+        let mut denied =
+            mock_github_profile(StatusCode::FORBIDDEN, b"access-token-fixture was rejected");
         let error = github_account_with("access-token-fixture", &mut denied).unwrap_err();
         assert!(!error.contains("access-token-fixture"));
         assert!(!error.contains("was rejected"));
@@ -1754,7 +1745,10 @@ mod tests {
         let catalog = oauth_client_catalog().expect("catálogo OAuth válido");
         assert_eq!(catalog.services.len(), 5);
         for name in ["github", "figma", "lovable", "notion", "google"] {
-            assert!(catalog.services.contains_key(name), "serviço ausente: {name}");
+            assert!(
+                catalog.services.contains_key(name),
+                "serviço ausente: {name}"
+            );
         }
         assert!(catalog.services["github"].client_secret_required);
         for definition in catalog.services.values() {
@@ -1833,9 +1827,13 @@ mod tests {
                 .unwrap()
                 .expect("endpoint Google conhecido");
             assert_eq!(
-                service_scopes(endpoint, Some(&definition), Some("https://evil.example/full"))
-                    .unwrap()
-                    .as_deref(),
+                service_scopes(
+                    endpoint,
+                    Some(&definition),
+                    Some("https://evil.example/full")
+                )
+                .unwrap()
+                .as_deref(),
                 Some(expected),
                 "escopos indevidos em {endpoint}"
             );
@@ -2113,8 +2111,14 @@ mod tests {
         let url = Url::parse(&authorization).unwrap();
         let query: std::collections::HashMap<_, _> = url.query_pairs().into_owned().collect();
         assert_eq!(query.get("scope").map(String::as_str), Some("read:user"));
-        assert_eq!(query.get("code_challenge_method").map(String::as_str), Some("S256"));
-        assert_eq!(query.get("state").map(String::as_str), Some("state-fixture"));
+        assert_eq!(
+            query.get("code_challenge_method").map(String::as_str),
+            Some("S256")
+        );
+        assert_eq!(
+            query.get("state").map(String::as_str),
+            Some("state-fixture")
+        );
     }
 
     #[test]
@@ -2141,10 +2145,19 @@ mod tests {
         .unwrap();
         let auth_url = Url::parse(&auth_url).unwrap();
         let query: std::collections::HashMap<_, _> = auth_url.query_pairs().into_owned().collect();
-        assert_eq!(query.get("client_id").map(String::as_str), Some("github-client"));
+        assert_eq!(
+            query.get("client_id").map(String::as_str),
+            Some("github-client")
+        );
         assert_eq!(query.get("scope").map(String::as_str), Some("read:user"));
-        assert_eq!(query.get("code_challenge_method").map(String::as_str), Some("S256"));
-        assert_eq!(query.get("code_challenge").map(String::as_str), Some("pkce-challenge-fixture"));
+        assert_eq!(
+            query.get("code_challenge_method").map(String::as_str),
+            Some("S256")
+        );
+        assert_eq!(
+            query.get("code_challenge").map(String::as_str),
+            Some("pkce-challenge-fixture")
+        );
         assert_eq!(
             parse_callback_target(
                 "/callback?state=state-fixture&code=authorization-code",

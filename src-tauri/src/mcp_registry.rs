@@ -1219,20 +1219,28 @@ mod tests {
         ]});
         let tools = tool_catalog(&gmail, &response);
         assert_eq!(tools.len(), 5);
-        assert!(tools
-            .iter()
-            .find(|tool| tool.name == "create_draft")
-            .unwrap()
-            .available);
-        assert!(tools
-            .iter()
-            .find(|tool| tool.name == "get_message")
-            .unwrap()
-            .available);
+        assert!(
+            tools
+                .iter()
+                .find(|tool| tool.name == "create_draft")
+                .unwrap()
+                .available
+        );
+        assert!(
+            tools
+                .iter()
+                .find(|tool| tool.name == "get_message")
+                .unwrap()
+                .available
+        );
         for name in ["send_message", "label_message", "unexpected_delivery"] {
             let tool = tools.iter().find(|tool| tool.name == name).unwrap();
             assert!(!tool.available);
-            assert!(tool.reason.as_deref().unwrap().contains("leitura e rascunhos"));
+            assert!(tool
+                .reason
+                .as_deref()
+                .unwrap()
+                .contains("leitura e rascunhos"));
         }
     }
 

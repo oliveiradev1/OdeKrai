@@ -447,7 +447,10 @@ mod tests {
             "access-token-fixture",
             "rotated-refresh-token-fixture",
         ] {
-            assert!(!debug.contains(secret), "segredo exposto no Debug: {secret}");
+            assert!(
+                !debug.contains(secret),
+                "segredo exposto no Debug: {secret}"
+            );
         }
         assert_eq!(debug.matches("[REDACTED]").count(), 4);
     }
