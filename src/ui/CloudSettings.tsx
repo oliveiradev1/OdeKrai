@@ -497,6 +497,7 @@ export function CloudSettings({
       <section className="cloud-shardcloud" aria-labelledby="cloud-shardcloud-heading">
         <div className="cloud-shardcloud-title">
           <h3 id="cloud-shardcloud-heading">ShardCloud</h3>
+          <span className="cloud-test-stage-label">Em teste</span>
           <span
             className={
               shardcloudStatus === 'Conectado'
@@ -703,6 +704,7 @@ export function CloudSettings({
       <section className="cloud-hostinger" aria-labelledby="cloud-hostinger-heading">
         <div className="cloud-shardcloud-title">
           <h3 id="cloud-hostinger-heading">Hostinger</h3>
+          <span className="cloud-test-stage-label">Em teste</span>
           <span
             className={
               hostingerStatus === 'Conectado'

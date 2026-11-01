@@ -1593,13 +1593,18 @@ select:focus-visible {
   color: var(--color-text);
 }
 .cloud-connected-label,
-.cloud-saved-label {
+.cloud-saved-label,
+.cloud-test-stage-label {
   flex: none;
   border: 1px solid var(--color-border-subtle);
   border-radius: 999px;
   padding: 3px 8px;
   color: var(--color-text-muted);
   font-size: 11px;
+}
+.cloud-test-stage-label {
+  border-color: #754720;
+  color: #ffc18c;
 }
 .cloud-connected-label {
   border-color: #3b765c;

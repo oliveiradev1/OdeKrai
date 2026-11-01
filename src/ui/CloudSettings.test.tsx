@@ -20,6 +20,7 @@ describe('seção informativa de nuvem', () => {
     expect(markup).toContain('restaurar snapshots');
     expect(markup).toContain('Criar ou comprar VPS não está disponível pelo OdeKrai.');
     expect(markup).toContain('Não conectado');
+    expect(markup.match(/class="cloud-test-stage-label">Em teste<\/span>/g)).toHaveLength(2);
     expect(savedMarkup).toContain('ShardCloud');
     expect(savedMarkup).toContain('Token salvo');
   });
@@ -126,6 +127,7 @@ describe('cartão Hostinger', () => {
     );
 
     expect(disconnected).toContain('Não conectado');
+    expect(disconnected.match(/class="cloud-test-stage-label">Em teste<\/span>/g)).toHaveLength(2);
     expect(disconnected).not.toContain('Conectado');
     expect(connected).toContain('>Conectado</span>');
     expect(error).toContain('>Erro</span>');
