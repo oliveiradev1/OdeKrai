@@ -824,8 +824,13 @@ export function PrivacyConfigurations({
                             }))
                           )
                             return;
-                          await invoke('mcp_remove_server', { serverId: server.id })
-                            .then(refresh)
+                          await invoke<string | null>('mcp_remove_server', {
+                            serverId: server.id,
+                          })
+                            .then(async (warning) => {
+                              await refresh();
+                              setError(warning ?? '');
+                            })
                             .catch((cause) => setError(String(cause)));
                         })();
                       }}

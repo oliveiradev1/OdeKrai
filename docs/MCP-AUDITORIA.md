@@ -65,6 +65,11 @@ state e PKCE ao fluxo, abre a autorização pelo comando Tauri validado e recebe
 único em `127.0.0.1` numa porta aleatória. Redirects HTTP são recusados. Refresh tokens e metadados
 de autorização ficam no Credential Manager; access tokens permanecem em memória. Um HTTP 401 tenta
 renovar o token uma vez; se a renovação falhar, a interface recebe instrução para conectar novamente.
+Ao remover um servidor, se a metadata OAuth anunciar `revocation_endpoint`, o app envia os tokens
+disponíveis pelo POST de revogação RFC 7009. A remoção das credenciais e do runtime continua mesmo
+quando a tentativa de revogação falha, e a interface mostra um aviso sem incluir o token.
+O campo opcional `revocation_endpoint` e o formato POST seguem [RFC 8414 §2](https://www.rfc-editor.org/rfc/rfc8414.html#section-2)
+e [RFC 7009 §2.1](https://www.rfc-editor.org/rfc/rfc7009.html#section-2.1).
 
 A conferência oficial foi feita em 1º de novembro de 2026 na revisão `2026-07-28`. A especificação
 diz: “MCP clients MUST use OAuth 2.0 Protected Resource Metadata for authorization server

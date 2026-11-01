@@ -16,6 +16,10 @@ solicitados e o endereço IP da conexão; o servidor MCP recebe o access token B
 autorizadas. Refresh tokens e metadados da autorização ficam no Gerenciador de Credenciais do
 Windows; access tokens ficam somente em memória. O callback local usa `127.0.0.1`, porta aleatória,
 state e PKCE e só é aceito uma vez. O usuário pode remover o servidor para apagar sua autorização.
+Se os metadados do emissor fornecerem um endpoint de revogação, ao remover o servidor o OdeKrai
+envia a ele o refresh token e, se ainda estiver em memória, o access token. Mesmo se a revogação
+falhar, a credencial local e a conexão em memória são removidas; o app mostra um aviso para revogar
+o token no painel do provedor.
 
 ShardCloud oferece consultas de leitura e, pelo agente, ações de iniciar/parar VM e execução de
 comandos remotos mediante aprovação nativa obrigatória.

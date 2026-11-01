@@ -882,26 +882,35 @@ pub fn mcp_test_connection(
 }
 
 #[tauri::command]
-pub fn mcp_remove_server(
+pub async fn mcp_remove_server(
     app: tauri::AppHandle,
     caller: tauri::WebviewWindow,
     server_id: String,
     runtime: State<'_, McpRuntime>,
-) -> Result<(), String> {
+) -> Result<Option<String>, String> {
     crate::require_main(&caller)?;
     let db = crate::security::database(&app)?;
     let server = find(&db, &server_id)?;
-    runtime
-        .0
-        .lock()
-        .map_err(|_| "Estado MCP indisponível.".to_string())?
-        .remove(&server_id);
-    runtime
+    let access_token = runtime
         .1
         .lock()
-        .map_err(|_| "Estado OAuth MCP indisponível.".to_string())?
-        .remove(&server_id);
-    remove(&db, &server)
+        .ok()
+        .and_then(|mut access| access.remove(&server_id))
+        .map(|access| access.value);
+    if let Ok(mut statuses) = runtime.0.lock() {
+        statuses.remove(&server_id);
+    }
+    let server_id_for_revocation = server_id.clone();
+    let revoked = tokio::task::spawn_blocking(move || {
+        crate::mcp_oauth::revoke_before_remove(
+            &server_id_for_revocation,
+            access_token.as_deref(),
+        )
+    })
+    .await
+    .unwrap_or(false);
+    remove(&db, &server)?;
+    Ok(crate::mcp_oauth::removal_warning(revoked))
 }
 
 #[cfg(test)]

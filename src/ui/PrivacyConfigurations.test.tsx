@@ -102,6 +102,12 @@ describe('configurações de privacidade', () => {
     expect(ui).toContain('confiáveis.');
   });
 
+  it('exibe o aviso de revogação sem desfazer a remoção local do servidor', () => {
+    const ui = readFileSync(new URL('./PrivacyConfigurations.tsx', import.meta.url), 'utf8');
+    expect(ui).toContain("invoke<string | null>('mcp_remove_server'");
+    expect(ui).toContain("setError(warning ?? '')");
+  });
+
   it('submete a URL do Discord pelo formulário de gravação e testa sem recarregar', () => {
     const markup = renderToStaticMarkup(<DiscordWebhooksSettings />);
     const formStart = markup.indexOf('<form>');

@@ -27,6 +27,8 @@ pub(crate) struct StoredOAuth {
     pub resource: String,
     pub client_id: String,
     pub token_endpoint: String,
+    #[serde(default)]
+    pub revocation_endpoint: Option<String>,
     pub refresh_token: Option<String>,
 }
 
@@ -45,6 +47,7 @@ struct ServerMetadata {
     authorization_endpoint: String,
     token_endpoint: String,
     registration_endpoint: Option<String>,
+    revocation_endpoint: Option<String>,
     client_id_metadata_document_supported: bool,
     issuer_parameter_supported: bool,
 }
@@ -225,9 +228,11 @@ fn discover_authorization_server(client: &Client, resource: &Value) -> Result<(S
         validate_https(&token_endpoint)?;
         let registration_endpoint = metadata.get("registration_endpoint").and_then(Value::as_str).map(str::to_owned);
         if let Some(endpoint) = registration_endpoint.as_deref() { validate_https(endpoint)?; }
+        let revocation_endpoint = metadata.get("revocation_endpoint").and_then(Value::as_str).map(str::to_owned);
+        if let Some(endpoint) = revocation_endpoint.as_deref() { validate_https(endpoint)?; }
         let client_id_metadata_document_supported = metadata.get("client_id_metadata_document_supported").and_then(Value::as_bool).unwrap_or(false);
         let issuer_parameter_supported = metadata.get("authorization_response_iss_parameter_supported").and_then(Value::as_bool).unwrap_or(false);
-        return Ok((issuer, ServerMetadata { authorization_endpoint, token_endpoint, registration_endpoint, client_id_metadata_document_supported, issuer_parameter_supported }));
+        return Ok((issuer, ServerMetadata { authorization_endpoint, token_endpoint, registration_endpoint, revocation_endpoint, client_id_metadata_document_supported, issuer_parameter_supported }));
     }
     Err("Não foi possível descobrir metadados compatíveis para o emissor OAuth.".into())
 }
@@ -410,6 +415,90 @@ pub(crate) fn refresh_access(server_id: &str) -> Result<OAuthAccessToken, String
     Ok(OAuthAccessToken { value: access_token, expires_at: Instant::now() + Duration::from_secs(expires) })
 }
 
+trait RevocationTransport {
+    fn revoke(
+        &mut self,
+        endpoint: &Url,
+        client_id: &str,
+        token: &str,
+        token_type_hint: &str,
+    ) -> Result<StatusCode, ()>;
+}
+
+struct ReqwestRevocationTransport(Client);
+
+impl RevocationTransport for ReqwestRevocationTransport {
+    fn revoke(
+        &mut self,
+        endpoint: &Url,
+        client_id: &str,
+        token: &str,
+        token_type_hint: &str,
+    ) -> Result<StatusCode, ()> {
+        let response = self
+            .0
+            .post(endpoint.clone())
+            .form(&[
+                ("token", token),
+                ("token_type_hint", token_type_hint),
+                ("client_id", client_id),
+            ])
+            .send()
+            .map_err(|_| ())?;
+        if response.url() != endpoint || response.status().is_redirection() {
+            return Err(());
+        }
+        Ok(response.status())
+    }
+}
+
+fn revoke_tokens_with(
+    stored: &StoredOAuth,
+    access_token: Option<&str>,
+    transport: &mut impl RevocationTransport,
+) -> bool {
+    let Some(raw_endpoint) = stored.revocation_endpoint.as_deref() else {
+        return true;
+    };
+    let Ok(endpoint) = validate_https(raw_endpoint) else {
+        return false;
+    };
+    let mut tokens = Vec::new();
+    if let Some(token) = stored.refresh_token.as_deref() {
+        tokens.push((token, "refresh_token"));
+    }
+    if let Some(token) = access_token {
+        tokens.push((token, "access_token"));
+    }
+    tokens.into_iter().fold(true, |all_revoked, (token, hint)| {
+        let revoked = transport
+            .revoke(&endpoint, &stored.client_id, token, hint)
+            .is_ok_and(|status| status == StatusCode::OK);
+        all_revoked && revoked
+    })
+}
+
+pub(crate) fn revoke_before_remove(server_id: &str, access_token: Option<&str>) -> bool {
+    let stored = match load(server_id) {
+        Ok(Some(stored)) => stored,
+        Ok(None) => return true,
+        Err(_) => return false,
+    };
+    if stored.revocation_endpoint.is_none() {
+        return true;
+    }
+    let Ok(client) = safe_http() else {
+        return false;
+    };
+    revoke_tokens_with(&stored, access_token, &mut ReqwestRevocationTransport(client))
+}
+
+fn removal_warning(revoked: bool) -> Option<String> {
+    (!revoked).then(|| {
+        "Servidor removido deste dispositivo, mas o provedor não confirmou a revogação do token. Revogue-o no painel do provedor, se necessário.".to_string()
+    })
+}
+
 fn run_authorization(app: tauri::AppHandle, endpoint: &str, server_id: &str) -> Result<(StoredOAuth, OAuthAccessToken), String> {
     let endpoint = crate::mcp_http::validate_endpoint(endpoint)?;
     let client = safe_http()?;
@@ -427,7 +516,14 @@ fn run_authorization(app: tauri::AppHandle, endpoint: &str, server_id: &str) -> 
     crate::external_links::open_oauth_authorization_url(&app, &auth_url)?;
     let code = accept_callback(listener, &state, &issuer, metadata.issuer_parameter_supported)?;
     let (access_token, refresh_token, expires_at) = exchange_code(&client, &metadata, &client_id, &code, &redirect_uri, &verifier, &resource)?;
-    let stored = StoredOAuth { issuer, resource, client_id, token_endpoint: metadata.token_endpoint, refresh_token };
+    let stored = StoredOAuth {
+        issuer,
+        resource,
+        client_id,
+        token_endpoint: metadata.token_endpoint,
+        revocation_endpoint: metadata.revocation_endpoint,
+        refresh_token,
+    };
     save(server_id, &stored)?;
     Ok((stored, OAuthAccessToken { value: access_token, expires_at }))
 }
@@ -460,6 +556,38 @@ pub async fn mcp_oauth_authorize(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::VecDeque;
+
+    struct SimulatedRevocationServer {
+        statuses: std::collections::VecDeque<Result<StatusCode, ()>>,
+        submitted_tokens: Vec<String>,
+    }
+
+    impl RevocationTransport for SimulatedRevocationServer {
+        fn revoke(
+            &mut self,
+            endpoint: &Url,
+            client_id: &str,
+            token: &str,
+            _token_type_hint: &str,
+        ) -> Result<StatusCode, ()> {
+            assert_eq!(endpoint.host_str(), Some("auth.example"));
+            assert_eq!(client_id, "public-client");
+            self.submitted_tokens.push(token.to_owned());
+            self.statuses.pop_front().unwrap_or(Err(()))
+        }
+    }
+
+    fn stored_oauth() -> StoredOAuth {
+        StoredOAuth {
+            issuer: "https://auth.example".into(),
+            resource: "https://mcp.example/mcp".into(),
+            client_id: "public-client".into(),
+            token_endpoint: "https://auth.example/token".into(),
+            revocation_endpoint: Some("https://auth.example/revoke".into()),
+            refresh_token: Some("refresh-secret-fixture".into()),
+        }
+    }
 
     #[test]
     fn consent_denied_does_not_yield_code() {
@@ -531,5 +659,55 @@ mod tests {
         let other_port = Url::parse("https://mcp.example.org:444/.well-known/prm").unwrap();
         assert!(!same_origin(&other_host, &endpoint));
         assert!(!same_origin(&other_port, &endpoint));
+    }
+
+    #[test]
+    fn revocation_succeeds_for_refresh_and_in_memory_access_tokens() {
+        let mut server = SimulatedRevocationServer {
+            statuses: VecDeque::from(vec![Ok(StatusCode::OK), Ok(StatusCode::OK)]),
+            submitted_tokens: Vec::new(),
+        };
+        assert!(revoke_tokens_with(
+            &stored_oauth(),
+            Some("access-secret-fixture"),
+            &mut server
+        ));
+        assert_eq!(
+            server.submitted_tokens,
+            ["refresh-secret-fixture", "access-secret-fixture"]
+        );
+    }
+
+    #[test]
+    fn revocation_failure_does_not_prevent_attempting_the_other_token() {
+        let mut server = SimulatedRevocationServer {
+            statuses: VecDeque::from(vec![Err(()), Ok(StatusCode::OK)]),
+            submitted_tokens: Vec::new(),
+        };
+        assert!(!revoke_tokens_with(
+            &stored_oauth(),
+            Some("access-secret-fixture"),
+            &mut server
+        ));
+        assert_eq!(server.submitted_tokens.len(), 2);
+    }
+
+    #[test]
+    fn removal_without_tokens_does_not_call_revocation_server() {
+        let mut stored = stored_oauth();
+        stored.refresh_token = None;
+        let mut server = SimulatedRevocationServer {
+            statuses: VecDeque::new(),
+            submitted_tokens: Vec::new(),
+        };
+        assert!(revoke_tokens_with(&stored, None, &mut server));
+        assert!(server.submitted_tokens.is_empty());
+    }
+
+    #[test]
+    fn revocation_failure_warning_never_contains_the_token() {
+        let warning = removal_warning(false).unwrap();
+        assert!(!warning.contains("refresh-secret-fixture"));
+        assert!(!warning.contains("access-secret-fixture"));
     }
 }
