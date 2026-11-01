@@ -6,7 +6,7 @@
 
 OdeKrai chats with the AI provider you configure and can run skills on your computer within the permissions you set. The interface brings together conversations, settings, and a mascot that accompanies you while using the app.
 
-> Pre-release project (version 0.15.0), for Windows.
+> Pre-release project (version 0.16.1), for Windows.
 
 ## Highlights
 
