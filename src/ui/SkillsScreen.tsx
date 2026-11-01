@@ -415,6 +415,9 @@ function PublicMcpServiceCard({
           {publicMcpStatusLabels[status]}
         </span>
       </div>
+      {service.programStatus && (
+        <p className="public-mcp-program-status">{service.programStatus}</p>
+      )}
       <dl>
         <div>
           <dt>Transporte</dt>

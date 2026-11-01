@@ -2197,6 +2197,12 @@ select:focus-visible {
 .public-mcp-connected {
   margin: var(--space-1) 0 0;
 }
+.public-mcp-program-status {
+  width: fit-content;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-pill);
+  padding: 3px 8px;
+}
 .public-mcp-status {
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-pill);

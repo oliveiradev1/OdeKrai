@@ -332,6 +332,7 @@ describe('catálogo de habilidades', () => {
     }
     expect(markup).toContain('Disponível para configurar');
     expect(markup).toContain('Não disponível');
+    expect(markup.match(/Developer Preview/g)).toHaveLength(3);
     expect(markup).not.toContain('>Conectado</span>');
     expect(markup).toContain('Configurar');
     expect(markup).toMatch(/id="skills-panel-personal"[^>]*hidden=""/);

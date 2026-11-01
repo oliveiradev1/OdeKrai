@@ -33,6 +33,21 @@ describe('catálogo público de servidores MCP', () => {
     expect(unavailable).toEqual(['Figma', 'Gmail', 'Google Calendar', 'Google Sheets', 'Lovable']);
   });
 
+  it('identifica o Developer Preview do Google e usa fontes oficiais da Lovable', () => {
+    expect(
+      catalog
+        .filter(({ supplier }) => supplier === 'Google Workspace')
+        .map(({ programStatus }) => programStatus),
+    ).toEqual(['Developer Preview', 'Developer Preview', 'Developer Preview']);
+
+    const lovable = catalog.find(({ name }) => name === 'Lovable');
+    expect(lovable?.endpoint).toBe('https://mcp.lovable.dev');
+    expect(lovable?.documentationUrl).toBe(
+      'https://docs.lovable.dev/integrations/lovable-mcp-server',
+    );
+    expect(lovable?.sourceCodeUrl).toBe('https://github.com/lovablelabs/mcp');
+  });
+
   it('só marca conectado após o comando de teste confirmar o runtime', () => {
     const github = catalog.find(({ name }) => name === 'GitHub');
     if (!github) throw new Error('Serviço GitHub ausente do catálogo.');

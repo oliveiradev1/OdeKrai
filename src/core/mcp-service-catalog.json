@@ -27,6 +27,7 @@
     "transport": "Streamable HTTP",
     "authentication": "OAuth 2.0 com client ID e client secret do projeto Google Cloud",
     "authenticationMethods": ["oauth"],
+    "programStatus": "Developer Preview",
     "status": "not_available"
   },
   {
@@ -37,6 +38,7 @@
     "transport": "Streamable HTTP",
     "authentication": "OAuth 2.0 com client ID e client secret do projeto Google Cloud",
     "authenticationMethods": ["oauth"],
+    "programStatus": "Developer Preview",
     "status": "not_available"
   },
   {
@@ -47,15 +49,17 @@
     "transport": "Streamable HTTP",
     "authentication": "OAuth 2.0 com client ID e client secret do projeto Google Cloud",
     "authenticationMethods": ["oauth"],
+    "programStatus": "Developer Preview",
     "status": "not_available"
   },
   {
     "name": "Lovable",
     "supplier": "Lovable",
-    "documentationUrl": "https://github.com/lovablelabs/mcp",
+    "documentationUrl": "https://docs.lovable.dev/integrations/lovable-mcp-server",
+    "sourceCodeUrl": "https://github.com/lovablelabs/mcp",
     "endpoint": "https://mcp.lovable.dev",
     "transport": "Streamable HTTP",
-    "authentication": "OAuth 2.1; clientes não listados precisam do client ID público da Lovable",
+    "authentication": "OAuth 2.1; clientes locais usam registro automático; clientes personalizados podem exigir client ID OAuth próprio",
     "authenticationMethods": ["oauth"],
     "status": "not_available"
   },
