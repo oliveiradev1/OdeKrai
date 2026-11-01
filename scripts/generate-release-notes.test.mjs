@@ -80,6 +80,16 @@ describe('manifesto de notas de versão', () => {
     );
   });
 
+  it('ignora documentos auxiliares que não são notas de versão', async () => {
+    temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), 'odekrai-release-notes-'));
+    await writeFile(path.join(temporaryDirectory, 'v1.2.3.md'), validNote);
+    await writeFile(path.join(temporaryDirectory, 'v1.2.3-pendencias.md'), '# Pendências');
+    await writeFile(path.join(temporaryDirectory, 'README.md'), '# Documento auxiliar');
+
+    const manifest = await buildReleaseNotes(temporaryDirectory, '1.2.3');
+    expect(manifest.releases.map((release) => release.version)).toEqual(['1.2.3']);
+  });
+
   it.each([
     ['data ausente', validNote.replace('Data do marco: 2026-10-29.\n', ''), 'Data do marco'],
     [
