@@ -2251,6 +2251,7 @@ mod tests {
                         {
                             thread::sleep(Duration::from_millis(1));
                         }
+                        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
                         Err(_) => break 'outer,
                     }
                 };
