@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { CloudSettings, parseBudgetCents } from './CloudSettings';
+import { CloudSettings, hostingerStatusAfterRequest, parseBudgetCents } from './CloudSettings';
 
 describe('seção informativa de nuvem', () => {
   const markup = renderToStaticMarkup(<CloudSettings />);
@@ -35,12 +35,17 @@ describe('seção informativa de nuvem', () => {
     expect(markup).not.toMatch(/compatível|disponível como integração/i);
   });
 
-  it('não mostra de novo o token depois de salvo e oferece apenas teste e remoção', () => {
+  it('não mostra de novo o token ShardCloud depois de salvo e oferece teste e remoção', () => {
     expect(markup).toContain('type="password"');
     expect(savedMarkup).not.toContain('id="shardcloud-token"');
+    expect(savedMarkup).toContain('id="hostinger-token"');
     expect(savedMarkup).toContain('Testar conexão');
     expect(savedMarkup).toContain('Remover');
-    expect(savedMarkup).not.toContain('Salvar token');
+    const shardCloudCard = savedMarkup.slice(
+      savedMarkup.indexOf('class="cloud-shardcloud"'),
+      savedMarkup.indexOf('class="cloud-hostinger"'),
+    );
+    expect(shardCloudCard).not.toContain('Salvar token');
     expect(connectedMarkup).toContain('Conectado');
   });
 
@@ -94,5 +99,67 @@ describe('teto local da ShardCloud', () => {
     expect(parseBudgetCents('1000001')).toBeNull();
     expect(parseBudgetCents('abc')).toBeNull();
     expect(parseBudgetCents('1,999')).toBeNull();
+  });
+});
+
+describe('cartão Hostinger em somente leitura', () => {
+  it('usa os estados de conexão pedidos e não declara conexão sem teste', () => {
+    const disconnected = renderToStaticMarkup(<CloudSettings />);
+    const connected = renderToStaticMarkup(
+      <CloudSettings
+        initialHostingerTokenSaved
+        initialHostingerStatus="Conectado (somente leitura)"
+        initialHostingerVms={[{ id: 12, hostname: 'vps.example', state: 'running', plan: 'KVM' }]}
+      />,
+    );
+    const error = renderToStaticMarkup(
+      <CloudSettings initialHostingerTokenSaved initialHostingerStatus="Erro" />,
+    );
+
+    expect(disconnected).toContain('Não conectado');
+    expect(disconnected).not.toContain('Conectado (somente leitura)');
+    expect(connected).toContain('Conectado (somente leitura)');
+    expect(error).toContain('>Erro</span>');
+    expect(hostingerStatusAfterRequest('Não conectado', false, true)).toBe('Não conectado');
+    expect(hostingerStatusAfterRequest('Não conectado', true, true)).toBe(
+      'Conectado (somente leitura)',
+    );
+    expect(hostingerStatusAfterRequest('Não conectado', true, false)).toBe('Erro');
+  });
+
+  it('guarda token fora da UI após salvar e oferece somente remoção e teste', () => {
+    const unsaved = renderToStaticMarkup(<CloudSettings />);
+    const saved = renderToStaticMarkup(<CloudSettings initialHostingerTokenSaved />);
+
+    expect(unsaved).toContain('id="hostinger-token"');
+    expect(unsaved).toContain('name="hostinger-token"');
+    expect(unsaved).toContain('autoComplete="off"');
+    expect(saved).not.toContain('id="hostinger-token"');
+    expect(saved).toContain('Token salvo');
+    expect(saved).toContain('Testar conexão');
+    expect(saved).toContain('Remover');
+  });
+
+  it('exibe as consultas disponíveis e rotula as respostas como dados externos', () => {
+    const connected = renderToStaticMarkup(
+      <CloudSettings
+        initialHostingerTokenSaved
+        initialHostingerStatus="Conectado (somente leitura)"
+        initialHostingerVms={[{ id: 12, hostname: 'vps.example', state: 'running', plan: 'KVM' }]}
+      />,
+    );
+    for (const action of [
+      'Atualizar máquinas',
+      'Detalhes',
+      'Ações recentes',
+      'Backups',
+      'Data centers',
+      'Templates de sistema',
+    ]) {
+      expect(connected).toContain(action);
+    }
+    expect(connected).toContain('Dados externos da Hostinger — não confiáveis');
+    expect(connected).not.toContain('dangerouslySetInnerHTML');
+    expect(connected).toContain('Nesta etapa, ela não altera máquinas.');
   });
 });
