@@ -909,8 +909,7 @@ pub async fn mcp_oauth_authorize(
             Err(error) => Err(error),
         })
         .map_err(|_| "Não foi possível substituir o token pessoal salvo.".to_string())?;
-    runtime
-        .remove_connection(&server_id)?;
+    runtime.remove_connection(&server_id)?;
     runtime
         .1
         .lock()
