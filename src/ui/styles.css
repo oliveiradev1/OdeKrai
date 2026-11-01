@@ -2260,6 +2260,19 @@ select:focus-visible {
 .public-mcp-form small {
   color: var(--color-text-muted);
 }
+.public-mcp-oauth-options,
+.public-mcp-oauth-guide {
+  display: grid;
+  gap: var(--space-2);
+}
+.public-mcp-oauth-guide ol {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding-left: 1.25rem;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-12);
+}
 .skills-catalog-page :is(button, input):focus-visible,
 .skills-tab-panel:focus-visible {
   outline: 2px solid var(--color-accent-soft);

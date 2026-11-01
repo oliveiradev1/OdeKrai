@@ -79,6 +79,12 @@ struct ServerMetadata {
     issuer_parameter_supported: bool,
 }
 
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RegistrationOptions {
+    pub dynamic_registration: bool,
+}
+
 fn credential(server_id: &str) -> Result<Entry, String> {
     Entry::new(SERVICE, &format!("{server_id}:oauth"))
         .map_err(|_| "Não foi possível acessar o Gerenciador de Credenciais do Windows.".into())
@@ -372,33 +378,87 @@ fn discover_authorization_server(
     Err("Não foi possível descobrir metadados compatíveis para o emissor OAuth.".into())
 }
 
+fn inspect_registration_options(endpoint: &str) -> Result<RegistrationOptions, String> {
+    let endpoint = crate::mcp_http::validate_endpoint(endpoint)?;
+    let client = safe_http()?;
+    let (resource, _) = discover_resource_metadata(&client, &endpoint)?;
+    let resource_id = resource
+        .get("resource")
+        .and_then(Value::as_str)
+        .ok_or("Metadados MCP sem identificador do recurso protegido.")?;
+    if resource_id != endpoint.as_str() {
+        return Err("O recurso OAuth anunciado não corresponde ao endpoint MCP cadastrado.".into());
+    }
+    let (_, metadata) = discover_authorization_server(&client, &resource)?;
+    Ok(RegistrationOptions {
+        dynamic_registration: metadata.registration_endpoint.is_some(),
+    })
+}
+
+fn validate_client_id(client_id: &str) -> Result<String, String> {
+    let client_id = client_id.trim();
+    if client_id.is_empty() || client_id.len() > 2048 || client_id.chars().any(char::is_control) {
+        return Err("Informe um identificador de cliente OAuth válido.".into());
+    }
+    Ok(client_id.to_owned())
+}
+
+fn normalize_scopes(scopes: Option<&str>) -> Result<Option<String>, String> {
+    let Some(scopes) = scopes.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    if scopes.len() > 1024 || scopes.chars().any(char::is_control) {
+        return Err("A lista de escopos OAuth é inválida ou excede o limite permitido.".into());
+    }
+    Ok(Some(scopes.split_whitespace().collect::<Vec<_>>().join(" ")))
+}
+
 fn register_client(
     client: &Client,
     metadata: &ServerMetadata,
     redirect_uri: &str,
+    supplied_client_id: Option<&str>,
+    scopes: Option<&str>,
 ) -> Result<String, String> {
-    if metadata.client_id_metadata_document_supported {
-        return Err("Este servidor prioriza documentos de metadados de cliente (CIMD), que ainda não são suportados. Use outro método de registro OAuth no servidor.".into());
-    }
-    let endpoint = metadata.registration_endpoint.as_deref().ok_or("Este servidor OAuth não oferece registro dinâmico de cliente; o OdeKrai precisa ser registrado pelo servidor.")?;
-    let response = post_json(
-        client,
-        endpoint,
-        json!({
+    register_client_with(metadata, redirect_uri, supplied_client_id, scopes, |endpoint, body| {
+        post_json(client, endpoint, body)
+    })
+}
+
+fn register_client_with(
+    metadata: &ServerMetadata,
+    redirect_uri: &str,
+    supplied_client_id: Option<&str>,
+    scopes: Option<&str>,
+    mut post: impl FnMut(&str, Value) -> Result<Value, String>,
+) -> Result<String, String> {
+    if let Some(endpoint) = metadata.registration_endpoint.as_deref() {
+        let mut request = json!({
             "client_name":"OdeKrai",
             "application_type":"native",
             "redirect_uris":[redirect_uri],
             "grant_types":["authorization_code","refresh_token"],
             "response_types":["code"],
             "token_endpoint_auth_method":"none"
-        }),
-    )?;
-    response
-        .get("client_id")
-        .and_then(Value::as_str)
-        .filter(|id| !id.is_empty() && id.len() <= 2048 && !id.chars().any(char::is_control))
-        .map(str::to_owned)
-        .ok_or_else(|| "O registro OAuth não retornou um client_id válido.".into())
+        });
+        if let Some(scopes) = scopes {
+            request["scope"] = Value::String(scopes.to_owned());
+        }
+        let response = post(endpoint, request)?;
+        return response
+            .get("client_id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty() && id.len() <= 2048 && !id.chars().any(char::is_control))
+            .map(str::to_owned)
+            .ok_or_else(|| "O registro OAuth não retornou um client_id válido.".into());
+    }
+    if let Some(client_id) = supplied_client_id {
+        return validate_client_id(client_id);
+    }
+    if metadata.client_id_metadata_document_supported {
+        return Err("Este servidor OAuth usa um formato de identificador de cliente ainda não suportado pelo OdeKrai.".into());
+    }
+    Err("Este servidor exige um identificador de cliente. Consulte a documentação do serviço para criá-lo.".into())
 }
 
 fn random_token() -> Result<String, String> {
@@ -818,6 +878,8 @@ fn run_authorization(
     app: tauri::AppHandle,
     endpoint: &str,
     server_id: &str,
+    supplied_client_id: Option<&str>,
+    requested_scopes: Option<&str>,
 ) -> Result<(StoredOAuth, OAuthAccessToken), String> {
     let endpoint = crate::mcp_http::validate_endpoint(endpoint)?;
     let client = safe_http()?;
@@ -838,7 +900,16 @@ fn run_authorization(
         .map_err(|_| "Não foi possível ler a porta local OAuth.".to_string())?
         .port();
     let redirect_uri = format!("http://127.0.0.1:{port}/callback");
-    let client_id = register_client(&client, &metadata, &redirect_uri)?;
+    let requested_scopes = normalize_scopes(requested_scopes)?;
+    let client_id = register_client(
+        &client,
+        &metadata,
+        &redirect_uri,
+        supplied_client_id,
+        requested_scopes.as_deref(),
+    )?;
+    let discovered_scope = scope_from_challenge(&challenge, &resource_metadata);
+    let effective_scope = requested_scopes.as_deref().or(discovered_scope.as_deref());
     let verifier = random_token()?;
     let state = random_token()?;
     let auth_url = build_authorization_url(
@@ -848,7 +919,7 @@ fn run_authorization(
         &state,
         &pkce_challenge(&verifier),
         &resource,
-        scope_from_challenge(&challenge, &resource_metadata).as_deref(),
+        effective_scope,
     )?;
     crate::external_links::open_oauth_authorization_url(&app, &auth_url)?;
     let code = accept_callback(
@@ -889,6 +960,8 @@ pub async fn mcp_oauth_authorize(
     app: tauri::AppHandle,
     caller: tauri::WebviewWindow,
     server_id: String,
+    client_id: Option<String>,
+    scopes: Option<String>,
     runtime: State<'_, crate::mcp_registry::McpRuntime>,
 ) -> Result<(), String> {
     crate::require_main(&caller)?;
@@ -900,7 +973,15 @@ pub async fn mcp_oauth_authorize(
     let id = server_id.clone();
     let app_for_flow = app.clone();
     let (_credential, access) =
-        tokio::task::spawn_blocking(move || run_authorization(app_for_flow, &endpoint, &id))
+        tokio::task::spawn_blocking(move || {
+            run_authorization(
+                app_for_flow,
+                &endpoint,
+                &id,
+                client_id.as_deref(),
+                scopes.as_deref(),
+            )
+        })
             .await
             .map_err(|_| "A tarefa de autorização MCP foi interrompida.".to_string())??;
     Entry::new(SERVICE, &format!("{server_id}:http_bearer"))
@@ -918,6 +999,17 @@ pub async fn mcp_oauth_authorize(
     crate::mcp_registry::set_enabled_internal(&app, &server_id, true)?;
     let _ = app.emit("skills-updated", ());
     Ok(())
+}
+
+#[tauri::command]
+pub async fn mcp_oauth_registration_options(
+    caller: tauri::WebviewWindow,
+    endpoint: String,
+) -> Result<RegistrationOptions, String> {
+    crate::require_main(&caller)?;
+    tokio::task::spawn_blocking(move || inspect_registration_options(&endpoint))
+        .await
+        .map_err(|_| "A verificação das opções OAuth foi interrompida.".to_string())?
 }
 
 #[cfg(test)]
@@ -1042,6 +1134,74 @@ mod tests {
             .unwrap_err()
             .contains("Redirecionamento"));
         assert!(reject_redirect(StatusCode::OK).is_ok());
+    }
+
+    fn registration_metadata(registration_endpoint: Option<&str>) -> ServerMetadata {
+        ServerMetadata {
+            authorization_endpoint: "https://auth.example/authorize".into(),
+            token_endpoint: "https://auth.example/token".into(),
+            registration_endpoint: registration_endpoint.map(str::to_owned),
+            revocation_endpoint: None,
+            client_id_metadata_document_supported: false,
+            issuer_parameter_supported: false,
+        }
+    }
+
+    #[test]
+    fn dynamic_registration_does_not_require_client_id_and_uses_returned_id() {
+        let metadata = registration_metadata(Some("https://auth.example/register"));
+        let mut posted = false;
+        let client_id = register_client_with(
+            &metadata,
+            "http://127.0.0.1:43210/callback",
+            None,
+            Some("pages:read"),
+            |endpoint, body| {
+                posted = true;
+                assert_eq!(endpoint, "https://auth.example/register");
+                assert!(body.get("client_id").is_none());
+                assert_eq!(body["scope"], "pages:read");
+                Ok(json!({"client_id":"registered-client"}))
+            },
+        )
+        .unwrap();
+        assert!(posted);
+        assert_eq!(client_id, "registered-client");
+    }
+
+    #[test]
+    fn missing_dynamic_registration_requires_manual_client_id() {
+        let metadata = registration_metadata(None);
+        let error = register_client_with(
+            &metadata,
+            "http://127.0.0.1:43210/callback",
+            None,
+            None,
+            |_, _| panic!("sem endpoint de registro, nenhuma requisição deve ser enviada"),
+        )
+        .unwrap_err();
+        assert!(error.contains("exige um identificador de cliente"));
+    }
+
+    #[test]
+    fn supplied_client_id_is_used_when_dynamic_registration_is_unavailable() {
+        let metadata = registration_metadata(None);
+        let client_id = register_client_with(
+            &metadata,
+            "http://127.0.0.1:43210/callback",
+            Some("manual-client"),
+            None,
+            |_, _| panic!("registro dinâmico não deve ser chamado"),
+        )
+        .unwrap();
+        assert_eq!(client_id, "manual-client");
+    }
+
+    #[test]
+    fn oauth_redirect_response_is_refused() {
+        assert!(reject_redirect(StatusCode::TEMPORARY_REDIRECT)
+            .unwrap_err()
+            .contains("Redirecionamento"));
     }
 
     #[test]

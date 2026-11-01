@@ -29,10 +29,13 @@ import { submitSecretForm } from './secret-form';
 import { RiskBadge } from './RiskBadge';
 import { PrivacyConfigurationSummary } from './PrivacyConfigurations';
 import {
+  canConnectWithOAuth,
   getPublicMcpStatus,
+  oauthClientIdHelp,
   publicMcpCatalog,
   publicMcpStatusLabels,
   type PublicMcpCatalogEntry,
+  type OAuthRegistrationOptions,
   type PublicMcpServer,
 } from '../core/mcp-service-catalog';
 
@@ -58,6 +61,8 @@ type SkillsCatalogViewProps = {
     endpoint: string,
     authentication: 'oauth' | 'bearer',
     token: string,
+    clientId: string,
+    scopes: string,
   ) => Promise<boolean>;
   onTestPublicMcp?: (server: PublicMcpServer & { id: string }) => Promise<boolean>;
 };
@@ -394,13 +399,54 @@ function PublicMcpServiceCard({
     (service.authenticationMethods[0] as 'oauth' | 'bearer' | undefined) ?? 'oauth',
   );
   const [token, setToken] = useState('');
+  const [clientId, setClientId] = useState('');
+  const [scopes, setScopes] = useState('');
+  const [registrationOptions, setRegistrationOptions] = useState<OAuthRegistrationOptions | null>(
+    null,
+  );
+  const [checkingOAuth, setCheckingOAuth] = useState(false);
+  const [oauthError, setOauthError] = useState('');
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!onConfigure) return;
-    if (await onConfigure(service, endpoint, authentication, token)) {
+    if (authentication === 'oauth' && !canConnectWithOAuth(registrationOptions, clientId, busy)) {
+      return;
+    }
+    if (await onConfigure(service, endpoint, authentication, token, clientId, scopes)) {
       setToken('');
+      setClientId('');
+      setScopes('');
       setExpanded(false);
+    }
+  }
+
+  async function checkOAuthRegistration() {
+    if (!isTauri()) {
+      setOauthError('A verificação das opções OAuth só está disponível no aplicativo OdeKrai.');
+      return;
+    }
+    setCheckingOAuth(true);
+    setOauthError('');
+    setRegistrationOptions(null);
+    try {
+      const options = await invoke<OAuthRegistrationOptions>('mcp_oauth_registration_options', {
+        endpoint,
+      });
+      setRegistrationOptions(options);
+    } catch (cause) {
+      setOauthError(String(cause));
+    } finally {
+      setCheckingOAuth(false);
+    }
+  }
+
+  async function openServiceDocumentation() {
+    if (!isTauri()) return;
+    try {
+      await invoke('open_external_link', { url: service.documentationUrl });
+    } catch (cause) {
+      setOauthError(String(cause));
     }
   }
 
@@ -454,7 +500,11 @@ function PublicMcpServiceCard({
                   type="url"
                   value={endpoint}
                   required
-                  onChange={(event) => setEndpoint(event.target.value)}
+                  onChange={(event) => {
+                    setEndpoint(event.target.value);
+                    setRegistrationOptions(null);
+                    setOauthError('');
+                  }}
                 />
               </label>
               <label>
@@ -485,8 +535,83 @@ function PublicMcpServiceCard({
                   </small>
                 </label>
               )}
-              <Button type="submit" disabled={busy || !onConfigure}>
-                Salvar e testar conexão
+              {authentication === 'oauth' && (
+                <div className="public-mcp-oauth-options">
+                  {service.oauthRegistrationNote && (
+                    <div className="public-mcp-oauth-guide">
+                      <p>{service.oauthRegistrationNote}</p>
+                      {service.oauthSteps && (
+                        <ol>
+                          {service.oauthSteps.map((step) => (
+                            <li key={step}>{step}</li>
+                          ))}
+                        </ol>
+                      )}
+                    </div>
+                  )}
+                  <label>
+                    Identificador do cliente OAuth
+                    <input
+                      type="text"
+                      name={`${formId}-oauth-client-id`}
+                      id={`${formId}-oauth-client-id`}
+                      autoComplete="off"
+                      value={clientId}
+                      onChange={(event) => setClientId(event.target.value)}
+                    />
+                    <small>Opcional quando o servidor oferece registro dinâmico.</small>
+                  </label>
+                  <label>
+                    Escopos OAuth (opcional)
+                    <input
+                      type="text"
+                      name={`${formId}-oauth-scopes`}
+                      id={`${formId}-oauth-scopes`}
+                      value={scopes}
+                      onChange={(event) => setScopes(event.target.value)}
+                      placeholder="Separados por espaço"
+                    />
+                  </label>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    disabled={checkingOAuth || busy || !endpoint.startsWith('https://')}
+                    onClick={() => void checkOAuthRegistration()}
+                  >
+                    {checkingOAuth ? 'Verificando…' : 'Verificar opções OAuth'}
+                  </Button>
+                  {registrationOptions?.dynamicRegistration && (
+                    <p role="status">
+                      Registro dinâmico disponível. O identificador será registrado e salvo com a
+                      autorização.
+                    </p>
+                  )}
+                  {oauthClientIdHelp(service, registrationOptions) && (
+                    <p role="status">
+                      Este servidor exige um identificador de cliente. Veja a documentação do
+                      serviço para criá-lo.{' '}
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        onClick={() => void openServiceDocumentation()}
+                      >
+                        Abrir documentação oficial
+                      </Button>
+                    </p>
+                  )}
+                  {oauthError && <p role="alert">{oauthError}</p>}
+                </div>
+              )}
+              <Button
+                type="submit"
+                disabled={
+                  !onConfigure ||
+                  busy ||
+                  (authentication === 'oauth' &&
+                    !canConnectWithOAuth(registrationOptions, clientId, busy))
+                }
+              >
+                {authentication === 'oauth' ? 'Conectar e testar' : 'Salvar e testar conexão'}
               </Button>
             </form>
           )}
@@ -918,6 +1043,8 @@ export function SkillsScreen({
     endpoint: string,
     authentication: 'oauth' | 'bearer',
     token: string,
+    clientId: string,
+    scopes: string,
   ): Promise<boolean> {
     if (!isTauri()) {
       setError('A configuração MCP só está disponível no aplicativo OdeKrai.');
@@ -943,13 +1070,24 @@ export function SkillsScreen({
         await invoke('mcp_set_http_token', { serverId: server.id, value: token });
         await invoke('mcp_set_enabled', { serverId: server.id, enabled: true });
       } else {
-        await invoke('mcp_oauth_authorize', { serverId: server.id });
+        await invoke('mcp_oauth_authorize', {
+          serverId: server.id,
+          clientId: clientId.trim() || null,
+          scopes: scopes.trim() || null,
+        });
       }
       await invoke('mcp_test_connection', { serverId: server.id, confirmed: true });
       await refreshMcpServers().catch(() => undefined);
       return true;
     } catch (cause) {
-      setError(`Não foi possível configurar ou testar ${service.name}: ${String(cause)}`);
+      const detail = String(cause);
+      if (detail.includes('exige um identificador de cliente')) {
+        setError(
+          `Este servidor exige um identificador de cliente. Veja a documentação do serviço (${service.documentationUrl}) para criá-lo.`,
+        );
+      } else {
+        setError(`Não foi possível configurar ou testar ${service.name}: ${detail}`);
+      }
       await refreshMcpServers().catch(() => undefined);
       return false;
     } finally {

@@ -1275,6 +1275,7 @@ pub fn run() -> Result<(), tauri::Error> {
             mcp_registry::mcp_set_secret,
             mcp_registry::mcp_set_http_token,
             mcp_oauth::mcp_oauth_authorize,
+            mcp_oauth::mcp_oauth_registration_options,
             mcp_registry::mcp_set_enabled,
             mcp_registry::mcp_test_connection,
             mcp_registry::mcp_remove_server,

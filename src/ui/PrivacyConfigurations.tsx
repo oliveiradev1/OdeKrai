@@ -339,7 +339,7 @@ export function PrivacyConfigurations({
     setBusy(true);
     setServerStates((states) => ({ ...states, [server.id]: { label: 'Aguardando autorização…' } }));
     try {
-      await invoke('mcp_oauth_authorize', { serverId: server.id });
+      await invoke('mcp_oauth_authorize', { serverId: server.id, clientId: null, scopes: null });
       const tools = await invoke<McpToolView[]>('mcp_test_connection', {
         serverId: server.id,
         confirmed: true,

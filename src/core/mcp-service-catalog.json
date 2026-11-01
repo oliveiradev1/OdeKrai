@@ -66,11 +66,18 @@
   {
     "name": "Notion",
     "supplier": "Notion",
-    "documentationUrl": "https://developers.notion.com/guides/mcp/get-started-with-mcp",
+    "documentationUrl": "https://developers.notion.com/guides/mcp/build-mcp-client",
     "endpoint": "https://mcp.notion.com/mcp",
     "transport": "Streamable HTTP",
-    "authentication": "OAuth; token Bearer disponível em planos Business e Enterprise",
+    "authentication": "OAuth 2.0 com PKCE e registro dinâmico de cliente; token Bearer MCP também disponível em planos Business e Enterprise",
     "authenticationMethods": ["oauth", "bearer"],
+    "oauthSteps": [
+      "Verifique as opções OAuth do endpoint oficial.",
+      "OAuth com client ID só é necessário se o servidor não anunciar registro dinâmico; a documentação consultada do Notion não confirma essa alternativa para o serviço.",
+      "Conecte e autorize o OdeKrai no navegador.",
+      "Volte ao OdeKrai para testar a conexão MCP."
+    ],
+    "oauthRegistrationNote": "A documentação oficial do Notion confirma o registro dinâmico de cliente; o identificador é recebido durante a conexão.",
     "status": "available_to_configure"
   }
 ]

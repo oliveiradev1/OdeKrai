@@ -340,6 +340,15 @@ describe('catálogo de habilidades', () => {
     expect(markup).not.toContain('Instalar pacote');
   });
 
+  it('liga as opções OAuth consultadas no Rust aos campos opcionais de client ID e escopos', () => {
+    const source = readFileSync(new URL('./SkillsScreen.tsx', import.meta.url), 'utf8');
+    expect(source).toContain("invoke<OAuthRegistrationOptions>('mcp_oauth_registration_options'");
+    expect(source).toContain('Identificador do cliente OAuth');
+    expect(source).toContain('Escopos OAuth (opcional)');
+    expect(source).toContain('canConnectWithOAuth(registrationOptions, clientId, busy)');
+    expect(source).toContain('oauthClientIdHelp(service, registrationOptions)');
+  });
+
   it('não confunde servidor salvo com conexão MCP aprovada pelo teste', () => {
     const props = {
       skills: registryFixture,

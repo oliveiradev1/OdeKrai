@@ -2,6 +2,23 @@ import catalog from './mcp-service-catalog.json';
 
 export type PublicMcpCatalogEntry = (typeof catalog)[number];
 export type PublicMcpStatus = 'available' | 'configured' | 'connected' | 'not_available';
+export type OAuthRegistrationOptions = { dynamicRegistration: boolean };
+
+export function canConnectWithOAuth(
+  options: OAuthRegistrationOptions | null,
+  clientId: string,
+  busy = false,
+): boolean {
+  return !busy && options !== null && (options.dynamicRegistration || Boolean(clientId.trim()));
+}
+
+export function oauthClientIdHelp(
+  service: PublicMcpCatalogEntry,
+  options: OAuthRegistrationOptions | null,
+): string | null {
+  if (!options || options.dynamicRegistration) return null;
+  return `Este servidor exige um identificador de cliente. Veja a documentação do serviço (${service.documentationUrl}) para criá-lo.`;
+}
 
 export type PublicMcpServer = {
   name?: string;
