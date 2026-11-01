@@ -110,4 +110,23 @@ describe('catálogo público de servidores MCP', () => {
     );
     expect(canConnectWithOAuth({ dynamicRegistration: false }, 'manual-client')).toBe(true);
   });
+
+  it('mantém Notion como configurado até o OAuth e o teste MCP concluírem', () => {
+    const notion = catalog.find(({ name }) => name === 'Notion');
+    if (!notion) throw new Error('Serviço Notion ausente do catálogo.');
+
+    expect(notion.endpoint).toBe('https://mcp.notion.com/mcp');
+    expect(getPublicMcpStatus(notion, [])).toBe('available');
+    expect(
+      getPublicMcpStatus(notion, [
+        { name: 'Notion', endpoint: notion.endpoint, enabled: false, status: 'Parado' },
+      ]),
+    ).toBe('configured');
+    expect(
+      getPublicMcpStatus(notion, [
+        { name: 'Notion', endpoint: notion.endpoint, enabled: true, status: 'Conectado' },
+      ]),
+    ).toBe('connected');
+    expect(notion.oauthRegistrationNote).toContain('o identificador é recebido durante a conexão');
+  });
 });

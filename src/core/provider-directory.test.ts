@@ -100,6 +100,8 @@ describe('diretório de provedores', () => {
   it('valida porta opcional como inteiro no intervalo permitido', () => {
     expect(parseLocalProbePort('')).toEqual({ valid: true, port: undefined });
     expect(parseLocalProbePort('9931')).toEqual({ valid: true, port: 9931 });
+    expect(parseLocalProbePort('1024')).toEqual({ valid: true, port: 1024 });
+    expect(parseLocalProbePort('65535')).toEqual({ valid: true, port: 65535 });
     for (const value of ['abc', '1023', '65536', '1024.5', '-1']) {
       expect(parseLocalProbePort(value)).toEqual({ valid: false });
     }

@@ -25,4 +25,24 @@ describe('cartão de IA local gratuita', () => {
     expect(markup).toContain('Procurar IA local');
     expect(markup).toContain('Abrir Meu computador');
   });
+
+  it('expõe a porta adicional com limites inteiros e informa que a descoberta é loopback', () => {
+    const markup = renderToStaticMarkup(
+      <LocalAiProviderCard
+        status={localServiceStatus(false, 0, true)}
+        port="9931"
+        busy={false}
+        onPortChange={() => undefined}
+        onProbe={() => undefined}
+        onOpenComputer={() => undefined}
+      />,
+    );
+
+    expect(markup).toContain('value="9931"');
+    expect(markup).toContain('min="1024"');
+    expect(markup).toContain('max="65535"');
+    expect(markup).toContain('step="1"');
+    expect(markup).toContain('A busca usa somente 127.0.0.1');
+    expect(markup).toContain('Servidor não encontrado');
+  });
 });

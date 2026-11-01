@@ -1711,9 +1711,10 @@ mod tests {
         assert_eq!(empty.online_endpoints.len(), 1);
         assert!(empty.models.is_empty());
 
-        assert!(finish_local_discovery(Vec::new(), Vec::new(), false)
-            .unwrap_err()
-            .contains("não encontrado"));
+        assert_eq!(
+            finish_local_discovery(Vec::new(), Vec::new(), false).unwrap_err(),
+            "Servidor local não encontrado nas portas verificadas."
+        );
         assert!(finish_local_discovery(Vec::new(), Vec::new(), true)
             .unwrap_err()
             .contains("dados inválidos"));
