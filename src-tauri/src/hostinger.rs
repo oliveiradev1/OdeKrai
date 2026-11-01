@@ -2382,19 +2382,19 @@ mod tests {
     #[tokio::test]
     async fn unchanged_action_status_expires_at_the_deadline() {
         let pending = br#"{"id":8,"state":"delayed"}"#;
-        let (base, _requests) = sequence_server(vec![("200 OK", pending); 8]);
+        let (base, _requests) = sequence_server(vec![("200 OK", pending); 256]);
         let error = run_action_with(
             &test_client(),
             &base,
             Some("test-token"),
             42,
             "stop",
-            Duration::from_millis(250),
-            Duration::from_millis(50),
+            Duration::from_secs(1),
+            Duration::from_millis(100),
         )
         .await
         .unwrap_err();
-        assert!(error.contains("tempo limite"));
+        assert!(error.contains("tempo limite"), "erro inesperado: {error}");
     }
 
     #[tokio::test]
