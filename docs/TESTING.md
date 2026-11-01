@@ -33,6 +33,11 @@ island/mascote.
 habilidades `google.calendar.*` são exibidas em Google e que ativar a agenda local não as inclui
 nem exige configuração Google.
 
+Na primeira inicialização do banco, apenas `files.list`, `files.read`, `files.search` e
+`system.info` são ativadas como habilidades padrão; os demais registros seguem desligados. A
+semente usa `INSERT OR IGNORE` para preservar escolhas já salvas. Data e hora locais não são uma
+habilidade separada: o runtime as inclui no contexto do agente para interpretar datas relativas.
+
 ## Regressões do adaptador OpenAI (Lote 6 — E3)
 
 Os testes Rust cobrem mapeamento reversível de nomes internos de habilidades, nomes em histórico de

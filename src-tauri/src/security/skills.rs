@@ -1386,6 +1386,19 @@ pub(crate) fn skill_available(id: &str) -> bool {
     !id.starts_with("simulated.")
 }
 
+pub(crate) const DEFAULT_ENABLED_SKILL_IDS: &[&str] =
+    &["files.list", "files.read", "files.search", "system.info"];
+
+pub(crate) fn seed_default_skill_settings(db: &rusqlite::Connection) -> rusqlite::Result<()> {
+    for skill_id in DEFAULT_ENABLED_SKILL_IDS {
+        db.execute(
+            "INSERT OR IGNORE INTO skill_settings(skill_id,enabled) VALUES (?1,1)",
+            [*skill_id],
+        )?;
+    }
+    Ok(())
+}
+
 fn group_skill_ids(category: &str, discord_configured: bool, enabled: bool) -> Vec<&'static str> {
     registry()
         .into_iter()
@@ -2332,6 +2345,59 @@ mod tests {
         assert_eq!(calendar_tools[0].name, "calendar.create_event");
         let legacy_simulated_enabled = std::collections::HashSet::from(["simulated.send_message"]);
         assert!(model_tools_for(&skills, &legacy_simulated_enabled, true).is_empty());
+    }
+
+    #[test]
+    fn novo_registro_ativa_somente_habilidades_de_leitura_basicas() {
+        let db = rusqlite::Connection::open_in_memory().unwrap();
+        db.execute_batch(
+            "CREATE TABLE skill_settings (skill_id TEXT PRIMARY KEY, enabled INTEGER NOT NULL CHECK(enabled IN (0,1)));",
+        )
+        .unwrap();
+
+        seed_default_skill_settings(&db).unwrap();
+        let mut statement = db
+            .prepare("SELECT skill_id FROM skill_settings WHERE enabled=1 ORDER BY skill_id")
+            .unwrap();
+        let enabled = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .collect::<Result<std::collections::HashSet<_>, _>>()
+            .unwrap();
+        let expected = DEFAULT_ENABLED_SKILL_IDS
+            .iter()
+            .map(|id| (*id).to_string())
+            .collect::<std::collections::HashSet<_>>();
+
+        assert_eq!(enabled, expected);
+        assert!(registry()
+            .iter()
+            .filter(|skill| !DEFAULT_ENABLED_SKILL_IDS.contains(&skill.id))
+            .all(|skill| !enabled.contains(skill.id)));
+    }
+
+    #[test]
+    fn valores_de_habilidades_escolhidos_antes_da_migracao_sao_preservados() {
+        let db = rusqlite::Connection::open_in_memory().unwrap();
+        db.execute_batch(
+            "CREATE TABLE skill_settings (skill_id TEXT PRIMARY KEY, enabled INTEGER NOT NULL CHECK(enabled IN (0,1))); INSERT INTO skill_settings(skill_id,enabled) VALUES ('files.list',0),('calendar.create_event',1);",
+        )
+        .unwrap();
+
+        seed_default_skill_settings(&db).unwrap();
+        let rows = db
+            .prepare("SELECT skill_id,enabled FROM skill_settings ORDER BY skill_id")
+            .unwrap()
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })
+            .unwrap()
+            .collect::<Result<std::collections::HashMap<_, _>, _>>()
+            .unwrap();
+
+        assert_eq!(rows.get("files.list"), Some(&0));
+        assert_eq!(rows.get("calendar.create_event"), Some(&1));
+        assert_eq!(rows.get("files.read"), Some(&1));
     }
 
     #[test]
