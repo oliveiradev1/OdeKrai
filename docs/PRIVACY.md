@@ -40,8 +40,10 @@ e o segredo do app; o endereço IP fica visível ao GitHub como em qualquer pedi
 segredo não são registrados em logs. Se o GitHub não confirmar a revogação, o app remove as
 credenciais locais e mostra um aviso para revogar no GitHub.
 
-ShardCloud oferece consultas de leitura e, pelo agente, ações de iniciar/parar VM e execução de
-comandos remotos mediante aprovação nativa obrigatória.
+ShardCloud oferece consultas de leitura de VMs, detalhes, métricas e distribuições e, pelo agente,
+ações de iniciar/parar VM e execução remota de comandos mediante aprovação nativa obrigatória.
+O OdeKrai não oferece projetos Docker dedicados, firewalls ou backups para ShardCloud. Também não
+cria/compra, exclui ou reinstala VPS, nem efetua pagamentos.
 Salvar o token não faz uma chamada de rede. Ele é enviado pelo cabeçalho `Authorization: Bearer` ao
 domínio fixo `shardcloud.app` quando o usuário pede uma consulta ou aprova uma ação de iniciar,
 parar ou executar comandos em uma VM.
@@ -57,7 +59,26 @@ a execução usa o diretório `/`, até 10 comandos e limite fixo de 30 segundos
 aprovados podem ler ou alterar dados da VM e podem usar a rede conforme as permissões dela; revise
 todo o texto mostrado antes de aprovar. O resultado é devolvido ao modelo como saída externa não
 confiável, com limite de 64 KiB. O aplicativo não anexa arquivos ou conversas automaticamente à
-requisição e não envia cookies. Não há comandos para criar, excluir, redimensionar ou reinstalar VMs.
+requisição e não envia cookies. Não há comandos no OdeKrai para criar, comprar, excluir, redimensionar
+ou reinstalar VMs, restaurar backups ou pagar por serviços. A preferência de teto mensal da
+ShardCloud fica localmente e não é enviada nem aplicada pela API.
+
+A integração Hostinger permite consultar VMs, detalhes, data centers, templates, ações recentes,
+backups, projetos Docker, firewalls/regras e chaves SSH públicas anexadas. O agente pode iniciar,
+parar ou reiniciar VPS; operar projetos Docker; criar ou alterar firewalls/regras; iniciar/parar modo
+de recuperação e restaurar backups. Essas ações são enviadas somente após aprovação nativa; remoção
+de recursos e restauração também exigem confirmação por nome. O Compose local aprovado é enviado
+integralmente à API Hostinger para ser executado na VPS. Não há ferramenta de shell genérico. Criar
+ou comprar, excluir ou reinstalar VPS, restaurar snapshots, acessar a área de pagamento ou efetuar
+cobranças não está disponível pelo OdeKrai.
+
+O token Hostinger fica no Gerenciador de Credenciais do Windows e não volta a ser exibido. A
+documentação oficial informa que ele herda as permissões da conta que o criou; portanto pode
+alcançar a conta inteira, inclusive informações de faturamento. O token só é enviado como
+`Authorization: Bearer` ao host fixo `developers.hostinger.com` durante uma leitura ou ação escolhida
+pelo usuário, e o endereço IP de origem fica visível à Hostinger como em qualquer conexão HTTPS. Os
+parâmetros de consulta incluem apenas os nomes/identificadores de recursos selecionados e, para uma
+ação, os campos necessários à operação aprovada. Não há chamadas de compra ou pagamento.
 
 Quando “Verificar atualizações automaticamente” está ligado (padrão) ou o usuário escolhe “Verificar agora”, o app faz no máximo uma consulta a cada 24 horas com `GET https://api.github.com/repos/oliveiradev1/OdeKrai/releases/latest`, sem corpo. Os cabeçalhos definidos pelo app são `Accept: application/vnd.github+json`, `X-GitHub-Api-Version: 2026-03-10` e `User-Agent: OdeKrai/<versão>`. Não são enviados token, cookie, nome, apelido, configuração, arquivos, identificador do dispositivo ou outro dado pessoal. Como em qualquer conexão à internet, o GitHub vê o endereço IP de origem e os metadados normais de rede da requisição. O OdeKrai não baixa nem executa o instalador; o botão “Ver e baixar” apenas abre a página oficial da release no navegador padrão.
 
