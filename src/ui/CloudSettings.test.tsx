@@ -9,10 +9,16 @@ describe('seção informativa de nuvem', () => {
     <CloudSettings initialTokenSaved initialConnected />,
   );
 
-  it('explica consultas e ações remotas limitadas da ShardCloud', () => {
-    expect(markup).toContain('permite consultar suas VMs');
-    expect(markup).toContain('iniciar ou parar uma VM da lista consultada');
-    expect(markup).toContain('exige aprovação em qualquer modo');
+  it('distingue as capacidades de ShardCloud e Hostinger', () => {
+    expect(markup).toContain('listar VMs, consultar detalhes e métricas e listar distribuições');
+    expect(markup).toContain('iniciar ou parar uma VM');
+    expect(markup).toContain('projetos Docker, firewalls, backups');
+    expect(markup).toContain('firewalls e regras; chaves SSH públicas anexadas');
+    expect(markup).toContain('criar ou atualizar projetos Docker');
+    expect(markup).toContain('Sempre com aprovação nativa, em qualquer modo');
+    expect(markup).toContain('excluir ou reinstalar VPS');
+    expect(markup).toContain('restaurar snapshots');
+    expect(markup).toContain('Criar ou comprar VPS não está disponível pelo OdeKrai.');
     expect(markup).toContain('Não conectado');
     expect(savedMarkup).toContain('ShardCloud');
     expect(savedMarkup).toContain('Token salvo');
@@ -88,9 +94,10 @@ describe('teto local da ShardCloud', () => {
     const markup = renderToStaticMarkup(<CloudSettings />);
     expect(markup).toContain('Teto mensal para VMs');
     expect(markup).toContain('id="shardcloud-monthly-budget"');
-    expect(markup).toContain('Sem teto salvo, a criação de VMs deve permanecer bloqueada.');
+    expect(markup).toContain('Criar ou comprar VPS não está disponível pelo OdeKrai.');
     expect(markup).toContain('O preço real por VM não foi conferido.');
-    expect(markup).toContain('a ShardCloud não recebe nem aplica esse teto');
+    expect(markup).toContain('ShardCloud não recebe nem aplica esse teto');
+    expect(markup).toContain('O OdeKrai não cria VPS nem efetua pagamentos.');
   });
 
   it('converte valores brasileiros para centavos e recusa limites inválidos', () => {
