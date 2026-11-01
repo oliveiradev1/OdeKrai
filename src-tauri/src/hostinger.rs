@@ -2422,12 +2422,8 @@ mod tests {
         .unwrap_err();
         let _ = release_sender.send(());
         let (action_request, status_request) = server.join().unwrap();
-        assert!(action_request.starts_with(
-            "POST /api/vps/v1/virtual-machines/42/stop "
-        ));
-        assert!(status_request.starts_with(
-            "GET /api/vps/v1/virtual-machines/42/actions/8 "
-        ));
+        assert!(action_request.starts_with("POST /api/vps/v1/virtual-machines/42/stop "));
+        assert!(status_request.starts_with("GET /api/vps/v1/virtual-machines/42/actions/8 "));
         assert!(error.contains("tempo limite"), "erro inesperado: {error}");
     }
 
