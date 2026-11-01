@@ -1,0 +1,72 @@
+[
+  {
+    "name": "GitHub",
+    "supplier": "GitHub",
+    "documentationUrl": "https://docs.github.com/en/copilot/how-tos/copilot-in-your-ide/customize-copilot/extend-copilot-with-tools-and-context/set-up-the-github-mcp-server",
+    "endpoint": "https://api.githubcopilot.com/mcp/",
+    "transport": "HTTP remoto (configuração oficial type=http)",
+    "authentication": "Token pessoal (PAT) como Bearer; OAuth 2.0 também existe para clientes com GitHub App/OAuth App próprio",
+    "authenticationMethods": ["bearer"],
+    "status": "available_to_configure"
+  },
+  {
+    "name": "Figma",
+    "supplier": "Figma",
+    "documentationUrl": "https://help.figma.com/hc/en-us/articles/39216419318551-Get-started-with-the-Figma-MCP-server",
+    "endpoint": "https://mcp.figma.com/mcp",
+    "transport": "HTTP remoto",
+    "authentication": "OAuth com conta Figma",
+    "authenticationMethods": ["oauth"],
+    "status": "not_available"
+  },
+  {
+    "name": "Gmail",
+    "supplier": "Google Workspace",
+    "documentationUrl": "https://developers.google.com/workspace/guides/configure-mcp-servers",
+    "endpoint": "https://gmailmcp.googleapis.com/mcp/v1",
+    "transport": "Streamable HTTP",
+    "authentication": "OAuth 2.0 com client ID e client secret do projeto Google Cloud",
+    "authenticationMethods": ["oauth"],
+    "status": "not_available"
+  },
+  {
+    "name": "Google Calendar",
+    "supplier": "Google Workspace",
+    "documentationUrl": "https://developers.google.com/workspace/guides/configure-mcp-servers",
+    "endpoint": "https://calendarmcp.googleapis.com/mcp/v1",
+    "transport": "Streamable HTTP",
+    "authentication": "OAuth 2.0 com client ID e client secret do projeto Google Cloud",
+    "authenticationMethods": ["oauth"],
+    "status": "not_available"
+  },
+  {
+    "name": "Google Sheets",
+    "supplier": "Google Workspace",
+    "documentationUrl": "https://developers.google.com/workspace/guides/configure-mcp-servers",
+    "endpoint": "https://sheetsmcp.googleapis.com/mcp/v1",
+    "transport": "Streamable HTTP",
+    "authentication": "OAuth 2.0 com client ID e client secret do projeto Google Cloud",
+    "authenticationMethods": ["oauth"],
+    "status": "not_available"
+  },
+  {
+    "name": "Lovable",
+    "supplier": "Lovable",
+    "documentationUrl": "https://github.com/lovablelabs/mcp",
+    "endpoint": "https://mcp.lovable.dev",
+    "transport": "Streamable HTTP",
+    "authentication": "OAuth 2.1; clientes não listados precisam do client ID público da Lovable",
+    "authenticationMethods": ["oauth"],
+    "status": "not_available"
+  },
+  {
+    "name": "Notion",
+    "supplier": "Notion",
+    "documentationUrl": "https://developers.notion.com/guides/mcp/get-started-with-mcp",
+    "endpoint": "https://mcp.notion.com/mcp",
+    "transport": "Streamable HTTP",
+    "authentication": "OAuth; token Bearer disponível em planos Business e Enterprise",
+    "authenticationMethods": ["oauth", "bearer"],
+    "status": "available_to_configure"
+  }
+]
