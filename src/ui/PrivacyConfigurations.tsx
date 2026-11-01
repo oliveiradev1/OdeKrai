@@ -18,6 +18,8 @@ type McpServer = {
   command: string;
   args: string[];
   envNames: string[];
+  transport: 'stdio' | 'streamable_http';
+  endpoint: string | null;
   enabled: boolean;
   status: string;
   error: string | null;
@@ -43,8 +45,8 @@ export function PrivacyConfigurationSummary({ onOpen }: { onOpen?: () => void })
         <div>
           <h2 id="privacy-summary">Acessos e integrações</h2>
           <p>
-            Pastas, aplicativos, links externos, destinos do Discord e servidores locais são
-            consultados e alterados em Privacidade e permissões.
+            Pastas, aplicativos, links externos, destinos do Discord e servidores MCP locais e
+            remotos são consultados e alterados em Privacidade e permissões.
           </p>
         </div>
         {onOpen && (
@@ -76,6 +78,9 @@ export function PrivacyConfigurations({
   const [serverEnvNames, setServerEnvNames] = useState('');
   const [serverSecrets, setServerSecrets] = useState<Record<string, string>>({});
   const [serverConfirmed, setServerConfirmed] = useState(false);
+  const [remoteName, setRemoteName] = useState('');
+  const [remoteEndpoint, setRemoteEndpoint] = useState('');
+  const [remoteToken, setRemoteToken] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -257,6 +262,7 @@ export function PrivacyConfigurations({
       .map((part) => `"${part.replaceAll('"', '\\"')}"`)
       .join(' ');
     if (
+      server.transport === 'stdio' &&
       !(await confirmAction({
         title: 'Executar programa local?',
         message: `Este programa será executado no seu computador com os privilégios da sua conta.\n\nComando completo:\n${command}\n\nDeseja continuar?`,
@@ -276,6 +282,58 @@ export function PrivacyConfigurations({
         ...states,
         [server.id]: { label: 'Erro', error: String(cause) },
       }));
+    }
+  }
+
+  async function addRemoteServer(): Promise<boolean> {
+    if (!remoteToken) {
+      setError('Informe um token de acesso pessoal.');
+      return false;
+    }
+    setBusy(true);
+    try {
+      const server = await invoke<McpServer>('mcp_add_http_server', {
+        name: remoteName,
+        endpoint: remoteEndpoint,
+      });
+      try {
+        await invoke('mcp_set_http_token', { serverId: server.id, value: remoteToken });
+        await invoke('mcp_set_enabled', { serverId: server.id, enabled: true });
+      } catch (cause) {
+        await invoke('mcp_remove_server', { serverId: server.id }).catch(() => undefined);
+        throw cause;
+      }
+      setRemoteName('');
+      setRemoteEndpoint('');
+      setRemoteToken('');
+      await refresh();
+      return true;
+    } catch (cause) {
+      setError(String(cause));
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveRemoteToken(server: McpServer): Promise<boolean> {
+    const token = serverSecrets[`${server.id}:http_bearer`];
+    if (!token) return false;
+    setBusy(true);
+    try {
+      await invoke('mcp_set_http_token', { serverId: server.id, value: token });
+      setServerSecrets((current) => {
+        const next = { ...current };
+        delete next[`${server.id}:http_bearer`];
+        return next;
+      });
+      await refresh();
+      return true;
+    } catch (cause) {
+      setError(String(cause));
+      return false;
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -410,11 +468,11 @@ export function PrivacyConfigurations({
         className="settings-panel settings-section allowed-folders-section"
         aria-labelledby="mcp-heading"
       >
-        <h3 id="mcp-heading">Servidores locais</h3>
+        <h3 id="mcp-heading">Servidores MCP</h3>
         <p>
-          Cadastre servidores locais para inspecionar ferramentas e formatos. Eles não ficam
-          disponíveis ao assistente. O programa cadastrado será executado no seu computador com os
-          privilégios da sua conta.
+          Cadastre servidores locais por stdio ou remotos por Streamable HTTP para inspecionar
+          ferramentas e formatos. Eles não ficam disponíveis ao assistente até serem ativados. O
+          programa local será executado no seu computador com os privilégios da sua conta.
         </p>
         <form
           className="mcp-server-form"
@@ -499,8 +557,57 @@ export function PrivacyConfigurations({
             Adicionar servidor local
           </Button>
         </form>
+        <form
+          className="mcp-server-form"
+          onSubmit={(event) => {
+            void submitSecretForm(event, addRemoteServer, () => setRemoteToken(''));
+          }}
+        >
+          <h4>Servidor remoto (Streamable HTTP)</h4>
+          <p>
+            Somente HTTPS. O endereço e o domínio ficam fixos neste cadastro; respostas do servidor
+            são dados externos não confiáveis.
+          </p>
+          <div className="mcp-settings-grid">
+            <label>
+              Nome
+              <input
+                value={remoteName}
+                onChange={(event) => setRemoteName(event.target.value)}
+                maxLength={80}
+              />
+            </label>
+            <label>
+              Endpoint HTTPS
+              <input
+                type="url"
+                value={remoteEndpoint}
+                onChange={(event) => setRemoteEndpoint(event.target.value)}
+                placeholder="https://servidor.example/mcp"
+              />
+            </label>
+            <label>
+              Token de acesso pessoal
+              <input
+                id="mcp-remote-token-new"
+                name="mcp-remote-token-new"
+                type="password"
+                autoComplete="off"
+                value={remoteToken}
+                onChange={(event) => setRemoteToken(event.target.value)}
+              />
+            </label>
+          </div>
+          <Button
+            type="submit"
+            variant="secondary"
+            disabled={busy || !isTauri() || !remoteName || !remoteEndpoint || !remoteToken}
+          >
+            Adicionar servidor remoto
+          </Button>
+        </form>
         <ul className="allowed-folder-list">
-          {servers.length === 0 && <li>Parado · Nenhum servidor local cadastrado.</li>}
+          {servers.length === 0 && <li>Parado · Nenhum servidor MCP cadastrado.</li>}
           {servers.map((server) => {
             const state = serverStates[server.id] ?? {
               label: server.status,
@@ -515,9 +622,15 @@ export function PrivacyConfigurations({
               <li key={server.id}>
                 <div>
                   <strong>{server.name}</strong>
-                  <small className="mcp-server-command">
-                    Comando: <code>{[server.command, ...server.args].join(' ')}</code>
-                  </small>
+                  {server.transport === 'streamable_http' ? (
+                    <small>
+                      Endpoint HTTPS: <code>{server.endpoint}</code>
+                    </small>
+                  ) : (
+                    <small className="mcp-server-command">
+                      Comando: <code>{[server.command, ...server.args].join(' ')}</code>
+                    </small>
+                  )}
                   <small>
                     Estado: <span role="status">{label}</span> ·{' '}
                     {server.enabled ? 'Ativado' : 'Desativado'}
@@ -567,6 +680,48 @@ export function PrivacyConfigurations({
                       </Button>
                     </form>
                   ))}
+                  {server.transport === 'streamable_http' && (
+                    <form
+                      className="mcp-env-field"
+                      onSubmit={(event) => {
+                        void submitSecretForm(
+                          event,
+                          () => saveRemoteToken(server),
+                          () =>
+                            setServerSecrets((current) => {
+                              const next = { ...current };
+                              delete next[`${server.id}:http_bearer`];
+                              return next;
+                            }),
+                        );
+                      }}
+                    >
+                      <label htmlFor={`mcp-http-token-${server.id}`}>
+                        Token Bearer · Gerenciador de Credenciais
+                      </label>
+                      <input
+                        id={`mcp-http-token-${server.id}`}
+                        name={`mcp-http-token-${server.id}`}
+                        type="password"
+                        autoComplete="off"
+                        value={serverSecrets[`${server.id}:http_bearer`] ?? ''}
+                        onChange={(event) =>
+                          setServerSecrets((current) => ({
+                            ...current,
+                            [`${server.id}:http_bearer`]: event.target.value,
+                          }))
+                        }
+                      />
+                      <small>Após salvar, o token não volta a ser exibido.</small>
+                      <Button
+                        type="submit"
+                        variant="secondary"
+                        disabled={busy || !serverSecrets[`${server.id}:http_bearer`]}
+                      >
+                        Salvar token
+                      </Button>
+                    </form>
+                  )}
                   {state.tools !== undefined && (
                     <section aria-label="Ferramentas MCP externas">
                       <h4>Ferramentas encontradas</h4>

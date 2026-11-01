@@ -446,9 +446,29 @@ pub(crate) fn database(app: &tauri::AppHandle) -> Result<Connection, String> {
         .map_err(|_| "Não foi possível preparar os dados do aplicativo.".to_string())?;
     let db = Connection::open(dir.join("permissions.sqlite3"))
         .map_err(|_| "Não foi possível abrir as configurações de segurança.".to_string())?;
-    let schema = format!("PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS permission_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS tool_overrides (tool TEXT PRIMARY KEY, more_permissive INTEGER NOT NULL CHECK(more_permissive IN (0,1))); CREATE TABLE IF NOT EXISTS skill_settings (skill_id TEXT PRIMARY KEY, enabled INTEGER NOT NULL CHECK(enabled IN (0,1))); CREATE TABLE IF NOT EXISTS allowed_folders (path TEXT PRIMARY KEY, access TEXT NOT NULL CHECK(access IN ('read_only','read_write'))); CREATE TABLE IF NOT EXISTS trusted_external_domains (domain TEXT PRIMARY KEY); CREATE TABLE IF NOT EXISTS allowed_apps (app_id TEXT PRIMARY KEY, name TEXT NOT NULL, path TEXT NOT NULL); CREATE TABLE IF NOT EXISTS discord_webhooks (id TEXT PRIMARY KEY, name TEXT NOT NULL, last_sent INTEGER NOT NULL DEFAULT 0); CREATE TABLE IF NOT EXISTS mcp_servers (id TEXT PRIMARY KEY, name TEXT NOT NULL, command TEXT NOT NULL, args_json TEXT NOT NULL, env_names_json TEXT NOT NULL, enabled INTEGER NOT NULL CHECK(enabled IN (0,1))); INSERT OR IGNORE INTO permission_settings(key,value) VALUES ('mode','sempre_perguntar'),('shortcut','Ctrl+Shift+F12'),('island_quick_shortcut_enabled','false'),('island_quick_shortcut','Ctrl+Alt+Space'),('shardcloud_monthly_budget_cents',''),('halted','false'),('approval_ttl_seconds','{DEFAULT_APPROVAL_TTL}'),('agent_max_turns','8'),('agent_max_duration_seconds','120'),('agent_max_tokens','16000'),('agent_max_external_actions','2');");
+    let schema = format!("PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS permission_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS tool_overrides (tool TEXT PRIMARY KEY, more_permissive INTEGER NOT NULL CHECK(more_permissive IN (0,1))); CREATE TABLE IF NOT EXISTS skill_settings (skill_id TEXT PRIMARY KEY, enabled INTEGER NOT NULL CHECK(enabled IN (0,1))); CREATE TABLE IF NOT EXISTS allowed_folders (path TEXT PRIMARY KEY, access TEXT NOT NULL CHECK(access IN ('read_only','read_write'))); CREATE TABLE IF NOT EXISTS trusted_external_domains (domain TEXT PRIMARY KEY); CREATE TABLE IF NOT EXISTS allowed_apps (app_id TEXT PRIMARY KEY, name TEXT NOT NULL, path TEXT NOT NULL); CREATE TABLE IF NOT EXISTS discord_webhooks (id TEXT PRIMARY KEY, name TEXT NOT NULL, last_sent INTEGER NOT NULL DEFAULT 0); CREATE TABLE IF NOT EXISTS mcp_servers (id TEXT PRIMARY KEY, name TEXT NOT NULL, command TEXT NOT NULL, args_json TEXT NOT NULL, env_names_json TEXT NOT NULL, enabled INTEGER NOT NULL CHECK(enabled IN (0,1)), transport TEXT NOT NULL DEFAULT 'stdio', endpoint TEXT); INSERT OR IGNORE INTO permission_settings(key,value) VALUES ('mode','sempre_perguntar'),('shortcut','Ctrl+Shift+F12'),('island_quick_shortcut_enabled','false'),('island_quick_shortcut','Ctrl+Alt+Space'),('shardcloud_monthly_budget_cents',''),('halted','false'),('approval_ttl_seconds','{DEFAULT_APPROVAL_TTL}'),('agent_max_turns','8'),('agent_max_duration_seconds','120'),('agent_max_tokens','16000'),('agent_max_external_actions','2');");
     db.execute_batch(&schema)
         .map_err(|_| "Não foi possível preparar as configurações de segurança.".to_string())?;
+    for (column, definition) in [
+        ("transport", "TEXT NOT NULL DEFAULT 'stdio'"),
+        ("endpoint", "TEXT"),
+    ] {
+        let present = {
+            let mut statement = db
+                .prepare("PRAGMA table_info(mcp_servers)")
+                .map_err(|_| "Não foi possível verificar a migração dos servidores MCP.".to_string())?;
+            let rows = statement
+                .query_map([], |row| row.get::<_, String>(1))
+                .map_err(|_| "Não foi possível verificar a migração dos servidores MCP.".to_string())?;
+            rows.filter_map(Result::ok).any(|name| name == column)
+        };
+        if !present {
+            db.execute_batch(&format!(
+                "ALTER TABLE mcp_servers ADD COLUMN {column} {definition}"
+            ))
+                .map_err(|_| "Não foi possível atualizar o cadastro dos servidores MCP.".to_string())?;
+        }
+    }
     skills::seed_default_skill_settings(&db)
         .map_err(|_| "Não foi possível preparar as habilidades padrão.".to_string())?;
     Ok(db)

@@ -19,6 +19,8 @@ pub struct McpServer {
     pub command: String,
     pub args: Vec<String>,
     pub env_names: Vec<String>,
+    pub transport: String,
+    pub endpoint: Option<String>,
     pub enabled: bool,
     pub status: String,
     pub error: Option<String>,
@@ -27,10 +29,44 @@ pub struct McpServer {
 enum RuntimeStatus {
     Connecting,
     Connected {
-        client: Arc<crate::mcp::McpStdioClient>,
+        client: Arc<McpClient>,
         tools: Vec<McpTool>,
     },
     Error(String),
+}
+
+enum McpClient {
+    Stdio(crate::mcp::McpStdioClient),
+    Http(crate::mcp_http::McpHttpClient),
+}
+
+impl McpClient {
+    fn is_alive(&self) -> bool {
+        match self {
+            Self::Stdio(client) => client.is_alive(),
+            Self::Http(client) => client.is_alive(),
+        }
+    }
+
+    fn tools_list(&self) -> Result<serde_json::Value, String> {
+        match self {
+            Self::Stdio(client) => client.tools_list().map_err(safe_client_error),
+            Self::Http(client) => client.tools_list(),
+        }
+    }
+
+    fn tools_call(
+        &self,
+        name: &str,
+        args: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        match self {
+            Self::Stdio(client) => client
+                .tools_call(name, args)
+                .map_err(safe_client_error),
+            Self::Http(client) => client.tools_call(name, args),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -103,7 +139,7 @@ fn connected_tool(
     server_id: &str,
     tool_name: &str,
     schema_sha256: &str,
-) -> Result<(McpTool, Arc<crate::mcp::McpStdioClient>), String> {
+) -> Result<(McpTool, Arc<McpClient>), String> {
     let runtime = app
         .try_state::<McpRuntime>()
         .ok_or("O servidor MCP não está conectado; teste a conexão novamente.")?;
@@ -153,14 +189,13 @@ pub(crate) fn execute_tool_action(
     let (tool, client) = connected_tool(app, tool_id, server_id, tool_name, schema_sha256)?;
     crate::mcp::validate_tool_arguments(&tool.input_schema, arguments)?;
     let result = client
-        .tools_call(tool_name, arguments.clone())
-        .map_err(safe_client_error)?;
+        .tools_call(tool_name, arguments.clone())?;
     serde_json::to_string(&result)
         .map_err(|_| "Não foi possível preparar o resultado MCP não confiável.".to_string())
 }
 
 #[derive(Deserialize)]
-struct StoredRow(String, String, String, String, String, bool);
+struct StoredRow(String, String, String, String, String, bool, String, Option<String>);
 
 fn valid_env_name(name: &str) -> bool {
     let mut bytes = name.bytes();
@@ -230,7 +265,7 @@ impl CredentialVault for WindowsVault {
 }
 
 fn list(db: &Connection) -> Result<Vec<McpServer>, String> {
-    let mut stmt = db.prepare("SELECT id,name,command,args_json,env_names_json,enabled FROM mcp_servers ORDER BY name")
+    let mut stmt = db.prepare("SELECT id,name,command,args_json,env_names_json,enabled,transport,endpoint FROM mcp_servers ORDER BY name")
         .map_err(|_| "Não foi possível listar os servidores MCP.".to_string())?;
     let rows = stmt
         .query_map([], |row| {
@@ -241,11 +276,13 @@ fn list(db: &Connection) -> Result<Vec<McpServer>, String> {
                 row.get(3)?,
                 row.get(4)?,
                 row.get::<_, i64>(5)? != 0,
+                row.get(6)?,
+                row.get(7)?,
             ))
         })
         .map_err(|_| "Não foi possível listar os servidores MCP.".to_string())?;
     rows.map(|row| {
-        let StoredRow(id, name, command, args, env_names, enabled) =
+        let StoredRow(id, name, command, args, env_names, enabled, transport, endpoint) =
             row.map_err(|_| "Não foi possível ler o cadastro MCP.".to_string())?;
         Ok(McpServer {
             id,
@@ -254,6 +291,8 @@ fn list(db: &Connection) -> Result<Vec<McpServer>, String> {
             args: serde_json::from_str(&args).map_err(|_| "Cadastro MCP inválido.".to_string())?,
             env_names: serde_json::from_str(&env_names)
                 .map_err(|_| "Cadastro MCP inválido.".to_string())?,
+            transport,
+            endpoint,
             enabled,
             status: "Parado".into(),
             error: None,
@@ -263,13 +302,35 @@ fn list(db: &Connection) -> Result<Vec<McpServer>, String> {
 }
 
 fn insert(db: &Connection, server: &McpServer) -> Result<(), String> {
-    validate(
-        &server.name,
-        &server.command,
-        &server.args,
-        &server.env_names,
-    )?;
-    db.execute("INSERT INTO mcp_servers(id,name,command,args_json,env_names_json,enabled) VALUES (?1,?2,?3,?4,?5,?6)", params![server.id, server.name.trim(), server.command, serde_json::to_string(&server.args).unwrap_or_default(), serde_json::to_string(&server.env_names).unwrap_or_default(), server.enabled as i64])
+    if server.transport == "streamable_http" {
+        if server.name.trim().is_empty() || server.name.chars().count() > 80 || server.name.chars().any(char::is_control) {
+            return Err("Informe um nome de até 80 caracteres.".into());
+        }
+        crate::mcp_http::validate_endpoint(
+            server
+                .endpoint
+                .as_deref()
+                .ok_or("Informe o endereço HTTPS do servidor MCP.")?,
+        )?;
+        if !server.args.is_empty() || !server.env_names.is_empty() {
+            return Err("Servidor HTTP MCP não aceita comando ou variáveis locais.".into());
+        }
+    } else {
+        validate(&server.name, &server.command, &server.args, &server.env_names)?;
+    }
+    db.execute(
+        "INSERT INTO mcp_servers(id,name,command,args_json,env_names_json,enabled,transport,endpoint) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+        params![
+            server.id,
+            server.name.trim(),
+            server.command,
+            serde_json::to_string(&server.args).unwrap_or_default(),
+            serde_json::to_string(&server.env_names).unwrap_or_default(),
+            server.enabled as i64,
+            server.transport,
+            server.endpoint
+        ],
+    )
         .map_err(|_| "Não foi possível salvar o servidor MCP.".to_string())?;
     Ok(())
 }
@@ -305,6 +366,7 @@ fn remove_with(
     for key in &server.env_names {
         vault.erase(&server.id, key)?;
     }
+    vault.erase(&server.id, "http_bearer")?;
     db.execute("DELETE FROM mcp_servers WHERE id=?1", [&server.id])
         .map_err(|_| "Não foi possível remover o servidor MCP.".to_string())?;
     Ok(())
@@ -317,11 +379,20 @@ fn find(db: &Connection, id: &str) -> Result<McpServer, String> {
         .ok_or_else(|| "Servidor MCP não cadastrado.".into())
 }
 
-fn inspect(
-    server: &McpServer,
-) -> Result<(Arc<crate::mcp::McpStdioClient>, serde_json::Value), String> {
+fn inspect(server: &McpServer) -> Result<(Arc<McpClient>, serde_json::Value), String> {
     if !server.enabled {
         return Err("Ative o servidor antes de testar a conexão.".into());
+    }
+    if server.transport == "streamable_http" {
+        let endpoint = server.endpoint.as_deref().ok_or("Endereço MCP ausente.")?;
+        let token = entry(&server.id, "http_bearer")?
+            .get_password()
+            .map_err(|_| "Cadastre o token Bearer para este servidor MCP.".to_string())?;
+        let client = Arc::new(McpClient::Http(crate::mcp_http::McpHttpClient::connect(
+            endpoint, token,
+        )?));
+        let result = client.tools_list()?;
+        return Ok((client, result));
     }
     let mut env = BTreeMap::new();
     for key in &server.env_names {
@@ -333,8 +404,10 @@ fn inspect(
     let mut config = crate::mcp::StdioConfig::new(server.command.clone(), server.args.clone());
     config.env = env;
     config.connection_timeout = Duration::from_secs(10);
-    let client = Arc::new(crate::mcp::McpStdioClient::connect(config).map_err(safe_client_error)?);
-    let result = client.tools_list().map_err(safe_client_error)?;
+    let client = Arc::new(McpClient::Stdio(
+        crate::mcp::McpStdioClient::connect(config).map_err(safe_client_error)?,
+    ));
+    let result = client.tools_list()?;
     Ok((client, result))
 }
 
@@ -598,12 +671,71 @@ pub fn mcp_add_server(
         command,
         args,
         env_names,
+        transport: "stdio".into(),
+        endpoint: None,
         enabled: false,
         status: "Parado".into(),
         error: None,
     };
     insert(&crate::security::database(&app)?, &server)?;
     Ok(server)
+}
+
+#[tauri::command]
+pub fn mcp_add_http_server(
+    app: tauri::AppHandle,
+    caller: tauri::WebviewWindow,
+    name: String,
+    endpoint: String,
+) -> Result<McpServer, String> {
+    crate::require_main(&caller)?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let server = McpServer {
+        id: format!("mcp-{now}"),
+        name,
+        command: String::new(),
+        args: vec![],
+        env_names: vec![],
+        transport: "streamable_http".into(),
+        endpoint: Some(endpoint),
+        enabled: false,
+        status: "Parado".into(),
+        error: None,
+    };
+    insert(&crate::security::database(&app)?, &server)?;
+    Ok(server)
+}
+
+#[tauri::command]
+pub fn mcp_set_http_token(
+    app: tauri::AppHandle,
+    caller: tauri::WebviewWindow,
+    server_id: String,
+    value: String,
+    runtime: State<'_, McpRuntime>,
+) -> Result<(), String> {
+    crate::require_main(&caller)?;
+    let server = find(&crate::security::database(&app)?, &server_id)?;
+    if server.transport != "streamable_http" {
+        return Err("O servidor não usa transporte HTTP.".into());
+    }
+    if value.is_empty() || value.len() > 32_768 || value.chars().any(char::is_control) {
+        return Err("Informe um token Bearer válido.".into());
+    }
+    entry(&server_id, "http_bearer")?
+        .set_password(&value)
+        .map_err(|_| {
+            "Não foi possível salvar o token no Gerenciador de Credenciais do Windows.".to_string()
+        })?;
+    runtime
+        .0
+        .lock()
+        .map_err(|_| "Estado MCP indisponível.".to_string())?
+        .remove(&server_id);
+    Ok(())
 }
 
 #[tauri::command]
@@ -739,6 +871,8 @@ mod tests {
             command: "fake".into(),
             args: vec![],
             env_names: vec![],
+            transport: "stdio".into(),
+            endpoint: None,
             enabled: true,
             status: "Conectado".into(),
             error: None,
@@ -823,7 +957,7 @@ mod tests {
 
     fn db() -> Connection {
         let db = Connection::open_in_memory().unwrap();
-        db.execute_batch("CREATE TABLE mcp_servers(id TEXT PRIMARY KEY,name TEXT,command TEXT,args_json TEXT,env_names_json TEXT,enabled INTEGER);").unwrap();
+        db.execute_batch("CREATE TABLE mcp_servers(id TEXT PRIMARY KEY,name TEXT,command TEXT,args_json TEXT,env_names_json TEXT,enabled INTEGER,transport TEXT DEFAULT 'stdio',endpoint TEXT);").unwrap();
         db
     }
 
@@ -836,6 +970,8 @@ mod tests {
             command: "fake".into(),
             args: vec!["arg".into()],
             env_names: vec!["TOKEN".into()],
+            transport: "stdio".into(),
+            endpoint: None,
             enabled: false,
             status: "Parado".into(),
             error: None,
@@ -870,6 +1006,8 @@ mod tests {
             command: "fake".into(),
             args: vec![],
             env_names: vec!["TOKEN".into()],
+            transport: "stdio".into(),
+            endpoint: None,
             enabled: false,
             status: "Parado".into(),
             error: None,
@@ -877,6 +1015,7 @@ mod tests {
         insert(&db, &server).unwrap();
         let mut vault = FakeVault::default();
         set_env_with(&server, "TOKEN", "segredo", &mut vault).unwrap();
+        vault.store(&server.id, "http_bearer", "token-remoto").unwrap();
         remove_with(&db, &server, &mut vault).unwrap();
         assert!(list(&db).unwrap().is_empty());
         assert!(vault.0.is_empty());

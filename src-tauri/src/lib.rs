@@ -134,6 +134,7 @@ mod history;
 mod local_models;
 pub mod mcp;
 mod mcp_registry;
+mod mcp_http;
 mod memory_skills;
 mod pet_alerts;
 mod pet_hit_test;
@@ -1259,7 +1260,9 @@ pub fn run() -> Result<(), tauri::Error> {
             providers::audio_transcription::transcribe_audio,
             mcp_registry::mcp_list_servers,
             mcp_registry::mcp_add_server,
+            mcp_registry::mcp_add_http_server,
             mcp_registry::mcp_set_secret,
+            mcp_registry::mcp_set_http_token,
             mcp_registry::mcp_set_enabled,
             mcp_registry::mcp_test_connection,
             mcp_registry::mcp_remove_server,

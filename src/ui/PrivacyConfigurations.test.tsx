@@ -18,7 +18,7 @@ describe('configurações de privacidade', () => {
     );
     expect(settingsMarkup).toContain('Pastas permitidas');
     expect(settingsMarkup).toContain('Aplicativos permitidos');
-    expect(settingsMarkup).toContain('Servidores locais');
+    expect(settingsMarkup).toContain('Servidores MCP');
     expect(summaryMarkup).toContain('Abrir Privacidade e permissões');
     expect(summaryMarkup).not.toContain('Escolher aplicativo');
     expect(summaryMarkup).not.toContain('Adicionar Documentos');
@@ -38,7 +38,9 @@ describe('configurações de privacidade', () => {
       'remove_allowed_app',
       'mcp_list_servers',
       'mcp_add_server',
+      'mcp_add_http_server',
       'mcp_set_secret',
+      'mcp_set_http_token',
       'mcp_set_enabled',
       'mcp_test_connection',
       'mcp_remove_server',
@@ -81,7 +83,11 @@ describe('configurações de privacidade', () => {
     expect(ui).toContain('name={`mcp-new-secret-${key}`}');
     expect(ui).toContain('id={`mcp-secret-${server.id}-${key}`}');
     expect(ui).toContain('name={`mcp-secret-${server.id}-${key}`}');
-    expect(ui.match(/autoComplete="off"/g)).toHaveLength(2);
+    expect(ui).toContain('mcp-remote-token-new');
+    expect(ui).toContain('mcp-http-token-${server.id}');
+    expect(ui).toContain('saveRemoteToken(server)');
+    expect(ui).toContain('token não volta a ser exibido');
+    expect(ui.match(/autoComplete="off"/g)).toHaveLength(4);
   });
 
   it('apresenta ferramentas MCP separadas por disponibilidade e trata anotações como sugestão', () => {

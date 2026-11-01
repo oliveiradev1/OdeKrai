@@ -38,17 +38,30 @@ habilitado. Desativar ou remover o servidor encerra e descarta seu cliente conec
 
 ## Transporte e versão MCP
 
-O transporte implementado é **stdio**. `src-tauri/src/mcp.rs`, `McpStdioClient::connect`, inicia o
-executável com `stdin`, `stdout` e `stderr` piped; mensagens JSON-RPC são delimitadas por linha. Não
-há transporte HTTP no cliente MCP nem configuração de URL/endereço de servidor na tela.
+Há dois transportes. O local continua em **stdio**: `src-tauri/src/mcp.rs`,
+`McpStdioClient::connect`, inicia o executável com os fluxos padrão e usa mensagens JSON-RPC por
+linha, com protocolo legado `2025-11-25` e handshake `initialize`. O remoto usa
+**Streamable HTTP**, implementado em `src-tauri/src/mcp_http.rs` (`McpHttpClient`), com protocolo
+`2026-07-28`: POST por chamada, cabeçalho `MCP-Protocol-Version`, metadados por requisição e
+resposta JSON ou SSE. A versão moderna não usa o handshake nem sessões legadas. O código não faz
+fallback automático para versões HTTP antigas.
 
-`src-tauri/src/mcp.rs` define `PROTOCOL_VERSION` como `2025-11-25`. O cliente envia esse valor em
-`initialize` e recusa a conexão se a resposta não repetir exatamente a versão. Portanto, o código
-não negocia uma versão diferente. A especificação oficial da versão [2025-11-25 — Lifecycle](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle)
-documenta `initialize`, negociação de `protocolVersion` e `notifications/initialized`. A página
-oficial [2025-11-25 — Transports](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports)
-define stdio e Streamable HTTP como transportes distintos. A versão configurada no código foi
-confirmada contra essas páginas oficiais.
+**Confirmação oficial em 1º de novembro de 2026:** a página atual de Streamable HTTP identifica a
+revisão `2026-07-28` e diz que ela removeu o endpoint GET e as sessões de protocolo. A mesma página
+define que cada pedido JSON-RPC é um POST e que respostas podem ser JSON ou SSE. [Especificação
+oficial — Streamable HTTP](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http).
+Na página oficial de Autorização, a revisão relaciona OAuth 2.1 draft, Protected Resource Metadata
+(RFC 9728), Authorization Server Metadata (RFC 8414), OIDC Discovery e outras normas; também diz
+que clientes HTTP MCP devem descobrir o servidor de autorização usando Protected Resource Metadata
+e suportar os mecanismos de descoberta indicados. [Especificação oficial — Autorização](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization).
+
+Esta etapa implementa token pessoal Bearer por escolha do produto; **não implementa OAuth** nem
+descoberta OAuth. A URL HTTPS é salva no cadastro pelo usuário, validada no Rust e nunca é um
+argumento de ferramenta do modelo. Redirects são desativados e a URL final precisa manter a origem
+cadastrada. O token é salvo no Credential Manager e removido ao excluir o servidor. Respostas são
+limitadas a 8 MiB no transporte e truncadas/sanitizadas pelo limite de resultado MCP antes de serem
+oferecidas ao agente. A validação Rust desta alteração ainda depende do CI, pois `cargo` não está
+disponível no ambiente que produziu este commit.
 
 ## Limites e segurança
 
