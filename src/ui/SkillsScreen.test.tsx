@@ -439,14 +439,14 @@ describe('catálogo de habilidades', () => {
       ...registryFixture[0],
       id: 'google.calendar.list_events',
       name: 'Consultar Google Calendar',
-      family: 'agenda_lembretes',
+      family: 'google',
       icon: 'calendar',
       examples: ['Consulte os eventos desta semana.'],
     };
     const markup = renderToStaticMarkup(
       <SkillsCatalogView
         skills={[googleSkill]}
-        initialFamily="agenda_lembretes"
+        initialFamily="google"
         googleConnection={<section>Conexão com o Google</section>}
         onFamilyToggle={noOperation}
         onSkillToggle={noOperation}
@@ -455,6 +455,31 @@ describe('catálogo de habilidades', () => {
     );
     expect(markup).toContain('Conexão com o Google');
     expect(markup).toContain('Consultar Google Calendar');
+  });
+
+  it('permite ativar a Agenda local quando o Google não está conectado', () => {
+    const localCalendarSkill: CatalogSkill = {
+      ...registryFixture[0],
+      id: 'calendar.list_events',
+      name: 'Consultar Agenda local',
+      enabled: false,
+      family: 'agenda_lembretes',
+      icon: 'calendar',
+    };
+    const markup = renderToStaticMarkup(
+      <SkillsCatalogView
+        skills={[localCalendarSkill]}
+        prerequisites={{ folderAvailable: true, appCount: 0, googleConnected: false }}
+        onFamilyToggle={noOperation}
+        onSkillToggle={noOperation}
+        onOverrideToggle={noOperation}
+      />,
+    );
+
+    expect(markup).toContain('aria-label="Ativar todas as habilidades de Agenda e lembretes"');
+    expect(markup).not.toMatch(
+      /<button[^>]*role="switch"[^>]*aria-label="Ativar todas as habilidades de Agenda e lembretes"[^>]*disabled/,
+    );
   });
 
   it('mantém o catálogo baseado em get_skills e a ativação em comandos Rust', () => {

@@ -29,6 +29,10 @@ Após implementação, todos esses testes devem usar servidor/mock local e zero 
 Validação visual no Windows deverá cobrir estados do chat, aprovação, parada e integração com
 island/mascote.
 
+`skills.rs` verifica que `AgendaLembretes` contém apenas `calendar.*` e `reminder.*`, que as
+habilidades `google.calendar.*` são exibidas em Google e que ativar a agenda local não as inclui
+nem exige configuração Google.
+
 ## Regressões do adaptador OpenAI (Lote 6 — E3)
 
 Os testes Rust cobrem mapeamento reversível de nomes internos de habilidades, nomes em histórico de

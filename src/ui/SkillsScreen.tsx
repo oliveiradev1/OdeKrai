@@ -273,7 +273,7 @@ export function SkillsCatalogView({
                     onOverrideToggle={onOverrideToggle}
                     onOpenPrivacy={onOpenPrivacy}
                     googleConnection={
-                      selected.family === 'agenda_lembretes' &&
+                      selected.family === 'google' &&
                       skills.some((skill) => skill.id.startsWith('google.calendar.'))
                         ? googleConnection
                         : undefined

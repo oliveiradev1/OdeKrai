@@ -37,6 +37,7 @@ pub enum SkillFamily {
     Arquivos,
     AbrirAplicativos,
     AgendaLembretes,
+    Google,
     PlanilhasDocumentos,
     Mensagens,
     Web,
@@ -123,17 +124,17 @@ fn skill_metadata(
     model_description: &'static str,
 ) -> (SkillFamily, &'static str, Vec<&'static str>, SkillOrigin) {
     let (family, icon) = match id {
-        "google.calendar.list_events"
-        | "google.calendar.create_event"
-        | "google.calendar.update_event"
-        | "google.calendar.delete_event"
-        | "calendar.create_event"
+        "calendar.create_event"
         | "calendar.list_events"
         | "calendar.update_event"
         | "calendar.delete_event"
         | "reminder.create"
         | "reminder.list"
         | "reminder.cancel" => (SkillFamily::AgendaLembretes, "calendar"),
+        "google.calendar.list_events"
+        | "google.calendar.create_event"
+        | "google.calendar.update_event"
+        | "google.calendar.delete_event" => (SkillFamily::Google, "calendar"),
         "sheet.create_csv"
         | "sheet.create_xlsx"
         | "sheet.read"
@@ -1370,6 +1371,7 @@ fn skill_family_key(family: SkillFamily) -> &'static str {
         SkillFamily::Arquivos => "arquivos",
         SkillFamily::AbrirAplicativos => "abrir_aplicativos",
         SkillFamily::AgendaLembretes => "agenda_lembretes",
+        SkillFamily::Google => "google",
         SkillFamily::PlanilhasDocumentos => "planilhas_documentos",
         SkillFamily::Mensagens => "mensagens",
         SkillFamily::Web => "web",
@@ -2284,6 +2286,7 @@ mod tests {
             "google.calendar.delete_event",
         ] {
             let skill = registry().into_iter().find(|skill| skill.id == id).unwrap();
+            assert_eq!(skill.family, SkillFamily::Google);
             assert_eq!(skill.result_trust, ResultTrust::Untrusted);
             let SimulatedAction::Productivity { params, .. } = action_example(id) else {
                 panic!("tipo de ação inesperado");
@@ -2489,6 +2492,23 @@ mod tests {
         assert!(calendar.contains(&"calendar.create_event"));
         assert!(calendar.contains(&"reminder.create"));
         assert!(!calendar.contains(&"files.read"));
+        assert!(calendar
+            .iter()
+            .all(|id| { id.starts_with("calendar.") || id.starts_with("reminder.") }));
+        assert!(!calendar.contains(&"google.calendar.list_events"));
+        let google = group_skill_ids("google", false, true);
+        assert!(google.contains(&"google.calendar.list_events"));
+        assert!(google.iter().all(|id| id.starts_with("google.calendar.")));
+    }
+
+    #[test]
+    fn ativar_agenda_local_nao_exige_configuracao_google() {
+        let local_agenda = group_skill_ids("agenda_lembretes", false, true);
+        assert!(local_agenda.contains(&"calendar.list_events"));
+        assert!(local_agenda.contains(&"reminder.list"));
+        assert!(local_agenda
+            .iter()
+            .all(|id| !id.starts_with("google.calendar.")));
     }
 
     #[test]
