@@ -122,6 +122,10 @@ pub(super) fn action_metadata(
             | "hostinger.firewall_delete"
             | "hostinger.firewall_rule_delete"
             | "hostinger.ssh_keys_list" => skill_id,
+            "hostinger.backup_list"
+            | "hostinger.backup_restore"
+            | "hostinger.recovery_start"
+            | "hostinger.recovery_stop" => skill_id,
             "code.delegate" => "code.delegate",
             "web.fetch" => "web.fetch",
             "system.open_url"
@@ -179,7 +183,7 @@ fn is_workspace_skill(skill_id: &str) -> bool {
 }
 
 fn require_batch_approval(action: &SimulatedAction, decision: Decision) -> Decision {
-    if matches!(action, SimulatedAction::Productivity { skill_id, .. } if matches!(skill_id.as_str(), "hostinger.vps_start" | "hostinger.vps_stop" | "hostinger.vps_restart" | "hostinger.docker_list" | "hostinger.docker_start" | "hostinger.docker_stop" | "hostinger.docker_restart" | "hostinger.docker_deploy" | "hostinger.docker_remove" | "hostinger.firewall_create" | "hostinger.firewall_rule_create" | "hostinger.firewall_activate" | "hostinger.firewall_deactivate" | "hostinger.firewall_delete" | "hostinger.firewall_rule_delete"))
+    if matches!(action, SimulatedAction::Productivity { skill_id, .. } if matches!(skill_id.as_str(), "hostinger.vps_start" | "hostinger.vps_stop" | "hostinger.vps_restart" | "hostinger.docker_list" | "hostinger.docker_start" | "hostinger.docker_stop" | "hostinger.docker_restart" | "hostinger.docker_deploy" | "hostinger.docker_remove" | "hostinger.firewall_create" | "hostinger.firewall_rule_create" | "hostinger.firewall_activate" | "hostinger.firewall_deactivate" | "hostinger.firewall_delete" | "hostinger.firewall_rule_delete" | "hostinger.backup_restore" | "hostinger.recovery_start" | "hostinger.recovery_stop"))
         && matches!(decision, Decision::Allow(_))
     {
         Decision::AskUser(
@@ -257,6 +261,15 @@ fn required_confirmation(action: &SimulatedAction) -> Option<(String, &'static s
                     "Para confirmar a remoção da regra, digite exatamente",
                 )
             }),
+        "hostinger.backup_restore" => params
+            .get("vm_name")
+            .and_then(serde_json::Value::as_str)
+            .map(|name| {
+                (
+                    name.to_owned(),
+                    "Para confirmar a restauração, digite exatamente o nome da VPS",
+                )
+            }),
         "hostinger.firewall_rule_create"
             if params
                 .get("source_cidr")
@@ -280,7 +293,7 @@ fn validate_required_confirmation(
     action: &SimulatedAction,
     supplied: Option<&str>,
 ) -> Result<(), String> {
-    if matches!(action, SimulatedAction::Productivity { skill_id, .. } if matches!(skill_id.as_str(), "hostinger.docker_remove" | "hostinger.firewall_delete" | "hostinger.firewall_rule_delete"))
+    if matches!(action, SimulatedAction::Productivity { skill_id, .. } if matches!(skill_id.as_str(), "hostinger.docker_remove" | "hostinger.firewall_delete" | "hostinger.firewall_rule_delete" | "hostinger.backup_restore"))
         && required_confirmation(action).is_none()
     {
         return Err("O nome a confirmar está ausente nos parâmetros da ação.".into());
@@ -814,6 +827,10 @@ pub(super) fn summary(action: &SimulatedAction) -> String {
                     | "hostinger.firewall_delete"
                     | "hostinger.firewall_rule_delete"
                     | "hostinger.ssh_keys_list"
+                    | "hostinger.backup_list"
+                    | "hostinger.backup_restore"
+                    | "hostinger.recovery_start"
+                    | "hostinger.recovery_stop"
             ) =>
         {
             crate::hostinger::preview_skill(skill_id, params).unwrap_or_else(|_| skill_id.clone())
@@ -2163,6 +2180,49 @@ mod batch_approval_tests {
                 skill_id: skill_id.into(),
                 params,
             };
+            for mode in [
+                Mode::SemprePerguntar,
+                Mode::AprovarPorMim,
+                Mode::ControleTotal,
+            ] {
+                let decision = policy::decide(
+                    mode,
+                    Risk::EscritaReversivel,
+                    &Origin::User,
+                    false,
+                    false,
+                    true,
+                );
+                assert!(
+                    matches!(
+                        require_batch_approval(&action, decision),
+                        Decision::AskUser(_)
+                    ),
+                    "{skill_id} {mode:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn backup_restore_requires_machine_name_and_recovery_mode_always_asks() {
+        let restore = SimulatedAction::Productivity {
+            skill_id: "hostinger.backup_restore".into(),
+            params: serde_json::json!({"vm_name":"prod-vps","vm_id":42,"backup_id":325,"backup_created_at":"2025-02-27T11:54:22Z"}),
+        };
+        assert!(validate_required_confirmation(&restore, None).is_err());
+        assert!(validate_required_confirmation(&restore, Some("other-vps")).is_err());
+        assert!(validate_required_confirmation(&restore, Some("prod-vps")).is_ok());
+        assert!(summary(&restore).contains("Todos os dados atuais serão substituídos"));
+        assert!(summary(&restore).contains("não tem desfazer"));
+
+        for skill_id in ["hostinger.recovery_start", "hostinger.recovery_stop"] {
+            let action = SimulatedAction::Productivity {
+                skill_id: skill_id.into(),
+                params: serde_json::json!({"vm_name":"prod-vps","vm_id":42}),
+            };
+            assert_eq!(action_metadata(&action).1, Risk::EscritaReversivel);
+            assert!(summary(&action).contains("sistema normal não sobe"));
             for mode in [
                 Mode::SemprePerguntar,
                 Mode::AprovarPorMim,

@@ -14,6 +14,7 @@ pub(crate) struct HostingerState {
     approved_vms: Mutex<Vec<ApprovedVm>>,
     approved_projects: Mutex<HashMap<i64, Vec<String>>>,
     approved_firewalls: Mutex<Vec<ApprovedFirewall>>,
+    approved_backups: Mutex<HashMap<i64, Vec<ApprovedBackup>>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -33,6 +34,12 @@ struct ApprovedFirewall {
 struct ApprovedFirewallRule {
     id: i64,
     name: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ApprovedBackup {
+    id: i64,
+    created_at: String,
 }
 
 const API_BASE: &str = "https://developers.hostinger.com/";
@@ -509,6 +516,9 @@ fn clear_vms(app: &tauri::AppHandle) {
         if let Ok(mut projects) = state.approved_projects.lock() {
             projects.clear();
         }
+        if let Ok(mut backups) = state.approved_backups.lock() {
+            backups.clear();
+        }
     }
 }
 
@@ -529,12 +539,123 @@ fn resolve_approved_vm(vms: &[ApprovedVm], name: &str) -> Result<ApprovedVm, Str
     }
 }
 
+fn backups_from(value: &Value) -> Vec<ApprovedBackup> {
+    value
+        .get("data")
+        .and_then(Value::as_array)
+        .or_else(|| value.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|backup| {
+            let id = backup.get("id")?.as_i64().filter(|id| *id > 0)?;
+            let created_at = backup.get("created_at")?.as_str()?;
+            if created_at.is_empty()
+                || created_at.len() > 64
+                || created_at.chars().any(char::is_control)
+            {
+                return None;
+            }
+            Some(ApprovedBackup {
+                id,
+                created_at: created_at.to_owned(),
+            })
+        })
+        .take(MAX_COLLECTION_ITEMS)
+        .collect()
+}
+
+fn remember_backups(app: &tauri::AppHandle, vm_id: i64, value: &Value) -> Result<(), String> {
+    validate_vm_id(vm_id)?;
+    let backups = backups_from(value);
+    app_state(app)?
+        .approved_backups
+        .lock()
+        .map_err(|_| "Não foi possível atualizar a lista local de backups.".to_string())?
+        .insert(vm_id, backups);
+    Ok(())
+}
+
+fn resolve_approved_backup<'a>(
+    backups: &'a HashMap<i64, Vec<ApprovedBackup>>,
+    vm_id: i64,
+    created_at: &str,
+) -> Result<&'a ApprovedBackup, String> {
+    if created_at.is_empty() || created_at.len() > 64 || created_at.chars().any(char::is_control) {
+        return Err("Informe a data exata de um backup listado para esta VPS.".into());
+    }
+    let matching = backups
+        .get(&vm_id)
+        .into_iter()
+        .flatten()
+        .filter(|backup| backup.created_at == created_at)
+        .collect::<Vec<_>>();
+    match matching.as_slice() {
+        [backup] => Ok(*backup),
+        [] => Err("Esse backup não aparece na lista consultada para esta VPS.".into()),
+        _ => Err("Há backups com a mesma data; atualize a lista antes de restaurar.".into()),
+    }
+}
+
 pub(crate) fn prepare_skill_params(
     app: &tauri::AppHandle,
     skill_id: &str,
     mut params: Value,
 ) -> Result<Value, String> {
     if !skill_id.starts_with("hostinger.") {
+        return Ok(params);
+    }
+    if matches!(
+        skill_id,
+        "hostinger.backup_list"
+            | "hostinger.backup_restore"
+            | "hostinger.recovery_start"
+            | "hostinger.recovery_stop"
+    ) {
+        let allowed: &[&str] = if skill_id == "hostinger.backup_restore" {
+            &["vm_name", "backup_created_at"]
+        } else {
+            &["vm_name"]
+        };
+        let object = params
+            .as_object()
+            .ok_or("Os parâmetros da habilidade são inválidos.")?;
+        if object.len() != allowed.len()
+            || object.keys().any(|key| !allowed.contains(&key.as_str()))
+        {
+            return Err("Os parâmetros da habilidade Hostinger são inválidos.".into());
+        }
+        let name = params
+            .get("vm_name")
+            .and_then(Value::as_str)
+            .ok_or("Informe o nome da VPS consultada.")?;
+        let state = app_state(app)?;
+        let vms = state
+            .approved_vms
+            .lock()
+            .map_err(|_| "Não foi possível consultar a lista local de VPS.".to_string())?;
+        let vm = resolve_approved_vm(&vms, name)?;
+        let vm_id = vm.id;
+        drop(vms);
+        let backup_id = if skill_id == "hostinger.backup_restore" {
+            let created_at = params
+                .get("backup_created_at")
+                .and_then(Value::as_str)
+                .ok_or("Informe a data do backup listado.")?;
+            let backups = state
+                .approved_backups
+                .lock()
+                .map_err(|_| "Não foi possível consultar a lista local de backups.".to_string())?;
+            Some(resolve_approved_backup(&backups, vm_id, created_at)?.id)
+        } else {
+            None
+        };
+        let object = params
+            .as_object_mut()
+            .ok_or("Os parâmetros da habilidade são inválidos.")?;
+        object.insert("vm_id".into(), Value::from(vm_id));
+        if let Some(backup_id) = backup_id {
+            object.insert("backup_id".into(), Value::from(backup_id));
+        }
         return Ok(params);
     }
     if skill_id == "hostinger.firewall_list" {
@@ -773,10 +894,60 @@ pub(crate) fn validate_action_against_catalog(
             | "hostinger.firewall_delete"
             | "hostinger.firewall_rule_delete"
             | "hostinger.ssh_keys_list"
+            | "hostinger.backup_list"
+            | "hostinger.backup_restore"
+            | "hostinger.recovery_start"
+            | "hostinger.recovery_stop"
     ) {
         return Ok(());
     }
     if skill_id == "hostinger.firewall_list" || skill_id == "hostinger.firewall_create" {
+        return Ok(());
+    }
+    if matches!(
+        skill_id.as_str(),
+        "hostinger.backup_list"
+            | "hostinger.backup_restore"
+            | "hostinger.recovery_start"
+            | "hostinger.recovery_stop"
+    ) {
+        let vm_name = params
+            .get("vm_name")
+            .and_then(Value::as_str)
+            .ok_or("Informe o nome da VPS consultada.")?;
+        let vm_id = params
+            .get("vm_id")
+            .and_then(Value::as_i64)
+            .ok_or("A VPS não foi confirmada pela lista consultada.")?;
+        let state = app_state(app)?;
+        let vms = state
+            .approved_vms
+            .lock()
+            .map_err(|_| "Não foi possível consultar a lista local de VPS.".to_string())?;
+        if resolve_approved_vm(&vms, vm_name)?.id != vm_id {
+            return Err("O identificador não corresponde à VPS da lista consultada.".into());
+        }
+        drop(vms);
+        if skill_id == "hostinger.backup_restore" {
+            let created_at = params
+                .get("backup_created_at")
+                .and_then(Value::as_str)
+                .ok_or("Informe a data do backup listado.")?;
+            let backup_id = params
+                .get("backup_id")
+                .and_then(Value::as_i64)
+                .ok_or("O backup não foi confirmado pela lista consultada.")?;
+            let backups = state
+                .approved_backups
+                .lock()
+                .map_err(|_| "Não foi possível consultar a lista local de backups.".to_string())?;
+            if resolve_approved_backup(&backups, vm_id, created_at)?.id != backup_id {
+                return Err(
+                    "Esse backup pertence a outra VPS ou não corresponde à lista consultada."
+                        .into(),
+                );
+            }
+        }
         return Ok(());
     }
     if skill_id.starts_with("hostinger.firewall_") || skill_id == "hostinger.ssh_keys_list" {
@@ -1358,6 +1529,31 @@ fn resolve_approved_firewall_rule(
 pub(crate) fn preview_skill(skill_id: &str, params: &Value) -> Result<String, String> {
     if matches!(
         skill_id,
+        "hostinger.backup_list"
+            | "hostinger.backup_restore"
+            | "hostinger.recovery_start"
+            | "hostinger.recovery_stop"
+    ) {
+        let vm_name = params
+            .get("vm_name")
+            .and_then(Value::as_str)
+            .ok_or("Informe o nome da VPS.")?;
+        let vm_id = params
+            .get("vm_id")
+            .and_then(Value::as_i64)
+            .ok_or("A VPS não foi confirmada pela lista consultada.")?;
+        return Ok(match skill_id {
+            "hostinger.backup_list" => format!("Listar backups disponíveis da VPS ‘{}’ (identificador {vm_id}).", display_vm_name(vm_name)),
+            "hostinger.backup_restore" => {
+                let date = params.get("backup_created_at").and_then(Value::as_str).ok_or("A data do backup não foi confirmada pela lista.")?;
+                format!("RESTAURAR backup de {date} na VPS ‘{}’ (identificador {vm_id}). Todos os dados atuais serão substituídos. Esta ação é irreversível, não tem desfazer e exige digitar o nome exato da VPS.", display_vm_name(vm_name))
+            }
+            "hostinger.recovery_start" => format!("Iniciar o modo de recuperação da VPS ‘{}’ (identificador {vm_id}). Enquanto o modo estiver ativo, o sistema normal não inicia.", display_vm_name(vm_name)),
+            _ => format!("Parar o modo de recuperação da VPS ‘{}’ (identificador {vm_id}) e retornar à operação normal. Enquanto o modo estiver ativo, o sistema normal não sobe; esta ação também exige aprovação.", display_vm_name(vm_name)),
+        });
+    }
+    if matches!(
+        skill_id,
         "hostinger.firewall_list" | "hostinger.firewall_details" | "hostinger.ssh_keys_list"
     ) {
         return Ok(match skill_id {
@@ -1464,8 +1660,12 @@ pub(crate) async fn execute_skill(
             | "hostinger.firewall_delete"
             | "hostinger.firewall_rule_delete"
             | "hostinger.ssh_keys_list"
+            | "hostinger.backup_list"
+            | "hostinger.backup_restore"
+            | "hostinger.recovery_start"
+            | "hostinger.recovery_stop"
     ) {
-        return execute_firewall_skill(app, skill_id, params).await;
+        return execute_cloud_skill(app, skill_id, params).await;
     }
     let vm_id = params
         .get("vm_id")
@@ -1601,7 +1801,7 @@ pub(crate) async fn execute_skill(
     .map_err(|_| "Não foi possível preparar o resultado da ação da Hostinger.".into())
 }
 
-async fn execute_firewall_skill(
+async fn execute_cloud_skill(
     app: &tauri::AppHandle,
     skill_id: &str,
     params: &Value,
@@ -1611,6 +1811,56 @@ async fn execute_firewall_skill(
     let firewall_id = params.get("firewall_id").and_then(Value::as_i64);
     let vm_id = params.get("vm_id").and_then(Value::as_i64);
     let value = match skill_id {
+        "hostinger.backup_list" => {
+            let id = vm_id.ok_or("A VPS não foi confirmada pela lista consultada.")?;
+            let value: Value = request_at(
+                &client,
+                api_endpoint(&format!("api/vps/v1/virtual-machines/{id}/backups?page=1"))?,
+                Some(&token),
+            )
+            .await?;
+            remember_backups(app, id, &value)?;
+            value
+        }
+        "hostinger.backup_restore" => {
+            let id = vm_id.ok_or("A VPS não foi confirmada pela lista consultada.")?;
+            let backup_id = params
+                .get("backup_id")
+                .and_then(Value::as_i64)
+                .ok_or("O backup não foi confirmado pela lista consultada.")?;
+            run_action_paths_with(
+                &client,
+                API_BASE,
+                Some(&token),
+                &format!("api/vps/v1/virtual-machines/{id}/backups/{backup_id}/restore"),
+                &format!("api/vps/v1/virtual-machines/{id}/actions"),
+                reqwest::Method::POST,
+                None,
+                ACTION_MAX_WAIT,
+                ACTION_POLL_INTERVAL,
+            )
+            .await?
+        }
+        "hostinger.recovery_start" | "hostinger.recovery_stop" => {
+            let id = vm_id.ok_or("A VPS não foi confirmada pela lista consultada.")?;
+            let method = if skill_id == "hostinger.recovery_start" {
+                reqwest::Method::POST
+            } else {
+                reqwest::Method::DELETE
+            };
+            run_action_paths_with(
+                &client,
+                API_BASE,
+                Some(&token),
+                &format!("api/vps/v1/virtual-machines/{id}/recovery"),
+                &format!("api/vps/v1/virtual-machines/{id}/actions"),
+                method,
+                None,
+                ACTION_MAX_WAIT,
+                ACTION_POLL_INTERVAL,
+            )
+            .await?
+        }
         "hostinger.firewall_list" => {
             let value: Value = request_action_at(
                 &client,
@@ -2341,6 +2591,47 @@ mod tests {
             9
         );
         assert!(resolve_approved_firewall_rule(&firewall, "regra inventada").is_err());
+    }
+
+    #[test]
+    fn backup_resolution_is_bound_to_the_vm_that_was_listed() {
+        let response = serde_json::json!({"data":[
+            {"id":325,"created_at":"2025-02-27T11:54:22Z","size":512},
+            {"id":326,"created_at":"2025-02-28T11:54:22Z","size":1024}
+        ],"meta":{"current_page":1}});
+        let parsed = backups_from(&response);
+        assert_eq!(parsed.len(), 2);
+        let caches = HashMap::from([(42, parsed)]);
+        assert_eq!(
+            resolve_approved_backup(&caches, 42, "2025-02-27T11:54:22Z")
+                .unwrap()
+                .id,
+            325
+        );
+        assert!(resolve_approved_backup(&caches, 43, "2025-02-27T11:54:22Z").is_err());
+        assert!(resolve_approved_backup(&caches, 42, "2025-01-01T00:00:00Z").is_err());
+    }
+
+    #[test]
+    fn backup_restore_preview_names_date_and_irreversible_overwrite() {
+        let preview = preview_skill(
+            "hostinger.backup_restore",
+            &serde_json::json!({
+                "vm_name":"web-vps", "vm_id":42, "backup_id":325,
+                "backup_created_at":"2025-02-27T11:54:22Z"
+            }),
+        )
+        .unwrap();
+        assert!(preview.contains("2025-02-27T11:54:22Z"));
+        assert!(preview.contains("web-vps"));
+        assert!(preview.contains("Todos os dados atuais serão substituídos"));
+        assert!(preview.contains("não tem desfazer"));
+        let recovery = preview_skill(
+            "hostinger.recovery_start",
+            &serde_json::json!({"vm_name":"web-vps", "vm_id":42}),
+        )
+        .unwrap();
+        assert!(recovery.contains("sistema normal não inicia"));
     }
 
     #[test]

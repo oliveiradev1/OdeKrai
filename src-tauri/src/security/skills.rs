@@ -287,6 +287,10 @@ fn skill_metadata(
         | "hostinger.firewall_delete"
         | "hostinger.firewall_rule_delete"
         | "hostinger.ssh_keys_list" => (SkillFamily::Nuvem, "cloud"),
+        "hostinger.backup_list"
+        | "hostinger.backup_restore"
+        | "hostinger.recovery_start"
+        | "hostinger.recovery_stop" => (SkillFamily::Nuvem, "cloud"),
         _ => (SkillFamily::Computador, "desktop"),
     };
     let examples = match id {
@@ -320,6 +324,11 @@ impl Skill {
             | "hostinger.firewall_deactivate" => return Ok(Risk::EscritaReversivel),
             "hostinger.firewall_delete" | "hostinger.firewall_rule_delete" => {
                 return Ok(Risk::DestrutivoFinanceiro)
+            }
+            "hostinger.backup_list" => return Ok(Risk::Leitura),
+            "hostinger.backup_restore" => return Ok(Risk::DestrutivoFinanceiro),
+            "hostinger.recovery_start" | "hostinger.recovery_stop" => {
+                return Ok(Risk::EscritaReversivel)
             }
             _ => {}
         }
@@ -490,6 +499,10 @@ fn action_id(action: &SimulatedAction) -> &str {
             | "hostinger.firewall_delete"
             | "hostinger.firewall_rule_delete"
             | "hostinger.ssh_keys_list" => skill_id,
+            "hostinger.backup_list"
+            | "hostinger.backup_restore"
+            | "hostinger.recovery_start"
+            | "hostinger.recovery_stop" => skill_id,
             _ => "",
         },
     }
@@ -582,6 +595,10 @@ fn parse_action(id: &str, params: &Value) -> Result<SimulatedAction, String> {
             | "hostinger.firewall_delete"
             | "hostinger.firewall_rule_delete"
             | "hostinger.ssh_keys_list"
+            | "hostinger.backup_list"
+            | "hostinger.backup_restore"
+            | "hostinger.recovery_start"
+            | "hostinger.recovery_stop"
             | "web.fetch"
     ) {
         if id == "code.delegate" {
@@ -977,6 +994,10 @@ pub fn registry() -> Vec<Skill> {
         ("hostinger.firewall_deactivate", "Desativar firewall na VPS", "Desativa firewall numa VPS; sempre exige aprovação.", "Desative um firewall listado em uma VPS também listada; a VPS ficará sem essa proteção.", json!({"type":"object","properties":{"vm_name":{"type":"string","minLength":1,"maxLength":512},"firewall_name":{"type":"string","minLength":1,"maxLength":128}},"required":["vm_name","firewall_name"],"additionalProperties":false}), ResultTrust::Untrusted),
         ("hostinger.firewall_delete", "Remover firewall", "Remove firewall; sempre exige aprovação e confirmação digitando o nome.", "Remova um firewall consultado; será necessário digitar o nome exato na janela nativa de aprovação.", json!({"type":"object","properties":{"firewall_name":{"type":"string","minLength":1,"maxLength":128}},"required":["firewall_name"],"additionalProperties":false}), ResultTrust::Untrusted),
         ("hostinger.firewall_rule_delete", "Remover regra de firewall", "Remove regra; sempre exige aprovação e confirmação digitando o nome.", "Remova uma regra consultada; será necessário digitar o nome exato da regra na janela nativa de aprovação.", json!({"type":"object","properties":{"firewall_name":{"type":"string","minLength":1,"maxLength":128},"rule_name":{"type":"string","minLength":1,"maxLength":512}},"required":["firewall_name","rule_name"],"additionalProperties":false}), ResultTrust::Untrusted),
+        ("hostinger.backup_list", "Listar backups da Hostinger", "Lista backups de uma VPS vista nesta sessão; dados externos não confiáveis.", "Liste backups usando somente o nome exato da VPS consultada. Para restaurar, escolha uma data exata retornada por esta lista.", json!({"type":"object","properties":{"vm_name":{"type":"string","minLength":1,"maxLength":512}},"required":["vm_name"],"additionalProperties":false}), ResultTrust::Untrusted),
+        ("hostinger.backup_restore", "Restaurar backup da Hostinger", "Substitui todos os dados atuais da VPS; sempre exige aprovação e confirmação digitando o nome da máquina. Não há desfazer.", "Restaure somente uma data retornada pela lista de backups desta VPS. Todos os dados atuais serão substituídos, não há desfazer e a aprovação exige digitar o nome da máquina.", json!({"type":"object","properties":{"vm_name":{"type":"string","minLength":1,"maxLength":512},"backup_created_at":{"type":"string","minLength":1,"maxLength":64}},"required":["vm_name","backup_created_at"],"additionalProperties":false}), ResultTrust::Untrusted),
+        ("hostinger.recovery_start", "Iniciar modo de recuperação da Hostinger", "Inicia modo de recuperação e exige aprovação em qualquer modo de permissão.", "Inicie o modo de recuperação da VPS consultada. Enquanto estiver ativo, o sistema normal não sobe; sempre exige aprovação.", json!({"type":"object","properties":{"vm_name":{"type":"string","minLength":1,"maxLength":512}},"required":["vm_name"],"additionalProperties":false}), ResultTrust::Untrusted),
+        ("hostinger.recovery_stop", "Parar modo de recuperação da Hostinger", "Encerra modo de recuperação e exige aprovação em qualquer modo de permissão.", "Encerre o modo de recuperação da VPS consultada e retorne ao sistema normal. Enquanto ativo, o modo impede a inicialização normal. Sempre exige aprovação.", json!({"type":"object","properties":{"vm_name":{"type":"string","minLength":1,"maxLength":512}},"required":["vm_name"],"additionalProperties":false}), ResultTrust::Untrusted),
     ];
     rows.into_iter()
         .map(
@@ -1077,6 +1098,16 @@ fn action_example(id: &str) -> SimulatedAction {
         "hostinger.firewall_rule_delete" => SimulatedAction::Productivity {
             skill_id: id.into(),
             params: json!({"firewall_name":"Firewall de teste","firewall_id":4,"rule_name":"accept TCP 443 de 192.0.2.0/24","rule_id":2}),
+        },
+        "hostinger.backup_list" | "hostinger.recovery_start" | "hostinger.recovery_stop" => {
+            SimulatedAction::Productivity {
+                skill_id: id.into(),
+                params: json!({"vm_name":"VPS de teste","vm_id":42}),
+            }
+        }
+        "hostinger.backup_restore" => SimulatedAction::Productivity {
+            skill_id: id.into(),
+            params: json!({"vm_name":"VPS de teste","vm_id":42,"backup_created_at":"2025-02-27T11:54:22Z","backup_id":325}),
         },
         "plan.propose" => SimulatedAction::Productivity {
             skill_id: id.into(),
@@ -2531,6 +2562,23 @@ mod tests {
             skill.id,
             "hostinger.ssh_keys_create" | "hostinger.ssh_keys_update" | "hostinger.ssh_keys_delete"
         )));
+    }
+
+    #[test]
+    fn hostinger_backup_and_recovery_skills_have_fixed_risks() {
+        let cases = [
+            ("hostinger.backup_list", Risk::Leitura),
+            ("hostinger.backup_restore", Risk::DestrutivoFinanceiro),
+            ("hostinger.recovery_start", Risk::EscritaReversivel),
+            ("hostinger.recovery_stop", Risk::EscritaReversivel),
+        ];
+        let skills = registry();
+        for (id, risk) in cases {
+            let skill = skills.iter().find(|skill| skill.id == id).expect(id);
+            assert_eq!(skill.family, SkillFamily::Nuvem, "{id}");
+            assert_eq!(skill.result_trust, ResultTrust::Untrusted, "{id}");
+            assert_eq!(skill.risk(&json!({})).unwrap(), risk, "{id}");
+        }
     }
 
     #[test]

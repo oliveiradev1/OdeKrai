@@ -655,6 +655,8 @@ impl Tool for Productivity {
                         | "hostinger.firewall_rule_create"
                         | "hostinger.firewall_activate"
                         | "hostinger.firewall_deactivate"
+                        | "hostinger.recovery_start"
+                        | "hostinger.recovery_stop"
                 ) =>
             {
                 Risk::EscritaReversivel
@@ -689,6 +691,16 @@ impl Tool for Productivity {
                     skill_id.as_str(),
                     "hostinger.firewall_delete" | "hostinger.firewall_rule_delete"
                 ) =>
+            {
+                Risk::DestrutivoFinanceiro
+            }
+            SimulatedAction::Productivity { skill_id, .. }
+                if skill_id == "hostinger.backup_list" =>
+            {
+                Risk::Leitura
+            }
+            SimulatedAction::Productivity { skill_id, .. }
+                if skill_id == "hostinger.backup_restore" =>
             {
                 Risk::DestrutivoFinanceiro
             }
@@ -1829,6 +1841,65 @@ pub(super) fn validate_action(action: &SimulatedAction) -> Result<(), String> {
 
 fn validate_hostinger_skill(id: &str, params: &serde_json::Value) -> Result<(), String> {
     let object = params.as_object().ok_or("Parâmetros inválidos.")?;
+    if matches!(
+        id,
+        "hostinger.backup_list" | "hostinger.recovery_start" | "hostinger.recovery_stop"
+    ) {
+        if object.len() != 2
+            || object
+                .keys()
+                .any(|key| !["vm_name", "vm_id"].contains(&key.as_str()))
+        {
+            return Err("Os parâmetros da ação Hostinger não correspondem à habilidade.".into());
+        }
+        let name = object
+            .get("vm_name")
+            .and_then(serde_json::Value::as_str)
+            .ok_or("Informe o nome da VPS.")?;
+        let vm_id = object
+            .get("vm_id")
+            .and_then(serde_json::Value::as_i64)
+            .ok_or("A VPS não foi confirmada pela lista consultada.")?;
+        if name.trim().is_empty() || name.chars().count() > 512 || vm_id <= 0 {
+            return Err("O nome ou identificador da VPS é inválido.".into());
+        }
+        return Ok(());
+    }
+    if id == "hostinger.backup_restore" {
+        if object.len() != 4
+            || object.keys().any(|key| {
+                !["vm_name", "vm_id", "backup_id", "backup_created_at"].contains(&key.as_str())
+            })
+        {
+            return Err("Os parâmetros da restauração não correspondem à habilidade.".into());
+        }
+        let name = object
+            .get("vm_name")
+            .and_then(serde_json::Value::as_str)
+            .ok_or("Informe o nome da VPS.")?;
+        let vm_id = object
+            .get("vm_id")
+            .and_then(serde_json::Value::as_i64)
+            .ok_or("A VPS não foi confirmada pela lista consultada.")?;
+        let backup_id = object
+            .get("backup_id")
+            .and_then(serde_json::Value::as_i64)
+            .ok_or("O backup não foi confirmado pela lista consultada.")?;
+        let created_at = object
+            .get("backup_created_at")
+            .and_then(serde_json::Value::as_str)
+            .ok_or("Informe a data do backup consultado.")?;
+        if name.trim().is_empty()
+            || name.chars().count() > 512
+            || vm_id <= 0
+            || backup_id <= 0
+            || created_at.trim().is_empty()
+            || created_at.len() > 64
+        {
+            return Err("Os dados do backup ou da VPS são inválidos.".into());
+        }
+        return Ok(());
+    }
     if id == "hostinger.firewall_list" {
         return if object.is_empty() {
             Ok(())
