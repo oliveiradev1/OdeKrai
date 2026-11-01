@@ -288,6 +288,49 @@ describe('renderização das telas principais', () => {
     ).toBeTruthy();
   });
 
+  it('Meu computador trata pasta de modelos ainda inexistente como estado vazio sem erro global', async () => {
+    const missingFolder = '/app-data/models-not-created-yet';
+    localStorage.setItem('odekrai.modelFolder', missingFolder);
+    tauri.isTauri.mockReturnValue(true);
+    tauri.invoke.mockImplementation(async (command: string) => {
+      if (command === 'get_hardware_profile') {
+        return {
+          total_ram_bytes: 0,
+          available_ram_bytes: 0,
+          models_free_bytes: 0,
+          cpu_cores: 0,
+          avx: false,
+          avx2: false,
+          avx512: false,
+          adapters: [],
+          warnings: [],
+        };
+      }
+      if (command === 'inspect_local_models') return [];
+      return undefined;
+    });
+    const dispatch = vi.spyOn(window, 'dispatchEvent').mockImplementation(() => true);
+
+    render(<ComputerScreen />);
+    await waitFor(() =>
+      expect(tauri.invoke).toHaveBeenCalledWith('inspect_local_models', {
+        destination: missingFolder,
+      }),
+    );
+    await waitFor(() =>
+      expect(tauri.invoke).toHaveBeenCalledWith(
+        'record_diagnostic_event',
+        expect.objectContaining({
+          command: 'inspect_local_models',
+          event: 'startup_command_finish',
+          outcome: 'ok',
+        }),
+      ),
+    );
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(dispatch.mock.calls.some(([event]) => event instanceof ErrorEvent)).toBe(false);
+  });
+
   it.each(SETTINGS_MENU.map(({ id, title }) => [id, title]))(
     'Configurações: seção %s monta na região %s sem lançar erro',
     async (section, title) => {
