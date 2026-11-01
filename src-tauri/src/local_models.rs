@@ -502,6 +502,9 @@ pub async fn download_local_model(
     if let Ok(mut active) = state.active.lock() {
         active.remove(&model_id);
     }
+    if result.is_ok() {
+        crate::diagnostics::log_local_model_download_completed(&app);
+    }
     result
 }
 

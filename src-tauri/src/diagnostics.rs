@@ -118,6 +118,61 @@ pub fn log_event(app: &AppHandle, event: &str, command: &str, outcome: &str, dur
     let _ = write_log(&logs.join("diagnostic.log"), "frontend_event", &fields);
 }
 
+#[derive(Clone, Copy)]
+pub enum LocalModelProbeResult {
+    Found,
+    Empty,
+    Unavailable,
+    InvalidResponse,
+}
+
+impl LocalModelProbeResult {
+    fn as_token(self) -> &'static str {
+        match self {
+            Self::Found => "found",
+            Self::Empty => "empty",
+            Self::Unavailable => "unavailable",
+            Self::InvalidResponse => "invalid_response",
+        }
+    }
+}
+
+pub fn log_local_model_download_completed(app: &AppHandle) {
+    let Ok(logs) = app.path().app_data_dir().map(|path| path.join("logs")) else {
+        return;
+    };
+    let fields = format_local_model_download_event();
+    let _ = write_log(&logs.join("diagnostic.log"), "frontend_event", &fields);
+}
+
+pub fn log_local_model_server_probe(
+    app: &AppHandle,
+    port: u16,
+    result: LocalModelProbeResult,
+    model_count: usize,
+) {
+    let Ok(logs) = app.path().app_data_dir().map(|path| path.join("logs")) else {
+        return;
+    };
+    let fields = format_local_model_probe_event(port, result, model_count);
+    let _ = write_log(&logs.join("diagnostic.log"), "frontend_event", &fields);
+}
+
+fn format_local_model_download_event() -> String {
+    "event=local_model_download_completed command=download_local_model result=ok".into()
+}
+
+fn format_local_model_probe_event(
+    port: u16,
+    result: LocalModelProbeResult,
+    model_count: usize,
+) -> String {
+    format!(
+        "event=local_model_server_probe command=discover_local_models port={port} result={} model_count={model_count}",
+        result.as_token()
+    )
+}
+
 pub fn log_agent_error(app: &AppHandle, kind: &str, technical_details: &str) {
     let Ok(logs) = app.path().app_data_dir().map(|path| path.join("logs")) else {
         return;
@@ -515,6 +570,33 @@ mod tests {
     fn safe_tokens_remove_payload_characters_and_limit_length() {
         assert_eq!(safe_token("get_profile: segredo"), "get_profile__segredo");
         assert_eq!(safe_token(&"x".repeat(100)).len(), 64);
+    }
+
+    #[test]
+    fn local_model_diagnostic_events_include_probe_counts_without_user_paths() {
+        let download = format_local_model_download_event();
+        let probe = format_local_model_probe_event(9931, LocalModelProbeResult::Found, 2);
+        assert!(download.contains("event=local_model_download_completed"));
+        assert!(probe.contains("port=9931 result=found model_count=2"));
+        let path = std::env::temp_dir().join(format!(
+            "odekrai-local-model-diagnostics-{}-{}.log",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        for event in [&download, &probe] {
+            write_log(&path, "frontend_event", event).unwrap();
+        }
+        let contents = fs::read_to_string(&path).unwrap();
+        assert_eq!(contents.lines().count(), 2);
+        assert!(contents.contains("event=local_model_download_completed"));
+        assert!(contents.contains("port=9931 result=found model_count=2"));
+        assert!(!contents.contains(r"C:\Users\"));
+        assert!(!contents.contains("/home/"));
+        assert!(!contents.contains("modelo.gguf"));
+        fs::remove_file(path).unwrap();
     }
 
     #[test]
