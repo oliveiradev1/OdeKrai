@@ -5,21 +5,29 @@ controle de energia de VPS e operações limitadas de projetos Docker mediante a
 operações mutáveis e financeiras permanecem fora de escopo. Risco e confirmação por nome são
 avaliações do OdeKrai, não campos fornecidos pela Hostinger.
 
-Pesquisa realizada em 2026-11-01. O OpenAPI declara `openapi: 3.0.0`, título `Hostinger API`,
-versão `2.6.1` e servidor de produção `https://developers.hostinger.com`. O documento descreve
-autenticação Bearer e especifica parâmetros, corpos e respostas por operação.
+Documentação verificada em 2026-11-01. A página oficial de referência indicava última atualização
+em 2026-10-27. O OpenAPI oficial, consultado no mesmo dia, declara `openapi: 3.0.0`, título
+`Hostinger API`, versão `2.6.1` e servidor de produção `https://developers.hostinger.com`. O
+documento descreve autenticação Bearer e especifica parâmetros, corpos e respostas por operação.
 
-## Fontes e limitação de acesso
+Este arquivo registra o contrato da API e distingue esse contrato das habilidades realmente
+expostas pelo OdeKrai. Hoje o app implementa leituras de VPS, data centers, templates, ações recentes,
+backups, projetos Docker, firewalls/regras e chaves SSH públicas; oferece ações aprovadas de VPS,
+Docker, firewall e recuperação/restauração de backup. Criação/compra de VPS, pagamento, exclusão de
+VPS, reinstalação de sistema, restauração de snapshot, alteração de chave SSH e shell genérico não
+estão disponíveis no OdeKrai.
 
-- [Documentação oficial para desenvolvedores](https://developers.hostinger.com/): **NÃO
-  VERIFICADO nesta pesquisa**. O acesso ao host falhou no túnel de rede do ambiente com
-  `403 Forbidden`; não foi possível confirmar o texto das páginas HTML.
+## Fontes e data da verificação
+
+- [Página oficial da referência da API](https://developers.hostinger.com/), que atualmente redireciona
+  para [API Reference Overview](https://docs.hostinger.com/api-reference/overview): verificada em
+  2026-11-01. A página informa “Last updated: October 27, 2026” e que as páginas de endpoints são
+  geradas a partir do mesmo OpenAPI.
 - [OpenAPI oficial no repositório Hostinger/api](https://github.com/Hostinger/api/blob/main/openapi.json)
-  ([JSON bruto](https://raw.githubusercontent.com/Hostinger/api/main/openapi.json)): consultado
-  diretamente. As fontes da tabela indicam o `operationId` e o JSON Pointer correspondente dentro
-  de `paths` ou `components/schemas`.
-- A URL da branch `main` é mutável. O arquivo consultado declara versão 2.6.1; o hash de commit não
-  pôde ser confirmado porque a API do GitHub também não estava acessível pelo túnel.
+  ([JSON bruto](https://raw.githubusercontent.com/Hostinger/api/main/openapi.json)): verificado em
+  2026-11-01. Confirma a versão 2.6.1. As fontes da tabela indicam o `operationId` e o JSON Pointer
+  correspondente dentro de `paths` ou `components/schemas`.
+- A URL da branch `main` é mutável; esta verificação não fixa um hash de commit do OpenAPI.
 
 `virtualMachineId` e `backupId` são parâmetros de caminho inteiros obrigatórios. `date_from` e
 `date_to` são query parameters obrigatórios no formato `date-time`. Quando um corpo é listado como
