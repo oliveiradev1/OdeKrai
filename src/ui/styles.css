@@ -2261,8 +2261,43 @@ select:focus-visible {
   color: var(--color-text-muted);
 }
 .public-mcp-oauth-options,
-.public-mcp-oauth-guide {
+.public-mcp-oauth-guide,
+.public-mcp-token-guide,
+.public-mcp-token-manager {
   display: grid;
+  gap: var(--space-2);
+}
+.public-mcp-token-guide ul {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding-left: 1.25rem;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-12);
+}
+.public-mcp-token-manager {
+  border-top: 1px solid var(--color-border-subtle);
+  padding-top: var(--space-3);
+}
+.public-mcp-token-manager label {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-12);
+}
+.public-mcp-token-manager input {
+  width: 100%;
+  min-height: 36px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 7px 9px;
+  background: var(--color-surface-raised);
+  color: var(--color-text);
+}
+.public-mcp-token-manager small {
+  color: var(--color-text-muted);
+}
+.public-mcp-token-actions {
+  display: flex;
+  flex-wrap: wrap;
   gap: var(--space-2);
 }
 .public-mcp-oauth-guide ol {

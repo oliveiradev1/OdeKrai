@@ -438,6 +438,30 @@ fn set_env_with(
     vault.store(&server.id, key, value)
 }
 
+fn set_http_token_with(
+    server: &McpServer,
+    value: &str,
+    vault: &mut impl CredentialVault,
+) -> Result<(), String> {
+    if server.transport != "streamable_http" {
+        return Err("O servidor não usa transporte HTTP.".into());
+    }
+    if value.is_empty() || value.len() > 32_768 || value.chars().any(char::is_control) {
+        return Err("Informe um token Bearer válido.".into());
+    }
+    vault.store(&server.id, "http_bearer", value)
+}
+
+fn remove_http_token_with(
+    server: &McpServer,
+    vault: &mut impl CredentialVault,
+) -> Result<(), String> {
+    if server.transport != "streamable_http" {
+        return Err("O servidor não usa transporte HTTP.".into());
+    }
+    vault.erase(&server.id, "http_bearer")
+}
+
 fn remove(db: &Connection, server: &McpServer) -> Result<(), String> {
     remove_with(db, server, &mut WindowsVault)
 }
@@ -860,17 +884,7 @@ pub fn mcp_set_http_token(
 ) -> Result<(), String> {
     crate::require_main(&caller)?;
     let server = find(&crate::security::database(&app)?, &server_id)?;
-    if server.transport != "streamable_http" {
-        return Err("O servidor não usa transporte HTTP.".into());
-    }
-    if value.is_empty() || value.len() > 32_768 || value.chars().any(char::is_control) {
-        return Err("Informe um token Bearer válido.".into());
-    }
-    entry(&server_id, "http_bearer")?
-        .set_password(&value)
-        .map_err(|_| {
-            "Não foi possível salvar o token no Gerenciador de Credenciais do Windows.".to_string()
-        })?;
+    set_http_token_with(&server, &value, &mut WindowsVault)?;
     crate::mcp_oauth::remove(&server_id)?;
     runtime
         .1
@@ -882,6 +896,28 @@ pub fn mcp_set_http_token(
         .lock()
         .map_err(|_| "Estado MCP indisponível.".to_string())?
         .remove(&server_id);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn mcp_remove_http_token(
+    app: tauri::AppHandle,
+    caller: tauri::WebviewWindow,
+    server_id: String,
+    runtime: State<'_, McpRuntime>,
+) -> Result<(), String> {
+    crate::require_main(&caller)?;
+    let db = crate::security::database(&app)?;
+    let server = find(&db, &server_id)?;
+    set_enabled_internal(&app, &server_id, false)?;
+    runtime.remove_connection(&server_id)?;
+    runtime
+        .1
+        .lock()
+        .map_err(|_| "Estado OAuth MCP indisponível.".to_string())?
+        .remove(&server_id);
+    remove_http_token_with(&server, &mut WindowsVault)?;
+    let _ = app.emit("skills-updated", ());
     Ok(())
 }
 
@@ -1288,6 +1324,27 @@ mod tests {
         remove_with(&db, &server, &mut vault).unwrap();
         assert!(list(&db).unwrap().is_empty());
         assert!(vault.0.is_empty());
+    }
+
+    #[test]
+    fn salva_e_remove_token_http_sem_manter_uma_copia_no_registro() {
+        let mut server = server_for_catalog();
+        server.transport = "streamable_http".into();
+        server.endpoint = Some("https://mcp.example.org/mcp".into());
+        let mut vault = FakeVault::default();
+
+        set_http_token_with(&server, "github-pat-fixture", &mut vault).unwrap();
+        assert_eq!(
+            vault
+                .0
+                .get("fake:http_bearer")
+                .map(String::as_str),
+            Some("github-pat-fixture")
+        );
+        assert!(!format!("{:?}", server).contains("github-pat-fixture"));
+
+        remove_http_token_with(&server, &mut vault).unwrap();
+        assert!(!vault.0.contains_key("fake:http_bearer"));
     }
 
     #[derive(Default)]

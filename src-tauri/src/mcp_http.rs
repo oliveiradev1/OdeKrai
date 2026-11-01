@@ -268,8 +268,10 @@ fn parse_response(status: StatusCode, content_type: &str, bytes: &[u8]) -> Resul
             "O servidor MCP tentou redirecionar a conexão; redirecionamentos são recusados.".into(),
         );
     }
-    if status == StatusCode::UNAUTHORIZED {
-        return Err("O token do servidor MCP expirou ou é inválido.".into());
+    if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
+        return Err(
+            "O token foi recusado. Confira se ele tem as permissões e se não expirou.".into(),
+        );
     }
     if !status.is_success() {
         return Err(format!("O servidor MCP retornou HTTP {}.", status.as_u16()));
@@ -458,7 +460,24 @@ mod tests {
         )
         .tools_list()
         .unwrap_err();
+        assert_eq!(
+            error,
+            "O token foi recusado. Confira se ele tem as permissões e se não expirou."
+        );
         assert!(!error.contains("secret-token"));
+    }
+
+    #[test]
+    fn maps_401_and_403_to_the_same_safe_pat_message() {
+        for status in [StatusCode::UNAUTHORIZED, StatusCode::FORBIDDEN] {
+            let error = parse_response(status, "application/json", b"private response body")
+                .unwrap_err();
+            assert_eq!(
+                error,
+                "O token foi recusado. Confira se ele tem as permissões e se não expirou."
+            );
+            assert!(!error.contains("private response body"));
+        }
     }
 
     #[test]

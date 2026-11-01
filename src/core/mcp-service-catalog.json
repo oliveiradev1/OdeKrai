@@ -4,9 +4,18 @@
     "supplier": "GitHub",
     "documentationUrl": "https://docs.github.com/en/copilot/how-tos/copilot-in-your-ide/customize-copilot/extend-copilot-with-tools-and-context/set-up-the-github-mcp-server",
     "endpoint": "https://api.githubcopilot.com/mcp/",
-    "transport": "HTTP remoto (configuração oficial type=http)",
-    "authentication": "Token pessoal (PAT) como Bearer; OAuth 2.0 também existe para clientes com GitHub App/OAuth App próprio",
+    "transport": "HTTP com token Bearer (PAT)",
+    "authentication": "Token pessoal de acesso (PAT) como Bearer; prefira token fine-grained e limite o acesso aos repositórios necessários",
     "authenticationMethods": ["bearer"],
+    "tokenCreationUrl": "https://github.com/settings/personal-access-tokens/new",
+    "tokenPermissions": [
+      "Repositórios: selecione somente os repositórios necessários.",
+      "Metadata: Read (selecionada automaticamente pelo GitHub).",
+      "Contents: Read para ler arquivos e conteúdo dos repositórios.",
+      "Issues: Read para consultar issues.",
+      "Pull requests: Read para consultar pull requests.",
+      "Conceda permissões de escrita somente se quiser usar as ferramentas de escrita correspondentes; permissões adicionais dependem da ferramenta escolhida."
+    ],
     "status": "available_to_configure"
   },
   {

@@ -64,6 +64,8 @@ type SkillsCatalogViewProps = {
     clientId: string,
     scopes: string,
   ) => Promise<boolean>;
+  onSaveGitHubToken?: (server: PublicMcpServer & { id: string }, token: string) => Promise<boolean>;
+  onRemoveGitHubToken?: (server: PublicMcpServer & { id: string }) => Promise<boolean>;
   onTestPublicMcp?: (server: PublicMcpServer & { id: string }) => Promise<boolean>;
 };
 
@@ -123,6 +125,8 @@ export function SkillsCatalogView({
   mcpServers = [],
   mcpBusy = false,
   onConfigurePublicMcp,
+  onSaveGitHubToken,
+  onRemoveGitHubToken,
   onTestPublicMcp,
 }: SkillsCatalogViewProps) {
   const [query, setQuery] = useState('');
@@ -365,6 +369,8 @@ export function SkillsCatalogView({
                     server={server}
                     busy={mcpBusy}
                     onConfigure={onConfigurePublicMcp}
+                    onSaveGitHubToken={onSaveGitHubToken}
+                    onRemoveGitHubToken={onRemoveGitHubToken}
                     onTest={onTestPublicMcp}
                   />
                 );
@@ -383,6 +389,8 @@ function PublicMcpServiceCard({
   server,
   busy,
   onConfigure,
+  onSaveGitHubToken,
+  onRemoveGitHubToken,
   onTest,
 }: {
   service: PublicMcpCatalogEntry;
@@ -390,6 +398,8 @@ function PublicMcpServiceCard({
   server?: PublicMcpServer & { id: string };
   busy: boolean;
   onConfigure?: SkillsCatalogViewProps['onConfigurePublicMcp'];
+  onSaveGitHubToken?: SkillsCatalogViewProps['onSaveGitHubToken'];
+  onRemoveGitHubToken?: SkillsCatalogViewProps['onRemoveGitHubToken'];
   onTest?: SkillsCatalogViewProps['onTestPublicMcp'];
 }) {
   const formId = useId();
@@ -406,6 +416,16 @@ function PublicMcpServiceCard({
   );
   const [checkingOAuth, setCheckingOAuth] = useState(false);
   const [oauthError, setOauthError] = useState('');
+  const [linkError, setLinkError] = useState('');
+
+  async function openOfficialLink(url: string) {
+    if (!isTauri()) return;
+    try {
+      await invoke('open_external_link', { url });
+    } catch (cause) {
+      setLinkError(String(cause));
+    }
+  }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -413,11 +433,14 @@ function PublicMcpServiceCard({
     if (authentication === 'oauth' && !canConnectWithOAuth(registrationOptions, clientId, busy)) {
       return;
     }
-    if (await onConfigure(service, endpoint, authentication, token, clientId, scopes)) {
-      setToken('');
-      setClientId('');
-      setScopes('');
-      setExpanded(false);
+    try {
+      if (await onConfigure(service, endpoint, authentication, token, clientId, scopes)) {
+        setClientId('');
+        setScopes('');
+        setExpanded(false);
+      }
+    } finally {
+      if (authentication === 'bearer') setToken('');
     }
   }
 
@@ -441,15 +464,6 @@ function PublicMcpServiceCard({
     }
   }
 
-  async function openServiceDocumentation() {
-    if (!isTauri()) return;
-    try {
-      await invoke('open_external_link', { url: service.documentationUrl });
-    } catch (cause) {
-      setOauthError(String(cause));
-    }
-  }
-
   return (
     <article className="public-mcp-card">
       <div className="public-mcp-card-heading">
@@ -466,6 +480,10 @@ function PublicMcpServiceCard({
       )}
       <dl>
         <div>
+          <dt>Endereço oficial</dt>
+          <dd>{service.endpoint}</dd>
+        </div>
+        <div>
           <dt>Transporte</dt>
           <dd>{service.transport}</dd>
         </div>
@@ -474,6 +492,32 @@ function PublicMcpServiceCard({
           <dd>{service.authentication}</dd>
         </div>
       </dl>
+      {service.tokenCreationUrl && service.tokenPermissions && (
+        <div className="public-mcp-token-guide">
+          <p>Crie um token pessoal fine-grained no GitHub. Sugestão mínima para leitura:</p>
+          <ul>
+            {service.tokenPermissions.map((permission) => (
+              <li key={permission}>{permission}</li>
+            ))}
+          </ul>
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={() => void openOfficialLink(service.tokenCreationUrl!)}
+          >
+            Criar token pessoal no GitHub
+          </Button>
+          {linkError && <p role="alert">{linkError}</p>}
+        </div>
+      )}
+      {service.name === 'GitHub' && server && onSaveGitHubToken && onRemoveGitHubToken && (
+        <GitHubTokenManager
+          server={server}
+          busy={busy}
+          onSave={onSaveGitHubToken}
+          onRemove={onRemoveGitHubToken}
+        />
+      )}
       {status === 'not_available' && (
         <p className="public-mcp-unavailable">
           Este serviço ainda não pode ser configurado no OdeKrai por uma limitação de
@@ -500,10 +544,12 @@ function PublicMcpServiceCard({
                   type="url"
                   value={endpoint}
                   required
+                  readOnly={service.name === 'GitHub'}
                   onChange={(event) => {
                     setEndpoint(event.target.value);
                     setRegistrationOptions(null);
                     setOauthError('');
+                    setLinkError('');
                   }}
                 />
               </label>
@@ -522,8 +568,10 @@ function PublicMcpServiceCard({
               </label>
               {authentication === 'bearer' && (
                 <label>
-                  Token Bearer
+                  {service.name === 'GitHub' ? 'Token pessoal do GitHub (PAT)' : 'Token Bearer'}
                   <input
+                    id={`${formId}-bearer-token`}
+                    name={`${formId}-bearer-token`}
                     type="password"
                     autoComplete="off"
                     value={token}
@@ -593,13 +641,14 @@ function PublicMcpServiceCard({
                       <Button
                         type="button"
                         variant="secondary"
-                        onClick={() => void openServiceDocumentation()}
+                        onClick={() => void openOfficialLink(service.documentationUrl)}
                       >
                         Abrir documentação oficial
                       </Button>
                     </p>
                   )}
                   {oauthError && <p role="alert">{oauthError}</p>}
+                  {linkError && <p role="alert">{linkError}</p>}
                 </div>
               )}
               <Button
@@ -629,6 +678,63 @@ function PublicMcpServiceCard({
       )}
       {status === 'connected' && <p className="public-mcp-connected">Teste MCP concluído.</p>}
     </article>
+  );
+}
+
+function GitHubTokenManager({
+  server,
+  busy,
+  onSave,
+  onRemove,
+}: {
+  server: PublicMcpServer & { id: string };
+  busy: boolean;
+  onSave: NonNullable<SkillsCatalogViewProps['onSaveGitHubToken']>;
+  onRemove: NonNullable<SkillsCatalogViewProps['onRemoveGitHubToken']>;
+}) {
+  const formId = useId();
+  const [token, setToken] = useState('');
+  const [notice, setNotice] = useState('');
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setNotice('');
+    if (await onSave(server, token)) {
+      setToken('');
+      setNotice('Token salvo no Gerenciador de Credenciais. Ele não será exibido novamente.');
+    }
+  }
+
+  async function remove() {
+    setNotice('');
+    if (await onRemove(server)) {
+      setToken('');
+      setNotice('Token removido do Gerenciador de Credenciais.');
+    }
+  }
+
+  return (
+    <form className="public-mcp-token-manager" onSubmit={(event) => void submit(event)}>
+      <label htmlFor={`${formId}-token`}>Substituir token pessoal do GitHub</label>
+      <input
+        id={`${formId}-token`}
+        name={`${formId}-token`}
+        type="password"
+        autoComplete="off"
+        value={token}
+        onChange={(event) => setToken(event.target.value)}
+      />
+      <div className="public-mcp-token-actions">
+        <Button type="submit" disabled={busy || !token}>
+          Salvar token
+        </Button>
+        <Button type="button" variant="secondary" disabled={busy} onClick={() => void remove()}>
+          Remover token
+        </Button>
+      </div>
+      <small>O valor salvo não pode ser consultado nem reaparece no OdeKrai.</small>
+      {notice && <p role="status">{notice}</p>}
+    </form>
   );
 }
 
@@ -1054,6 +1160,10 @@ export function SkillsScreen({
       setError('O servidor MCP precisa usar uma URL HTTPS.');
       return false;
     }
+    if (service.name === 'GitHub' && endpoint !== service.endpoint) {
+      setError('O endereço oficial do servidor MCP do GitHub é fixo no catálogo.');
+      return false;
+    }
     if (authentication === 'bearer' && !token.trim()) {
       setError('Informe o token de autenticação.');
       return false;
@@ -1120,6 +1230,39 @@ export function SkillsScreen({
     }
   }
 
+  async function saveGitHubToken(
+    server: PublicMcpServer & { id: string },
+    token: string,
+  ): Promise<boolean> {
+    setMcpBusy(true);
+    setError('');
+    try {
+      await invoke('mcp_set_http_token', { serverId: server.id, value: token });
+      await refreshMcpServers().catch(() => undefined);
+      return true;
+    } catch (cause) {
+      setError(`Não foi possível salvar o token do GitHub: ${String(cause)}`);
+      return false;
+    } finally {
+      setMcpBusy(false);
+    }
+  }
+
+  async function removeGitHubToken(server: PublicMcpServer & { id: string }): Promise<boolean> {
+    setMcpBusy(true);
+    setError('');
+    try {
+      await invoke('mcp_remove_http_token', { serverId: server.id });
+      await refreshMcpServers().catch(() => undefined);
+      return true;
+    } catch (cause) {
+      setError(`Não foi possível remover o token do GitHub: ${String(cause)}`);
+      return false;
+    } finally {
+      setMcpBusy(false);
+    }
+  }
+
   return (
     <SkillsCatalogView
       skills={skills}
@@ -1144,6 +1287,8 @@ export function SkillsScreen({
       mcpServers={mcpServers}
       mcpBusy={mcpBusy}
       onConfigurePublicMcp={configurePublicMcp}
+      onSaveGitHubToken={saveGitHubToken}
+      onRemoveGitHubToken={removeGitHubToken}
       onTestPublicMcp={testPublicMcp}
       prerequisites={prerequisites}
       initialFamily={initialFamily}

@@ -48,6 +48,24 @@ describe('catálogo público de servidores MCP', () => {
     expect(lovable?.sourceCodeUrl).toBe('https://github.com/lovablelabs/mcp');
   });
 
+  it('mantém o endpoint oficial fixo do GitHub e recomenda permissões de PAT de menor privilégio', () => {
+    const github = catalog.find(({ name }) => name === 'GitHub');
+    if (!github) throw new Error('Serviço GitHub ausente do catálogo.');
+
+    expect(github.endpoint).toBe('https://api.githubcopilot.com/mcp/');
+    expect(github.transport).toBe('HTTP com token Bearer (PAT)');
+    expect(github.documentationUrl).toContain('docs.github.com/');
+    expect(github.tokenCreationUrl).toBe('https://github.com/settings/personal-access-tokens/new');
+    expect(github.tokenPermissions).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('Metadata: Read'),
+        expect.stringContaining('Contents: Read'),
+        expect.stringContaining('Issues: Read'),
+        expect.stringContaining('Pull requests: Read'),
+      ]),
+    );
+  });
+
   it('documenta o registro OAuth dinâmico do Notion e orienta o fluxo', () => {
     const notion = catalog.find(({ name }) => name === 'Notion');
     expect(notion?.authentication).toContain('registro dinâmico de cliente');

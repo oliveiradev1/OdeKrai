@@ -340,6 +340,46 @@ describe('catálogo de habilidades', () => {
     expect(markup).not.toContain('Instalar pacote');
   });
 
+  it('mostra o gerenciamento do PAT GitHub sem exibir o valor salvo', () => {
+    const markup = renderToStaticMarkup(
+      <SkillsCatalogView
+        skills={registryFixture}
+        initialTab="publico"
+        mcpServers={[
+          {
+            id: 'server-github',
+            name: 'GitHub',
+            endpoint: 'https://api.githubcopilot.com/mcp/',
+            enabled: true,
+            status: 'Conectado',
+          },
+        ]}
+        onFamilyToggle={noOperation}
+        onSkillToggle={noOperation}
+        onOverrideToggle={noOperation}
+        onSaveGitHubToken={async () => true}
+        onRemoveGitHubToken={async () => true}
+      />,
+    );
+    expect(markup).toContain('Substituir token pessoal do GitHub');
+    expect(markup).toContain('type="password"');
+    expect(markup).toContain('autoComplete="off"');
+    expect(markup).toContain('Salvar token');
+    expect(markup).toContain('Remover token');
+    expect(markup).toContain('Criar token pessoal no GitHub');
+    expect(markup).toContain('https://api.githubcopilot.com/mcp/');
+    expect(markup).toContain('Metadata: Read');
+    expect(markup).not.toContain('github-pat-fixture');
+
+    const source = readFileSync(new URL('./SkillsScreen.tsx', import.meta.url), 'utf8');
+    expect(source).toContain("invoke('mcp_set_http_token', { serverId: server.id, value: token })");
+    expect(source).toContain("invoke('mcp_remove_http_token', { serverId: server.id })");
+    expect(source).toContain("setToken('')");
+    expect(source).toContain('event.preventDefault()');
+    expect(source).toContain("readOnly={service.name === 'GitHub'}");
+    expect(source).toContain('endpoint !== service.endpoint');
+  });
+
   it('liga as opções OAuth consultadas no Rust aos campos opcionais de client ID e escopos', () => {
     const source = readFileSync(new URL('./SkillsScreen.tsx', import.meta.url), 'utf8');
     expect(source).toContain("invoke<OAuthRegistrationOptions>('mcp_oauth_registration_options'");
