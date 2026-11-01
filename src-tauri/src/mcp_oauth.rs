@@ -90,32 +90,47 @@ pub(crate) fn load(server_id: &str) -> Result<Option<StoredOAuth>, String> {
             .map(Some)
             .map_err(|_| "A autorização MCP salva está inválida; conecte novamente.".into()),
         Err(keyring::Error::NoEntry) => Ok(None),
-        Err(_) => Err("Não foi possível ler a autorização MCP no Gerenciador de Credenciais.".into()),
+        Err(_) => {
+            Err("Não foi possível ler a autorização MCP no Gerenciador de Credenciais.".into())
+        }
     }
 }
 
 fn save(server_id: &str, value: &StoredOAuth) -> Result<(), String> {
     let encoded = serde_json::to_string(value)
         .map_err(|_| "Não foi possível preparar a autorização MCP.".to_string())?;
-    credential(server_id)?.set_password(&encoded)
-        .map_err(|_| "Não foi possível salvar a autorização no Gerenciador de Credenciais do Windows.".into())
+    credential(server_id)?.set_password(&encoded).map_err(|_| {
+        "Não foi possível salvar a autorização no Gerenciador de Credenciais do Windows.".into()
+    })
 }
 
 pub(crate) fn remove(server_id: &str) -> Result<(), String> {
     match credential(server_id)?.delete_credential() {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-        Err(_) => Err("Não foi possível remover a autorização MCP do Gerenciador de Credenciais.".into()),
+        Err(_) => {
+            Err("Não foi possível remover a autorização MCP do Gerenciador de Credenciais.".into())
+        }
     }
 }
 
 fn safe_http() -> Result<Client, String> {
-    Client::builder().redirect(Policy::none()).timeout(Duration::from_secs(15)).build()
+    Client::builder()
+        .redirect(Policy::none())
+        .timeout(Duration::from_secs(15))
+        .build()
         .map_err(|_| "Não foi possível preparar a conexão segura de autorização MCP.".into())
 }
 
 fn validate_https(raw: &str) -> Result<Url, String> {
-    let url = Url::parse(raw).map_err(|_| "O servidor de autorização MCP retornou um endereço inválido.".to_string())?;
-    if url.scheme() != "https" || url.host_str().is_none() || !url.username().is_empty() || url.password().is_some() || url.fragment().is_some() || !matches!(url.host(), Some(url::Host::Domain(_))) {
+    let url = Url::parse(raw)
+        .map_err(|_| "O servidor de autorização MCP retornou um endereço inválido.".to_string())?;
+    if url.scheme() != "https"
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+        || !matches!(url.host(), Some(url::Host::Domain(_)))
+    {
         return Err("Os endpoints OAuth MCP precisam usar HTTPS com domínio válido.".into());
     }
     Ok(url)
@@ -135,13 +150,19 @@ fn validate_issuer(expected: &str, returned: &str) -> Result<(), String> {
     }
 }
 
-fn bounded_json(response: reqwest::blocking::Response) -> Result<(StatusCode, reqwest::header::HeaderMap, Value), String> {
+fn bounded_json(
+    response: reqwest::blocking::Response,
+) -> Result<(StatusCode, reqwest::header::HeaderMap, Value), String> {
     let status = response.status();
     let headers = response.headers().clone();
     let mut bytes = Vec::new();
-    response.take((MAX_METADATA_BYTES + 1) as u64).read_to_end(&mut bytes)
+    response
+        .take((MAX_METADATA_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)
         .map_err(|_| "Não foi possível ler a resposta de autorização MCP.".to_string())?;
-    if bytes.len() > MAX_METADATA_BYTES { return Err("A resposta de autorização MCP excedeu o limite seguro.".into()); }
+    if bytes.len() > MAX_METADATA_BYTES {
+        return Err("A resposta de autorização MCP excedeu o limite seguro.".into());
+    }
     let value = serde_json::from_slice(&bytes)
         .map_err(|_| "O servidor de autorização MCP retornou JSON inválido.".to_string())?;
     Ok((status, headers, value))
@@ -149,32 +170,49 @@ fn bounded_json(response: reqwest::blocking::Response) -> Result<(StatusCode, re
 
 fn get_json(client: &Client, endpoint: &str) -> Result<Value, String> {
     let url = validate_https(endpoint)?;
-    let response = client.get(url.clone()).send()
+    let response = client
+        .get(url.clone())
+        .send()
         .map_err(|_| "Falha de rede ao consultar metadados OAuth MCP.".to_string())?;
     reject_redirect(response.status())?;
     if response.url() != &url {
         return Err("Redirecionamento em metadados OAuth MCP foi recusado.".into());
     }
     let (status, _, json) = bounded_json(response)?;
-    if !status.is_success() { return Err("Não foi possível consultar metadados OAuth MCP.".into()); }
+    if !status.is_success() {
+        return Err("Não foi possível consultar metadados OAuth MCP.".into());
+    }
     Ok(json)
 }
 
 fn post_json(client: &Client, endpoint: &str, body: Value) -> Result<Value, String> {
     let url = validate_https(endpoint)?;
-    let response = client.post(url.clone()).json(&body).send()
+    let response = client
+        .post(url.clone())
+        .json(&body)
+        .send()
         .map_err(|_| "Falha de rede no registro OAuth MCP.".to_string())?;
     reject_redirect(response.status())?;
     if response.url() != &url {
         return Err("Redirecionamento no registro OAuth MCP foi recusado.".into());
     }
     let (status, _, json) = bounded_json(response)?;
-    if !status.is_success() { return Err("O servidor recusou o registro do cliente OAuth do OdeKrai.".into()); }
+    if !status.is_success() {
+        return Err("O servidor recusou o registro do cliente OAuth do OdeKrai.".into());
+    }
     Ok(json)
 }
 
 fn well_known_candidates(issuer: &Url) -> Vec<String> {
-    let origin = format!("{}://{}{}", issuer.scheme(), issuer.host_str().unwrap_or_default(), issuer.port().map(|port| format!(":{port}")).unwrap_or_default());
+    let origin = format!(
+        "{}://{}{}",
+        issuer.scheme(),
+        issuer.host_str().unwrap_or_default(),
+        issuer
+            .port()
+            .map(|port| format!(":{port}"))
+            .unwrap_or_default()
+    );
     let path = issuer.path().trim_end_matches('/');
     if path.is_empty() {
         vec![
@@ -193,38 +231,62 @@ fn well_known_candidates(issuer: &Url) -> Vec<String> {
 fn discover_resource_metadata(client: &Client, endpoint: &Url) -> Result<(Value, String), String> {
     let id = 1;
     let body = json!({"jsonrpc":"2.0","id":id,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientInfo":{"name":"OdeKrai","version":env!("CARGO_PKG_VERSION")},"io.modelcontextprotocol/clientCapabilities":{}}}});
-    let response = client.post(endpoint.clone())
+    let response = client
+        .post(endpoint.clone())
         .header("MCP-Protocol-Version", "2026-07-28")
         .header("Mcp-Method", "tools/list")
-        .header(reqwest::header::ACCEPT, "application/json, text/event-stream")
-        .json(&body).send()
+        .header(
+            reqwest::header::ACCEPT,
+            "application/json, text/event-stream",
+        )
+        .json(&body)
+        .send()
         .map_err(|_| "Falha de rede ao descobrir a autorização MCP.".to_string())?;
     if response.url() != endpoint || response.status().is_redirection() {
         return Err("Redirecionamento na descoberta OAuth MCP foi recusado.".into());
     }
-    let challenge = response.headers().get(reqwest::header::WWW_AUTHENTICATE)
-        .and_then(|header| header.to_str().ok()).map(str::to_owned);
+    let challenge = response
+        .headers()
+        .get(reqwest::header::WWW_AUTHENTICATE)
+        .and_then(|header| header.to_str().ok())
+        .map(str::to_owned);
     let resource_metadata = challenge.as_deref().and_then(resource_metadata_parameter);
     if response.status() != StatusCode::UNAUTHORIZED {
         return Err("O servidor MCP não informou metadados de recurso protegido.".into());
     }
     if let Some(metadata_url) = resource_metadata {
         let parsed = validate_https(&metadata_url)?;
-        if !same_origin(&parsed, endpoint) { return Err("A origem dos metadados OAuth não corresponde ao servidor MCP.".into()); }
+        if !same_origin(&parsed, endpoint) {
+            return Err("A origem dos metadados OAuth não corresponde ao servidor MCP.".into());
+        }
         let value = get_json(client, parsed.as_str())?;
         return Ok((value, challenge.unwrap_or_default()));
     }
     for candidate in resource_metadata_candidates(endpoint) {
-        if let Ok(metadata) = get_json(client, &candidate) { return Ok((metadata, challenge.unwrap_or_default())); }
+        if let Ok(metadata) = get_json(client, &candidate) {
+            return Ok((metadata, challenge.unwrap_or_default()));
+        }
     }
     Err("Não foi possível descobrir os metadados do recurso MCP.".into())
 }
 
 fn resource_metadata_candidates(endpoint: &Url) -> Vec<String> {
-    let origin = format!("{}://{}{}", endpoint.scheme(), endpoint.host_str().unwrap_or_default(), endpoint.port().map(|port| format!(":{port}")).unwrap_or_default());
+    let origin = format!(
+        "{}://{}{}",
+        endpoint.scheme(),
+        endpoint.host_str().unwrap_or_default(),
+        endpoint
+            .port()
+            .map(|port| format!(":{port}"))
+            .unwrap_or_default()
+    );
     let path = endpoint.path().trim_end_matches('/');
     let mut candidates = Vec::new();
-    if !path.is_empty() { candidates.push(format!("{origin}/.well-known/oauth-protected-resource{path}")); }
+    if !path.is_empty() {
+        candidates.push(format!(
+            "{origin}/.well-known/oauth-protected-resource{path}"
+        ));
+    }
     candidates.push(format!("{origin}/.well-known/oauth-protected-resource"));
     candidates
 }
@@ -232,103 +294,216 @@ fn resource_metadata_candidates(endpoint: &Url) -> Vec<String> {
 fn resource_metadata_parameter(challenge: &str) -> Option<String> {
     challenge.split(',').find_map(|part| {
         let (key, value) = part.trim().split_once('=')?;
-        if !key.trim().eq_ignore_ascii_case("resource_metadata") { return None; }
+        if !key.trim().eq_ignore_ascii_case("resource_metadata") {
+            return None;
+        }
         Some(value.trim().trim_matches('"').to_owned())
     })
 }
 
-fn discover_authorization_server(client: &Client, resource: &Value) -> Result<(String, ServerMetadata), String> {
-    let issuer = resource.get("authorization_servers").and_then(Value::as_array)
-        .and_then(|servers| servers.first()).and_then(Value::as_str)
-        .ok_or("O recurso MCP não anunciou um servidor de autorização.")?.to_owned();
+fn discover_authorization_server(
+    client: &Client,
+    resource: &Value,
+) -> Result<(String, ServerMetadata), String> {
+    let issuer = resource
+        .get("authorization_servers")
+        .and_then(Value::as_array)
+        .and_then(|servers| servers.first())
+        .and_then(Value::as_str)
+        .ok_or("O recurso MCP não anunciou um servidor de autorização.")?
+        .to_owned();
     let issuer_url = validate_https(&issuer)?;
     for candidate in well_known_candidates(&issuer_url) {
         let metadata = match get_json(client, &candidate) {
             Ok(metadata) => metadata,
             Err(_) => continue,
         };
-        let returned_issuer = metadata.get("issuer").and_then(Value::as_str).unwrap_or_default();
+        let returned_issuer = metadata
+            .get("issuer")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         validate_issuer(&issuer, returned_issuer)?;
-        let authorization_endpoint = metadata.get("authorization_endpoint").and_then(Value::as_str).ok_or("Metadados OAuth sem authorization_endpoint.")?.to_owned();
-        let token_endpoint = metadata.get("token_endpoint").and_then(Value::as_str).ok_or("Metadados OAuth sem token_endpoint.")?.to_owned();
+        let authorization_endpoint = metadata
+            .get("authorization_endpoint")
+            .and_then(Value::as_str)
+            .ok_or("Metadados OAuth sem authorization_endpoint.")?
+            .to_owned();
+        let token_endpoint = metadata
+            .get("token_endpoint")
+            .and_then(Value::as_str)
+            .ok_or("Metadados OAuth sem token_endpoint.")?
+            .to_owned();
         validate_https(&authorization_endpoint)?;
         validate_https(&token_endpoint)?;
-        let registration_endpoint = metadata.get("registration_endpoint").and_then(Value::as_str).map(str::to_owned);
-        if let Some(endpoint) = registration_endpoint.as_deref() { validate_https(endpoint)?; }
-        let revocation_endpoint = metadata.get("revocation_endpoint").and_then(Value::as_str).map(str::to_owned);
-        if let Some(endpoint) = revocation_endpoint.as_deref() { validate_https(endpoint)?; }
-        let client_id_metadata_document_supported = metadata.get("client_id_metadata_document_supported").and_then(Value::as_bool).unwrap_or(false);
-        let issuer_parameter_supported = metadata.get("authorization_response_iss_parameter_supported").and_then(Value::as_bool).unwrap_or(false);
-        return Ok((issuer, ServerMetadata { authorization_endpoint, token_endpoint, registration_endpoint, revocation_endpoint, client_id_metadata_document_supported, issuer_parameter_supported }));
+        let registration_endpoint = metadata
+            .get("registration_endpoint")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        if let Some(endpoint) = registration_endpoint.as_deref() {
+            validate_https(endpoint)?;
+        }
+        let revocation_endpoint = metadata
+            .get("revocation_endpoint")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        if let Some(endpoint) = revocation_endpoint.as_deref() {
+            validate_https(endpoint)?;
+        }
+        let client_id_metadata_document_supported = metadata
+            .get("client_id_metadata_document_supported")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let issuer_parameter_supported = metadata
+            .get("authorization_response_iss_parameter_supported")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        return Ok((
+            issuer,
+            ServerMetadata {
+                authorization_endpoint,
+                token_endpoint,
+                registration_endpoint,
+                revocation_endpoint,
+                client_id_metadata_document_supported,
+                issuer_parameter_supported,
+            },
+        ));
     }
     Err("Não foi possível descobrir metadados compatíveis para o emissor OAuth.".into())
 }
 
-fn register_client(client: &Client, metadata: &ServerMetadata, redirect_uri: &str) -> Result<String, String> {
+fn register_client(
+    client: &Client,
+    metadata: &ServerMetadata,
+    redirect_uri: &str,
+) -> Result<String, String> {
     if metadata.client_id_metadata_document_supported {
         return Err("Este servidor prioriza documentos de metadados de cliente (CIMD), que ainda não são suportados. Use outro método de registro OAuth no servidor.".into());
     }
     let endpoint = metadata.registration_endpoint.as_deref().ok_or("Este servidor OAuth não oferece registro dinâmico de cliente; o OdeKrai precisa ser registrado pelo servidor.")?;
-    let response = post_json(client, endpoint, json!({
-        "client_name":"OdeKrai",
-        "application_type":"native",
-        "redirect_uris":[redirect_uri],
-        "grant_types":["authorization_code","refresh_token"],
-        "response_types":["code"],
-        "token_endpoint_auth_method":"none"
-    }))?;
-    response.get("client_id").and_then(Value::as_str).filter(|id| !id.is_empty() && id.len() <= 2048 && !id.chars().any(char::is_control))
-        .map(str::to_owned).ok_or_else(|| "O registro OAuth não retornou um client_id válido.".into())
+    let response = post_json(
+        client,
+        endpoint,
+        json!({
+            "client_name":"OdeKrai",
+            "application_type":"native",
+            "redirect_uris":[redirect_uri],
+            "grant_types":["authorization_code","refresh_token"],
+            "response_types":["code"],
+            "token_endpoint_auth_method":"none"
+        }),
+    )?;
+    response
+        .get("client_id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty() && id.len() <= 2048 && !id.chars().any(char::is_control))
+        .map(str::to_owned)
+        .ok_or_else(|| "O registro OAuth não retornou um client_id válido.".into())
 }
 
-fn random_token() -> Result<String, String> { crate::google_oauth::random_url_token() }
-fn pkce_challenge(verifier: &str) -> String { URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes())) }
+fn random_token() -> Result<String, String> {
+    crate::google_oauth::random_url_token()
+}
+fn pkce_challenge(verifier: &str) -> String {
+    URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()))
+}
 
-fn build_authorization_url(metadata: &ServerMetadata, client_id: &str, redirect_uri: &str, state: &str, challenge: &str, resource: &str, scope: Option<&str>) -> Result<String, String> {
-    let mut url = Url::parse(&metadata.authorization_endpoint).map_err(|_| "authorization_endpoint inválido.".to_string())?;
-    url.query_pairs_mut().append_pair("response_type","code")
-        .append_pair("client_id",client_id)
-        .append_pair("redirect_uri",redirect_uri)
-        .append_pair("code_challenge",challenge)
-        .append_pair("code_challenge_method","S256")
-        .append_pair("state",state)
-        .append_pair("resource",resource);
-    if let Some(scope) = scope.filter(|scope| !scope.is_empty()) { url.query_pairs_mut().append_pair("scope",scope); }
+fn build_authorization_url(
+    metadata: &ServerMetadata,
+    client_id: &str,
+    redirect_uri: &str,
+    state: &str,
+    challenge: &str,
+    resource: &str,
+    scope: Option<&str>,
+) -> Result<String, String> {
+    let mut url = Url::parse(&metadata.authorization_endpoint)
+        .map_err(|_| "authorization_endpoint inválido.".to_string())?;
+    url.query_pairs_mut()
+        .append_pair("response_type", "code")
+        .append_pair("client_id", client_id)
+        .append_pair("redirect_uri", redirect_uri)
+        .append_pair("code_challenge", challenge)
+        .append_pair("code_challenge_method", "S256")
+        .append_pair("state", state)
+        .append_pair("resource", resource);
+    if let Some(scope) = scope.filter(|scope| !scope.is_empty()) {
+        url.query_pairs_mut().append_pair("scope", scope);
+    }
     Ok(url.to_string())
 }
 
 fn scope_from_challenge(challenge: &str, resource: &Value) -> Option<String> {
     if let Some(scope) = challenge.split(',').find_map(|part| {
         let (key, value) = part.trim().split_once('=')?;
-        if key.trim().eq_ignore_ascii_case("scope") { Some(value.trim().trim_matches('"').to_owned()) } else { None }
-    }) { return Some(scope); }
+        if key.trim().eq_ignore_ascii_case("scope") {
+            Some(value.trim().trim_matches('"').to_owned())
+        } else {
+            None
+        }
+    }) {
+        return Some(scope);
+    }
     let scopes = resource.get("scopes_supported")?.as_array()?;
-    let values = scopes.iter().filter_map(Value::as_str).take(64).collect::<Vec<_>>();
+    let values = scopes
+        .iter()
+        .filter_map(Value::as_str)
+        .take(64)
+        .collect::<Vec<_>>();
     (!values.is_empty()).then(|| values.join(" "))
 }
 
 struct CallbackGate(AtomicBool);
 impl CallbackGate {
-    fn claim(&self) -> bool { !self.0.swap(true, Ordering::SeqCst) }
+    fn claim(&self) -> bool {
+        !self.0.swap(true, Ordering::SeqCst)
+    }
 }
 
-fn parse_callback_target(target: &str, expected_state: &str, expected_issuer: &str, issuer_required: bool) -> Result<(String, Option<String>), String> {
+fn parse_callback_target(
+    target: &str,
+    expected_state: &str,
+    expected_issuer: &str,
+    issuer_required: bool,
+) -> Result<(String, Option<String>), String> {
     let parsed = Url::parse(&format!("http://127.0.0.1{target}"))
         .map_err(|_| "O retorno OAuth está malformado.".to_string())?;
-    if parsed.path() != "/callback" { return Err("Caminho de retorno OAuth inválido.".into()); }
+    if parsed.path() != "/callback" {
+        return Err("Caminho de retorno OAuth inválido.".into());
+    }
     let mut params = std::collections::HashMap::new();
     for (key, value) in parsed.query_pairs() {
-        if params.insert(key.into_owned(), value.into_owned()).is_some() {
+        if params
+            .insert(key.into_owned(), value.into_owned())
+            .is_some()
+        {
             return Err("O retorno OAuth contém parâmetros repetidos.".into());
         }
     }
-    if params.get("state").map(String::as_str) != Some(expected_state) { return Err("A validação state do OAuth falhou.".into()); }
+    if params.get("state").map(String::as_str) != Some(expected_state) {
+        return Err("A validação state do OAuth falhou.".into());
+    }
     if let Some(issuer) = params.get("iss") {
-        if issuer != expected_issuer { return Err("O emissor do retorno OAuth não corresponde ao descoberto.".into()); }
-    } else if issuer_required { return Err("O retorno OAuth não informou o emissor exigido.".into()); }
-    if params.get("error").is_some_and(|error| error == "access_denied") { return Err("O consentimento do servidor MCP foi recusado.".into()); }
-    if params.contains_key("error") { return Err("O servidor de autorização MCP não concluiu a conexão.".into()); }
-    let code = params.get("code").filter(|code| !code.is_empty()).cloned().ok_or("O retorno OAuth não contém código de autorização.")?;
+        if issuer != expected_issuer {
+            return Err("O emissor do retorno OAuth não corresponde ao descoberto.".into());
+        }
+    } else if issuer_required {
+        return Err("O retorno OAuth não informou o emissor exigido.".into());
+    }
+    if params
+        .get("error")
+        .is_some_and(|error| error == "access_denied")
+    {
+        return Err("O consentimento do servidor MCP foi recusado.".into());
+    }
+    if params.contains_key("error") {
+        return Err("O servidor de autorização MCP não concluiu a conexão.".into());
+    }
+    let code = params
+        .get("code")
+        .filter(|code| !code.is_empty())
+        .cloned()
+        .ok_or("O retorno OAuth não contém código de autorização.")?;
     Ok((code, params.get("iss").cloned()))
 }
 
@@ -340,40 +515,82 @@ fn reject_redirect(status: StatusCode) -> Result<(), String> {
     }
 }
 
-fn accept_callback(listener: TcpListener, state: &str, issuer: &str, issuer_required: bool) -> Result<String, String> {
-    listener.set_nonblocking(true).map_err(|_| "Não foi possível preparar o retorno OAuth local.".to_string())?;
-    let expected_host = format!("127.0.0.1:{}", listener.local_addr().map_err(|_| "Não foi possível ler a porta local OAuth.".to_string())?.port());
+fn accept_callback(
+    listener: TcpListener,
+    state: &str,
+    issuer: &str,
+    issuer_required: bool,
+) -> Result<String, String> {
+    listener
+        .set_nonblocking(true)
+        .map_err(|_| "Não foi possível preparar o retorno OAuth local.".to_string())?;
+    let expected_host = format!(
+        "127.0.0.1:{}",
+        listener
+            .local_addr()
+            .map_err(|_| "Não foi possível ler a porta local OAuth.".to_string())?
+            .port()
+    );
     let started = Instant::now();
     let gate = CallbackGate(AtomicBool::new(false));
     loop {
-        if started.elapsed() >= CALLBACK_TIMEOUT { return Err("A autorização do servidor MCP expirou. Tente novamente.".into()); }
+        if started.elapsed() >= CALLBACK_TIMEOUT {
+            return Err("A autorização do servidor MCP expirou. Tente novamente.".into());
+        }
         match listener.accept() {
             Ok((mut stream, address)) => {
-                if !address.ip().is_loopback() || !gate.claim() { continue; }
+                if !address.ip().is_loopback() || !gate.claim() {
+                    continue;
+                }
                 stream.set_read_timeout(Some(Duration::from_secs(3))).ok();
                 let mut buffer = [0u8; 8192];
                 let mut received = 0;
-                while received < buffer.len() && !buffer[..received].windows(4).any(|part| part == b"\r\n\r\n") {
-                    let count = stream.read(&mut buffer[received..]).map_err(|_| "Não foi possível ler o retorno OAuth.".to_string())?;
-                    if count == 0 { break; }
+                while received < buffer.len()
+                    && !buffer[..received]
+                        .windows(4)
+                        .any(|part| part == b"\r\n\r\n")
+                {
+                    let count = stream
+                        .read(&mut buffer[received..])
+                        .map_err(|_| "Não foi possível ler o retorno OAuth.".to_string())?;
+                    if count == 0 {
+                        break;
+                    }
                     received += count;
                 }
-                let request = std::str::from_utf8(&buffer[..received]).map_err(|_| "O retorno OAuth está malformado.".to_string())?;
+                let request = std::str::from_utf8(&buffer[..received])
+                    .map_err(|_| "O retorno OAuth está malformado.".to_string())?;
                 let mut lines = request.lines();
                 let request_line = lines.next().unwrap_or_default();
                 let mut request_parts = request_line.split_whitespace();
-                if request_parts.next() != Some("GET") { return Err("O retorno OAuth usou um método inválido.".into()); }
-                let target = request_parts.next().ok_or("O retorno OAuth está malformado.")?;
-                if !lines.any(|line| line.strip_prefix("Host:").or_else(|| line.strip_prefix("host:")).is_some_and(|host| host.trim() == expected_host)) {
-                    return Err("O retorno OAuth não corresponde ao endereço local esperado.".into());
+                if request_parts.next() != Some("GET") {
+                    return Err("O retorno OAuth usou um método inválido.".into());
+                }
+                let target = request_parts
+                    .next()
+                    .ok_or("O retorno OAuth está malformado.")?;
+                if !lines.any(|line| {
+                    line.strip_prefix("Host:")
+                        .or_else(|| line.strip_prefix("host:"))
+                        .is_some_and(|host| host.trim() == expected_host)
+                }) {
+                    return Err(
+                        "O retorno OAuth não corresponde ao endereço local esperado.".into(),
+                    );
                 }
                 let result = parse_callback_target(target, state, issuer, issuer_required);
-                let body = if result.is_ok() { "Autorização recebida. Você pode voltar ao OdeKrai." } else { "A autorização não foi concluída. Volte ao OdeKrai." };
+                let body = if result.is_ok() {
+                    "Autorização recebida. Você pode voltar ao OdeKrai."
+                } else {
+                    "A autorização não foi concluída. Volte ao OdeKrai."
+                };
                 let response = format!("HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}", body.len(), body);
                 let _ = stream.write_all(response.as_bytes());
                 return result.map(|(code, _)| code);
             }
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => thread::sleep(Duration::from_millis(30)),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(30))
+            }
             Err(_) => return Err("Não foi possível receber o retorno OAuth local.".into()),
         }
     }
@@ -388,36 +605,89 @@ struct TokenResponse {
     error: Option<String>,
 }
 
-fn exchange_code(client: &Client, metadata: &ServerMetadata, client_id: &str, code: &str, redirect_uri: &str, verifier: &str, resource: &str) -> Result<(String, Option<String>, Instant), String> {
+fn exchange_code(
+    client: &Client,
+    metadata: &ServerMetadata,
+    client_id: &str,
+    code: &str,
+    redirect_uri: &str,
+    verifier: &str,
+    resource: &str,
+) -> Result<(String, Option<String>, Instant), String> {
     let endpoint = validate_https(&metadata.token_endpoint)?;
-    let response = client.post(endpoint.clone()).form(&[
-        ("grant_type", "authorization_code"), ("code", code), ("redirect_uri", redirect_uri), ("client_id", client_id), ("code_verifier", verifier), ("resource", resource),
-    ]).send().map_err(|_| "Falha de rede ao trocar o código OAuth.".to_string())?;
+    let response = client
+        .post(endpoint.clone())
+        .form(&[
+            ("grant_type", "authorization_code"),
+            ("code", code),
+            ("redirect_uri", redirect_uri),
+            ("client_id", client_id),
+            ("code_verifier", verifier),
+            ("resource", resource),
+        ])
+        .send()
+        .map_err(|_| "Falha de rede ao trocar o código OAuth.".to_string())?;
     reject_redirect(response.status())?;
-    if response.url() != &endpoint { return Err("Redirecionamento no endpoint de token foi recusado.".into()); }
+    if response.url() != &endpoint {
+        return Err("Redirecionamento no endpoint de token foi recusado.".into());
+    }
     let (status, _, body) = bounded_json(response)?;
-    if !status.is_success() { return Err("O servidor de autorização recusou o código OAuth.".into()); }
-    let tokens: TokenResponse = serde_json::from_value(body).map_err(|_| "Resposta de token OAuth inválida.".to_string())?;
-    if let Some(error) = tokens.error { return Err(if error == "access_denied" { "O consentimento foi recusado.".into() } else { "A troca do código OAuth falhou.".into() }); }
-    if !tokens.token_type.as_deref().is_some_and(|kind| kind.eq_ignore_ascii_case("bearer")) { return Err("O servidor OAuth não retornou token Bearer.".into()); }
-    let access = tokens.access_token.filter(|token| !token.is_empty() && token.len() <= 32_768 && !token.chars().any(char::is_control)).ok_or("O servidor OAuth não retornou access token válido.")?;
+    if !status.is_success() {
+        return Err("O servidor de autorização recusou o código OAuth.".into());
+    }
+    let tokens: TokenResponse = serde_json::from_value(body)
+        .map_err(|_| "Resposta de token OAuth inválida.".to_string())?;
+    if let Some(error) = tokens.error {
+        return Err(if error == "access_denied" {
+            "O consentimento foi recusado.".into()
+        } else {
+            "A troca do código OAuth falhou.".into()
+        });
+    }
+    if !tokens
+        .token_type
+        .as_deref()
+        .is_some_and(|kind| kind.eq_ignore_ascii_case("bearer"))
+    {
+        return Err("O servidor OAuth não retornou token Bearer.".into());
+    }
+    let access = tokens
+        .access_token
+        .filter(|token| {
+            !token.is_empty() && token.len() <= 32_768 && !token.chars().any(char::is_control)
+        })
+        .ok_or("O servidor OAuth não retornou access token válido.")?;
     let expires = tokens.expires_in.unwrap_or(3600).clamp(30, 86_400);
-    Ok((access, tokens.refresh_token.filter(|token| !token.is_empty() && token.len() <= 32_768), Instant::now() + Duration::from_secs(expires)))
+    Ok((
+        access,
+        tokens
+            .refresh_token
+            .filter(|token| !token.is_empty() && token.len() <= 32_768),
+        Instant::now() + Duration::from_secs(expires),
+    ))
 }
 
 pub(crate) fn refresh_access(server_id: &str) -> Result<OAuthAccessToken, String> {
-    let mut stored = load(server_id)?
-        .ok_or("A autorização MCP expirou. Conecte novamente pelo botão OAuth.")?;
-    let refresh_token = stored.refresh_token.clone()
+    let mut stored =
+        load(server_id)?.ok_or("A autorização MCP expirou. Conecte novamente pelo botão OAuth.")?;
+    let refresh_token = stored
+        .refresh_token
+        .clone()
         .ok_or("O servidor não forneceu refresh token. Conecte novamente pelo botão OAuth.")?;
     let endpoint = validate_https(&stored.token_endpoint)?;
     let client = safe_http()?;
-    let response = client.post(endpoint.clone()).form(&[
-        ("grant_type", "refresh_token"),
-        ("refresh_token", refresh_token.as_str()),
-        ("client_id", stored.client_id.as_str()),
-        ("resource", stored.resource.as_str()),
-    ]).send().map_err(|_| "Falha de rede ao renovar a autorização MCP. Conecte novamente.".to_string())?;
+    let response = client
+        .post(endpoint.clone())
+        .form(&[
+            ("grant_type", "refresh_token"),
+            ("refresh_token", refresh_token.as_str()),
+            ("client_id", stored.client_id.as_str()),
+            ("resource", stored.resource.as_str()),
+        ])
+        .send()
+        .map_err(|_| {
+            "Falha de rede ao renovar a autorização MCP. Conecte novamente.".to_string()
+        })?;
     reject_redirect(response.status())?;
     if response.url() != &endpoint {
         return Err("Redirecionamento na renovação OAuth foi recusado. Conecte novamente.".into());
@@ -428,18 +698,32 @@ pub(crate) fn refresh_access(server_id: &str) -> Result<OAuthAccessToken, String
     }
     let tokens: TokenResponse = serde_json::from_value(body)
         .map_err(|_| "Resposta de renovação OAuth inválida. Conecte novamente.".to_string())?;
-    if tokens.error.is_some() || !tokens.token_type.as_deref().is_some_and(|kind| kind.eq_ignore_ascii_case("bearer")) {
+    if tokens.error.is_some()
+        || !tokens
+            .token_type
+            .as_deref()
+            .is_some_and(|kind| kind.eq_ignore_ascii_case("bearer"))
+    {
         return Err("A renovação OAuth foi recusada. Conecte novamente o servidor MCP.".into());
     }
-    let access_token = tokens.access_token
-        .filter(|token| !token.is_empty() && token.len() <= 32_768 && !token.chars().any(char::is_control))
+    let access_token = tokens
+        .access_token
+        .filter(|token| {
+            !token.is_empty() && token.len() <= 32_768 && !token.chars().any(char::is_control)
+        })
         .ok_or("A renovação OAuth não retornou um access token. Conecte novamente.")?;
-    if let Some(rotated_refresh) = tokens.refresh_token.filter(|token| !token.is_empty() && token.len() <= 32_768) {
+    if let Some(rotated_refresh) = tokens
+        .refresh_token
+        .filter(|token| !token.is_empty() && token.len() <= 32_768)
+    {
         stored.refresh_token = Some(rotated_refresh);
         save(server_id, &stored)?;
     }
     let expires = tokens.expires_in.unwrap_or(3600).clamp(30, 86_400);
-    Ok(OAuthAccessToken { value: access_token, expires_at: Instant::now() + Duration::from_secs(expires) })
+    Ok(OAuthAccessToken {
+        value: access_token,
+        expires_at: Instant::now() + Duration::from_secs(expires),
+    })
 }
 
 trait RevocationTransport {
@@ -517,7 +801,11 @@ pub(crate) fn revoke_before_remove(server_id: &str, access_token: Option<&str>) 
     let Ok(client) = safe_http() else {
         return false;
     };
-    revoke_tokens_with(&stored, access_token, &mut ReqwestRevocationTransport(client))
+    revoke_tokens_with(
+        &stored,
+        access_token,
+        &mut ReqwestRevocationTransport(client),
+    )
 }
 
 fn removal_warning(revoked: bool) -> Option<String> {
@@ -526,23 +814,58 @@ fn removal_warning(revoked: bool) -> Option<String> {
     })
 }
 
-fn run_authorization(app: tauri::AppHandle, endpoint: &str, server_id: &str) -> Result<(StoredOAuth, OAuthAccessToken), String> {
+fn run_authorization(
+    app: tauri::AppHandle,
+    endpoint: &str,
+    server_id: &str,
+) -> Result<(StoredOAuth, OAuthAccessToken), String> {
     let endpoint = crate::mcp_http::validate_endpoint(endpoint)?;
     let client = safe_http()?;
     let (resource_metadata, challenge) = discover_resource_metadata(&client, &endpoint)?;
-    let resource = resource_metadata.get("resource").and_then(Value::as_str).ok_or("Metadados MCP sem identificador do recurso protegido.")?.to_owned();
-    if resource != endpoint.as_str() { return Err("O recurso OAuth anunciado não corresponde ao endpoint MCP cadastrado.".into()); }
+    let resource = resource_metadata
+        .get("resource")
+        .and_then(Value::as_str)
+        .ok_or("Metadados MCP sem identificador do recurso protegido.")?
+        .to_owned();
+    if resource != endpoint.as_str() {
+        return Err("O recurso OAuth anunciado não corresponde ao endpoint MCP cadastrado.".into());
+    }
     let (issuer, metadata) = discover_authorization_server(&client, &resource_metadata)?;
-    let listener = TcpListener::bind(("127.0.0.1", 0)).map_err(|_| "Não foi possível abrir a porta local de retorno OAuth.".to_string())?;
-    let port = listener.local_addr().map_err(|_| "Não foi possível ler a porta local OAuth.".to_string())?.port();
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .map_err(|_| "Não foi possível abrir a porta local de retorno OAuth.".to_string())?;
+    let port = listener
+        .local_addr()
+        .map_err(|_| "Não foi possível ler a porta local OAuth.".to_string())?
+        .port();
     let redirect_uri = format!("http://127.0.0.1:{port}/callback");
     let client_id = register_client(&client, &metadata, &redirect_uri)?;
     let verifier = random_token()?;
     let state = random_token()?;
-    let auth_url = build_authorization_url(&metadata, &client_id, &redirect_uri, &state, &pkce_challenge(&verifier), &resource, scope_from_challenge(&challenge, &resource_metadata).as_deref())?;
+    let auth_url = build_authorization_url(
+        &metadata,
+        &client_id,
+        &redirect_uri,
+        &state,
+        &pkce_challenge(&verifier),
+        &resource,
+        scope_from_challenge(&challenge, &resource_metadata).as_deref(),
+    )?;
     crate::external_links::open_oauth_authorization_url(&app, &auth_url)?;
-    let code = accept_callback(listener, &state, &issuer, metadata.issuer_parameter_supported)?;
-    let (access_token, refresh_token, expires_at) = exchange_code(&client, &metadata, &client_id, &code, &redirect_uri, &verifier, &resource)?;
+    let code = accept_callback(
+        listener,
+        &state,
+        &issuer,
+        metadata.issuer_parameter_supported,
+    )?;
+    let (access_token, refresh_token, expires_at) = exchange_code(
+        &client,
+        &metadata,
+        &client_id,
+        &code,
+        &redirect_uri,
+        &verifier,
+        &resource,
+    )?;
     let stored = StoredOAuth {
         issuer,
         resource,
@@ -552,7 +875,13 @@ fn run_authorization(app: tauri::AppHandle, endpoint: &str, server_id: &str) -> 
         refresh_token,
     };
     save(server_id, &stored)?;
-    Ok((stored, OAuthAccessToken { value: access_token, expires_at }))
+    Ok((
+        stored,
+        OAuthAccessToken {
+            value: access_token,
+            expires_at,
+        },
+    ))
 }
 
 #[tauri::command]
@@ -564,17 +893,32 @@ pub async fn mcp_oauth_authorize(
 ) -> Result<(), String> {
     crate::require_main(&caller)?;
     let server = crate::mcp_registry::get_server(&app, &server_id)?;
-    if server.transport != "streamable_http" { return Err("OAuth MCP só está disponível para servidores Streamable HTTP.".into()); }
+    if server.transport != "streamable_http" {
+        return Err("OAuth MCP só está disponível para servidores Streamable HTTP.".into());
+    }
     let endpoint = server.endpoint.ok_or("Endereço MCP ausente.")?;
     let id = server_id.clone();
     let app_for_flow = app.clone();
-    let (_credential, access) = tokio::task::spawn_blocking(move || run_authorization(app_for_flow, &endpoint, &id))
-        .await.map_err(|_| "A tarefa de autorização MCP foi interrompida.".to_string())??;
+    let (_credential, access) =
+        tokio::task::spawn_blocking(move || run_authorization(app_for_flow, &endpoint, &id))
+            .await
+            .map_err(|_| "A tarefa de autorização MCP foi interrompida.".to_string())??;
     Entry::new(SERVICE, &format!("{server_id}:http_bearer"))
-        .and_then(|entry| match entry.delete_credential() { Ok(()) | Err(keyring::Error::NoEntry) => Ok(()), Err(error) => Err(error) })
+        .and_then(|entry| match entry.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(error) => Err(error),
+        })
         .map_err(|_| "Não foi possível substituir o token pessoal salvo.".to_string())?;
-    runtime.0.lock().map_err(|_| "Estado MCP indisponível.".to_string())?.remove(&server_id);
-    runtime.1.lock().map_err(|_| "Estado OAuth MCP indisponível.".to_string())?.insert(server_id.clone(), access);
+    runtime
+        .0
+        .lock()
+        .map_err(|_| "Estado MCP indisponível.".to_string())?
+        .remove(&server_id);
+    runtime
+        .1
+        .lock()
+        .map_err(|_| "Estado OAuth MCP indisponível.".to_string())?
+        .insert(server_id.clone(), access);
     crate::mcp_registry::set_enabled_internal(&app, &server_id, true)?;
     let _ = app.emit("skills-updated", ());
     Ok(())
@@ -631,12 +975,26 @@ mod tests {
 
     #[test]
     fn consent_denied_does_not_yield_code() {
-        assert!(parse_callback_target("/callback?state=s&error=access_denied", "s", "https://auth.example", false).unwrap_err().contains("recusado"));
+        assert!(parse_callback_target(
+            "/callback?state=s&error=access_denied",
+            "s",
+            "https://auth.example",
+            false
+        )
+        .unwrap_err()
+        .contains("recusado"));
     }
 
     #[test]
     fn state_mismatch_is_rejected() {
-        assert!(parse_callback_target("/callback?state=other&code=c", "expected", "https://auth.example", false).unwrap_err().contains("state"));
+        assert!(parse_callback_target(
+            "/callback?state=other&code=c",
+            "expected",
+            "https://auth.example",
+            false
+        )
+        .unwrap_err()
+        .contains("state"));
     }
 
     #[test]
@@ -653,12 +1011,26 @@ mod tests {
 
     #[test]
     fn issuer_mismatch_is_rejected_before_code_exchange() {
-        assert!(parse_callback_target("/callback?state=s&code=c&iss=https%3A%2F%2Fevil.example", "s", "https://auth.example", false).unwrap_err().contains("emissor"));
+        assert!(parse_callback_target(
+            "/callback?state=s&code=c&iss=https%3A%2F%2Fevil.example",
+            "s",
+            "https://auth.example",
+            false
+        )
+        .unwrap_err()
+        .contains("emissor"));
     }
 
     #[test]
     fn required_issuer_may_not_be_omitted() {
-        assert!(parse_callback_target("/callback?state=s&code=c", "s", "https://auth.example", true).unwrap_err().contains("não informou"));
+        assert!(parse_callback_target(
+            "/callback?state=s&code=c",
+            "s",
+            "https://auth.example",
+            true
+        )
+        .unwrap_err()
+        .contains("não informou"));
     }
 
     #[test]
@@ -678,9 +1050,11 @@ mod tests {
 
     #[test]
     fn discovered_issuer_must_match_metadata_origin() {
-        assert!(validate_issuer("https://auth.example", "https://attacker.example")
-            .unwrap_err()
-            .contains("emissor"));
+        assert!(
+            validate_issuer("https://auth.example", "https://attacker.example")
+                .unwrap_err()
+                .contains("emissor")
+        );
         assert!(validate_issuer("https://auth.example", "https://auth.example").is_ok());
     }
 

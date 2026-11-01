@@ -8,7 +8,11 @@ use reqwest::{
     StatusCode,
 };
 use serde_json::{json, Value};
-use std::{io::Read, sync::{atomic::Ordering, Mutex}, time::Duration};
+use std::{
+    io::Read,
+    sync::{atomic::Ordering, Mutex},
+    time::Duration,
+};
 use url::Url;
 
 const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
@@ -16,8 +20,8 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 pub const PROTOCOL_VERSION: &str = "2026-07-28";
 
 pub fn validate_endpoint(raw: &str) -> Result<Url, String> {
-    let url = Url::parse(raw)
-        .map_err(|_| "Informe o endereço HTTPS do servidor MCP.".to_string())?;
+    let url =
+        Url::parse(raw).map_err(|_| "Informe o endereço HTTPS do servidor MCP.".to_string())?;
     if url.scheme() != "https"
         || url.host_str().is_none()
         || !url.username().is_empty()
@@ -45,7 +49,10 @@ pub struct McpHttpClient {
 
 enum AuthMode {
     Personal(String),
-    OAuth { server_id: String, access: Mutex<Option<crate::mcp_oauth::OAuthAccessToken>> },
+    OAuth {
+        server_id: String,
+        access: Mutex<Option<crate::mcp_oauth::OAuthAccessToken>>,
+    },
 }
 
 struct HttpReply {
@@ -143,7 +150,10 @@ impl McpHttpClient {
         let stored = crate::mcp_oauth::load(server_id)?
             .ok_or("Reconecte a autorização OAuth do servidor MCP.")?;
         if stored.resource != endpoint.as_str() {
-            return Err("A autorização OAuth foi emitida para outro servidor MCP; conecte novamente.".into());
+            return Err(
+                "A autorização OAuth foi emitida para outro servidor MCP; conecte novamente."
+                    .into(),
+            );
         }
         let client = Client::builder()
             .redirect(Policy::none())
@@ -166,11 +176,7 @@ impl McpHttpClient {
     }
 
     #[cfg(test)]
-    fn with_transport(
-        endpoint: &str,
-        token: &str,
-        transport: Box<dyn HttpTransport>,
-    ) -> Self {
+    fn with_transport(endpoint: &str, token: &str, transport: Box<dyn HttpTransport>) -> Self {
         Self {
             endpoint: validate_endpoint(endpoint).unwrap(),
             auth: AuthMode::Personal(token.to_owned()),
@@ -203,10 +209,20 @@ impl McpHttpClient {
             "params": params
         });
         let token = self.bearer_token(false)?;
-        let mut response = self.transport.post(&self.endpoint, &token, method, name.as_deref(), body.clone())?;
-        if response.status == StatusCode::UNAUTHORIZED && matches!(&self.auth, AuthMode::OAuth { .. }) {
+        let mut response = self.transport.post(
+            &self.endpoint,
+            &token,
+            method,
+            name.as_deref(),
+            body.clone(),
+        )?;
+        if response.status == StatusCode::UNAUTHORIZED
+            && matches!(&self.auth, AuthMode::OAuth { .. })
+        {
             let renewed = self.bearer_token(true)?;
-            response = self.transport.post(&self.endpoint, &renewed, method, name.as_deref(), body)?;
+            response =
+                self.transport
+                    .post(&self.endpoint, &renewed, method, name.as_deref(), body)?;
         }
         if !same_origin(&self.endpoint, &response.final_url) {
             return Err("O servidor MCP respondeu por um host diferente do cadastrado.".into());
@@ -218,11 +234,23 @@ impl McpHttpClient {
         match &self.auth {
             AuthMode::Personal(token) => Ok(token.clone()),
             AuthMode::OAuth { server_id, access } => {
-                let mut access = access.lock().map_err(|_| "Estado OAuth MCP indisponível.".to_string())?;
-                if force_refresh || access.as_ref().map_or(true, |token| crate::mcp_oauth::should_refresh(token.expires_at, std::time::Instant::now())) {
+                let mut access = access
+                    .lock()
+                    .map_err(|_| "Estado OAuth MCP indisponível.".to_string())?;
+                if force_refresh
+                    || access.as_ref().map_or(true, |token| {
+                        crate::mcp_oauth::should_refresh(
+                            token.expires_at,
+                            std::time::Instant::now(),
+                        )
+                    })
+                {
                     *access = Some(crate::mcp_oauth::refresh_access(server_id)?);
                 }
-                access.as_ref().map(|token| token.value.clone()).ok_or_else(|| "Reconecte a autorização OAuth do servidor MCP.".into())
+                access
+                    .as_ref()
+                    .map(|token| token.value.clone())
+                    .ok_or_else(|| "Reconecte a autorização OAuth do servidor MCP.".into())
             }
         }
     }
@@ -234,23 +262,17 @@ fn same_origin(expected: &Url, actual: &Url) -> bool {
         && expected.port_or_known_default() == actual.port_or_known_default()
 }
 
-fn parse_response(
-    status: StatusCode,
-    content_type: &str,
-    bytes: &[u8],
-) -> Result<Value, String> {
+fn parse_response(status: StatusCode, content_type: &str, bytes: &[u8]) -> Result<Value, String> {
     if status.is_redirection() {
-        return Err("O servidor MCP tentou redirecionar a conexão; redirecionamentos são recusados."
-            .into());
+        return Err(
+            "O servidor MCP tentou redirecionar a conexão; redirecionamentos são recusados.".into(),
+        );
     }
     if status == StatusCode::UNAUTHORIZED {
         return Err("O token do servidor MCP expirou ou é inválido.".into());
     }
     if !status.is_success() {
-        return Err(format!(
-            "O servidor MCP retornou HTTP {}.",
-            status.as_u16()
-        ));
+        return Err(format!("O servidor MCP retornou HTTP {}.", status.as_u16()));
     }
     if bytes.len() > MAX_RESPONSE_BYTES {
         return Err("A resposta do servidor MCP excedeu o limite seguro de leitura.".into());
@@ -285,8 +307,8 @@ fn metadata() -> Value {
 }
 
 fn encode_header_value(value: &str) -> Result<HeaderValue, String> {
-    let plain_ascii = value.bytes().all(|byte| (0x20..=0x7e).contains(&byte))
-        && !value.starts_with("=?base64?");
+    let plain_ascii =
+        value.bytes().all(|byte| (0x20..=0x7e).contains(&byte)) && !value.starts_with("=?base64?");
     let value = if plain_ascii {
         value.to_owned()
     } else {
@@ -297,8 +319,8 @@ fn encode_header_value(value: &str) -> Result<HeaderValue, String> {
 }
 
 fn parse_sse(bytes: &[u8]) -> Result<Value, String> {
-    let text = std::str::from_utf8(bytes)
-        .map_err(|_| "Fluxo SSE MCP não está em UTF-8.".to_string())?;
+    let text =
+        std::str::from_utf8(bytes).map_err(|_| "Fluxo SSE MCP não está em UTF-8.".to_string())?;
     let mut event_data = Vec::new();
     let mut last_message = None;
     for line in text.lines().chain(std::iter::once("")) {
@@ -402,11 +424,9 @@ mod tests {
 
     #[test]
     fn server_host_is_not_a_request_parameter() {
-        let client = McpHttpClient::connect(
-            "https://mcp.example.org/endpoint",
-            "secret-token".into(),
-        )
-        .unwrap();
+        let client =
+            McpHttpClient::connect("https://mcp.example.org/endpoint", "secret-token".into())
+                .unwrap();
         assert_eq!(client.endpoint.host_str(), Some("mcp.example.org"));
     }
 

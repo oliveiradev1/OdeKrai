@@ -61,19 +61,15 @@ impl McpClient {
         }
     }
 
-    fn tools_call(
-        &self,
-        name: &str,
-        args: serde_json::Value,
-    ) -> Result<serde_json::Value, String> {
+    fn tools_call(&self, name: &str, args: serde_json::Value) -> Result<serde_json::Value, String> {
         match self {
-            Self::Stdio(client) => client
-                .tools_call(name, args)
-                .map_err(safe_client_error),
+            Self::Stdio(client) => client.tools_call(name, args).map_err(safe_client_error),
             Self::Http(client) => client.tools_call(name, args),
             #[cfg(test)]
             Self::Mock(client) => {
-                client.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                client
+                    .calls
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 Ok(serde_json::json!({
                     "content": [{"type":"text", "text": client.result}],
                     "_untrusted": true
@@ -131,7 +127,6 @@ impl McpRuntime {
             })
             .unwrap_or_default()
     }
-
 }
 
 pub(crate) fn tool_setting_key(tool: &McpTool) -> String {
@@ -224,7 +219,14 @@ pub(crate) fn execute_tool_action(
     let runtime = app
         .try_state::<McpRuntime>()
         .ok_or("O servidor MCP não está conectado; teste a conexão novamente.")?;
-    execute_connected_tool_action(runtime, tool_id, server_id, tool_name, schema_sha256, arguments)
+    execute_connected_tool_action(
+        runtime,
+        tool_id,
+        server_id,
+        tool_name,
+        schema_sha256,
+        arguments,
+    )
 }
 
 fn execute_connected_tool_action(
@@ -252,7 +254,16 @@ struct MockMcpClient {
 }
 
 #[derive(Deserialize)]
-struct StoredRow(String, String, String, String, String, bool, String, Option<String>);
+struct StoredRow(
+    String,
+    String,
+    String,
+    String,
+    String,
+    bool,
+    String,
+    Option<String>,
+);
 
 fn valid_env_name(name: &str) -> bool {
     let mut bytes = name.bytes();
@@ -360,7 +371,10 @@ fn list(db: &Connection) -> Result<Vec<McpServer>, String> {
 
 fn insert(db: &Connection, server: &McpServer) -> Result<(), String> {
     if server.transport == "streamable_http" {
-        if server.name.trim().is_empty() || server.name.chars().count() > 80 || server.name.chars().any(char::is_control) {
+        if server.name.trim().is_empty()
+            || server.name.chars().count() > 80
+            || server.name.chars().any(char::is_control)
+        {
             return Err("Informe um nome de até 80 caracteres.".into());
         }
         crate::mcp_http::validate_endpoint(
@@ -373,7 +387,12 @@ fn insert(db: &Connection, server: &McpServer) -> Result<(), String> {
             return Err("Servidor HTTP MCP não aceita comando ou variáveis locais.".into());
         }
     } else {
-        validate(&server.name, &server.command, &server.args, &server.env_names)?;
+        validate(
+            &server.name,
+            &server.command,
+            &server.args,
+            &server.env_names,
+        )?;
     }
     db.execute(
         "INSERT INTO mcp_servers(id,name,command,args_json,env_names_json,enabled,transport,endpoint) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
@@ -469,10 +488,18 @@ fn inspect(
         let endpoint = server.endpoint.as_deref().ok_or("Endereço MCP ausente.")?;
         let pat = entry(&server.id, "http_bearer")?.get_password();
         let client = if let Ok(token) = pat {
-            Arc::new(McpClient::Http(crate::mcp_http::McpHttpClient::connect(endpoint, token)?))
+            Arc::new(McpClient::Http(crate::mcp_http::McpHttpClient::connect(
+                endpoint, token,
+            )?))
         } else if crate::mcp_oauth::load(&server.id)?.is_some() {
-            let access = runtime.1.lock().map_err(|_| "Estado OAuth MCP indisponível.".to_string())?.remove(&server.id);
-            Arc::new(McpClient::Http(crate::mcp_http::McpHttpClient::connect_oauth(endpoint, &server.id, access)?))
+            let access = runtime
+                .1
+                .lock()
+                .map_err(|_| "Estado OAuth MCP indisponível.".to_string())?
+                .remove(&server.id);
+            Arc::new(McpClient::Http(
+                crate::mcp_http::McpHttpClient::connect_oauth(endpoint, &server.id, access)?,
+            ))
         } else {
             return Err("Cadastre um token ou conecte o servidor por OAuth.".into());
         };
@@ -585,9 +612,9 @@ fn tool_catalog_with_native_ids(
             };
             let problem = if name.is_empty()
                 || name.len() > 80
-                || !name.bytes().all(|byte| {
-                    byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.')
-                })
+                || !name
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
             {
                 Some("Nome de ferramenta inválido.".to_string())
             } else if id.len() > 64 {
@@ -597,16 +624,12 @@ fn tool_catalog_with_native_ids(
             } else if counts.get(name).copied().unwrap_or_default() > 1 {
                 Some("O servidor repetiu o nome de uma ferramenta.".to_string())
             } else if !schema_is_valid {
-                Some(
-                    "O schema da ferramenta é inválido ou usa regras não suportadas.".to_string(),
-                )
+                Some("O schema da ferramenta é inválido ou usa regras não suportadas.".to_string())
             } else {
                 None
             };
-            let schema_sha256 = format!(
-                "{:x}",
-                sha2::Sha256::digest(schema.to_string().as_bytes())
-            );
+            let schema_sha256 =
+                format!("{:x}", sha2::Sha256::digest(schema.to_string().as_bytes()));
             McpTool {
                 id,
                 server_id: server.id.clone(),
@@ -635,7 +658,10 @@ fn unavailable_tool(
         server_name: server.name.clone(),
         name: name.to_owned(),
         description: String::new(),
-        schema_sha256: format!("{:x}", sha2::Sha256::digest(input_schema.to_string().as_bytes())),
+        schema_sha256: format!(
+            "{:x}",
+            sha2::Sha256::digest(input_schema.to_string().as_bytes())
+        ),
         input_schema,
         risk_hint: None,
         available: false,
@@ -675,7 +701,10 @@ fn strip_schema_annotations(mut schema: serde_json::Value) -> serde_json::Value 
             }
         }
         for keyword in ["items", "additionalProperties"] {
-            if object.get(keyword).is_some_and(serde_json::Value::is_object) {
+            if object
+                .get(keyword)
+                .is_some_and(serde_json::Value::is_object)
+            {
                 if let Some(child) = object.get_mut(keyword) {
                     *child = strip_schema_annotations(std::mem::take(child));
                 }
@@ -737,7 +766,9 @@ pub fn mcp_list_servers(
         }
         let status = match states.get(&server.id) {
             Some(RuntimeStatus::Connecting) => "Conectando".into(),
-            Some(RuntimeStatus::Connected { client, .. }) if client.is_alive() => "Conectado".into(),
+            Some(RuntimeStatus::Connected { client, .. }) if client.is_alive() => {
+                "Conectado".into()
+            }
             Some(RuntimeStatus::Connected { .. }) => "O servidor MCP encerrou o processo.".into(),
             Some(RuntimeStatus::Error(message)) => message.clone(),
             None => "Parado".into(),
@@ -985,10 +1016,7 @@ pub async fn mcp_remove_server(
     }
     let server_id_for_revocation = server_id.clone();
     let revoked = tokio::task::spawn_blocking(move || {
-        crate::mcp_oauth::revoke_before_remove(
-            &server_id_for_revocation,
-            access_token.as_deref(),
-        )
+        crate::mcp_oauth::revoke_before_remove(&server_id_for_revocation, access_token.as_deref())
     })
     .await
     .unwrap_or(false);
@@ -1030,7 +1058,9 @@ mod tests {
         assert!(tools[0].description.contains("ignore as regras"));
         assert!(!tools[0].description.contains('\n'));
         assert_eq!(tools[0].risk_hint.as_deref(), Some("leitura"));
-        assert!(tools[0].input_schema["properties"]["text"].get("description").is_none());
+        assert!(tools[0].input_schema["properties"]["text"]
+            .get("description")
+            .is_none());
         assert_eq!(
             tools[0].input_schema["properties"]["literal"]["const"]["description"],
             "preserve this argument"
@@ -1244,7 +1274,9 @@ mod tests {
         insert(&db, &server).unwrap();
         let mut vault = FakeVault::default();
         set_env_with(&server, "TOKEN", "segredo", &mut vault).unwrap();
-        vault.store(&server.id, "http_bearer", "token-remoto").unwrap();
+        vault
+            .store(&server.id, "http_bearer", "token-remoto")
+            .unwrap();
         remove_with(&db, &server, &mut vault).unwrap();
         assert!(list(&db).unwrap().is_empty());
         assert!(vault.0.is_empty());

@@ -1740,8 +1740,9 @@ pub(super) fn validate_action(action: &SimulatedAction) -> Result<(), String> {
         }
         SimulatedAction::McpToolCall { params, .. } => {
             if !params.is_object()
-                || serde_json::to_vec(params)
-                    .map_or(true, |value| value.len() > crate::mcp::MAX_TOOL_ARGUMENT_BYTES)
+                || serde_json::to_vec(params).map_or(true, |value| {
+                    value.len() > crate::mcp::MAX_TOOL_ARGUMENT_BYTES
+                })
             {
                 return Err("Os argumentos da ferramenta MCP excedem os limites locais.".into());
             }

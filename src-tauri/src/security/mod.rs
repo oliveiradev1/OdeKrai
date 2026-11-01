@@ -454,19 +454,21 @@ pub(crate) fn database(app: &tauri::AppHandle) -> Result<Connection, String> {
         ("endpoint", "TEXT"),
     ] {
         let present = {
-            let mut statement = db
-                .prepare("PRAGMA table_info(mcp_servers)")
-                .map_err(|_| "Não foi possível verificar a migração dos servidores MCP.".to_string())?;
+            let mut statement = db.prepare("PRAGMA table_info(mcp_servers)").map_err(|_| {
+                "Não foi possível verificar a migração dos servidores MCP.".to_string()
+            })?;
             let rows = statement
                 .query_map([], |row| row.get::<_, String>(1))
-                .map_err(|_| "Não foi possível verificar a migração dos servidores MCP.".to_string())?;
+                .map_err(|_| {
+                    "Não foi possível verificar a migração dos servidores MCP.".to_string()
+                })?;
             rows.filter_map(Result::ok).any(|name| name == column)
         };
         if !present {
             db.execute_batch(&format!(
                 "ALTER TABLE mcp_servers ADD COLUMN {column} {definition}"
             ))
-                .map_err(|_| "Não foi possível atualizar o cadastro dos servidores MCP.".to_string())?;
+            .map_err(|_| "Não foi possível atualizar o cadastro dos servidores MCP.".to_string())?;
         }
     }
     skills::seed_default_skill_settings(&db)

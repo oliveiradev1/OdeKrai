@@ -437,7 +437,10 @@ mod explicit_approval_tests {
             Mode::ControleTotal,
         ] {
             let decision = policy::decide(mode, risk, &Origin::Model, inside, fixed, true);
-            assert!(matches!(decision, Decision::AskUser(_)), "{mode:?}: {decision:?}");
+            assert!(
+                matches!(decision, Decision::AskUser(_)),
+                "{mode:?}: {decision:?}"
+            );
         }
     }
 
@@ -598,7 +601,10 @@ pub(super) fn summary(action: &SimulatedAction) -> String {
             server_name,
             tool_name,
             ..
-        } => format!("Chamar {tool_name} no servidor MCP {}", clipped(server_name, 100)),
+        } => format!(
+            "Chamar {tool_name} no servidor MCP {}",
+            clipped(server_name, 100)
+        ),
         SimulatedAction::ReadFile { path } | SimulatedAction::DeleteFile { path } => {
             format!("{}: {}", tool_for(action).name(), path)
         }

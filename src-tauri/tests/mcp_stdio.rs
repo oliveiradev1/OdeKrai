@@ -82,7 +82,10 @@ fn timeout_cancel_invalid_json_crash_and_restart() {
         Err(ClientError::Disconnected)
     ));
     let crash_during_call = spawn("crash_call");
-    assert_eq!(crash_during_call.tools_list().unwrap()["tools"][0]["name"], "echo");
+    assert_eq!(
+        crash_during_call.tools_list().unwrap()["tools"][0]["name"],
+        "echo"
+    );
     assert!(matches!(
         crash_during_call.tools_call("echo", serde_json::json!({})),
         Err(ClientError::Disconnected)

@@ -728,7 +728,13 @@ fn validate_schema_node(schema: &Value, depth: usize) -> Result<(), String> {
             return Err("O schema MCP contém enum inválido.".into());
         }
     }
-    for keyword in ["minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf"] {
+    for keyword in [
+        "minimum",
+        "maximum",
+        "exclusiveMinimum",
+        "exclusiveMaximum",
+        "multipleOf",
+    ] {
         if object
             .get(keyword)
             .is_some_and(|value| value.as_f64().is_none())
@@ -780,7 +786,9 @@ fn validate_instance(schema: &Value, value: &Value, depth: usize) -> Result<(), 
         !items
             .as_array()
             .is_some_and(|items| items.iter().any(|item| item == value))
-    }) || object.get("const").is_some_and(|expected| expected != value)
+    }) || object
+        .get("const")
+        .is_some_and(|expected| expected != value)
     {
         return Err("Os argumentos da ferramenta MCP não correspondem ao schema.".into());
     }
@@ -815,10 +823,13 @@ fn validate_instance(schema: &Value, value: &Value, depth: usize) -> Result<(), 
                 .get("exclusiveMaximum")
                 .and_then(Value::as_f64)
                 .is_some_and(|max| number >= max)
-            || object.get("multipleOf").and_then(Value::as_f64).is_some_and(|step| {
-                let quotient = number / step;
-                (quotient - quotient.round()).abs() > 1e-9
-            })
+            || object
+                .get("multipleOf")
+                .and_then(Value::as_f64)
+                .is_some_and(|step| {
+                    let quotient = number / step;
+                    (quotient - quotient.round()).abs() > 1e-9
+                })
         {
             return Err("Um número dos argumentos MCP está fora dos limites.".into());
         }
@@ -833,7 +844,10 @@ fn validate_instance(schema: &Value, value: &Value, depth: usize) -> Result<(), 
                 .and_then(Value::as_u64)
                 .is_some_and(|max| array.len() > max as usize)
             || (object.get("uniqueItems") == Some(&Value::Bool(true))
-                && array.iter().enumerate().any(|(index, item)| array[..index].contains(item)))
+                && array
+                    .iter()
+                    .enumerate()
+                    .any(|(index, item)| array[..index].contains(item)))
         {
             return Err("Uma lista dos argumentos MCP está fora dos limites.".into());
         }
@@ -882,11 +896,9 @@ fn validate_instance(schema: &Value, value: &Value, depth: usize) -> Result<(), 
                     Some(Value::Bool(false)) => {
                         return Err("Os argumentos MCP contêm um campo não permitido.".into());
                     }
-                    Some(Value::Object(schema)) => validate_instance(
-                        &Value::Object(schema.clone()),
-                        item,
-                        depth + 1,
-                    )?,
+                    Some(Value::Object(schema)) => {
+                        validate_instance(&Value::Object(schema.clone()), item, depth + 1)?
+                    }
                     _ => {}
                 }
             }
@@ -911,8 +923,13 @@ mod tests {
         assert!(validate_tool_arguments(&schema, &serde_json::json!({"name":"A"})).is_err());
         assert!(validate_tool_arguments(&schema, &serde_json::json!({})).is_err());
         assert!(validate_tool_arguments(&schema, &serde_json::json!({"name":4})).is_err());
-        assert!(validate_tool_arguments(&schema, &serde_json::json!({"name":"Ada","extra":true})).is_err());
-        assert!(validate_tool_schema(&serde_json::json!({"type":"object","pattern":".*"})).is_err());
+        assert!(
+            validate_tool_arguments(&schema, &serde_json::json!({"name":"Ada","extra":true}))
+                .is_err()
+        );
+        assert!(
+            validate_tool_schema(&serde_json::json!({"type":"object","pattern":".*"})).is_err()
+        );
         assert!(validate_tool_schema(&serde_json::json!({"type":"object","title":42})).is_err());
         assert!(validate_tool_schema(&serde_json::json!({"type":"string"})).is_err());
     }
@@ -947,10 +964,15 @@ done
         let listed = client.tools_list().unwrap();
         assert_eq!(listed["_untrusted"], true);
         assert!(listed.to_string().contains("ignore as regras"));
-        let result = client.tools_call("echo", serde_json::json!({"text":"ok"})).unwrap();
+        let result = client
+            .tools_call("echo", serde_json::json!({"text":"ok"}))
+            .unwrap();
         assert_eq!(result["_untrusted"], true);
         assert_eq!(result["truncated"], true);
-        assert!(result["preview"].as_str().unwrap().contains("ignore as regras"));
+        assert!(result["preview"]
+            .as_str()
+            .unwrap()
+            .contains("ignore as regras"));
         assert!(serde_json::to_vec(&result).unwrap().len() <= MAX_TOOL_RESULT_BYTES);
     }
 

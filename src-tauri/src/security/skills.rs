@@ -81,7 +81,16 @@ impl OfferedSkill {
         match self {
             Self::Native(skill) => {
                 skill
-                    .execute(app, state, params, origin, tainted, cancel, on_approval, on_output)
+                    .execute(
+                        app,
+                        state,
+                        params,
+                        origin,
+                        tainted,
+                        cancel,
+                        on_approval,
+                        on_output,
+                    )
                     .await
             }
             Self::Mcp(tool) => {
@@ -1796,12 +1805,13 @@ pub fn set_skill_enabled(
     crate::require_main(&caller)?;
     let native = registry().iter().any(|skill| skill.id == skill_id);
     let mcp_tool = if skill_id.starts_with("mcp.") {
-        app.try_state::<crate::mcp_registry::McpRuntime>().and_then(|runtime| {
-            runtime
-                .connected_tools()
-                .into_iter()
-                .find(|tool| tool.id == skill_id)
-        })
+        app.try_state::<crate::mcp_registry::McpRuntime>()
+            .and_then(|runtime| {
+                runtime
+                    .connected_tools()
+                    .into_iter()
+                    .find(|tool| tool.id == skill_id)
+            })
     } else {
         None
     };
