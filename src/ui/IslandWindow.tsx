@@ -22,6 +22,7 @@ import { DEFAULT_PET_ID, PETS, petAnimationForIslandState, petGreeting } from '.
 import { PetSprite } from './PetSprite';
 import { Icon } from './Icon';
 import { petWindowLayout } from '../core/pet-layout';
+import { petHitTestPayload } from '../core/pet-hit-test';
 import {
   createIslandQuickRequest,
   canSubmitIslandQuickCommand,
@@ -339,11 +340,7 @@ export function IslandWindow() {
       if (disposed) return;
       const rect = sprite?.getBoundingClientRect();
       void invoke('set_pet_hit_test', {
-        enabled: petHitTestEnabled && Boolean(rect),
-        x: rect?.left ?? 0,
-        y: rect?.top ?? 0,
-        width: rect?.width ?? 0,
-        height: rect?.height ?? 0,
+        ...petHitTestPayload(settings.companion.freeMode, state === 'expanded', rect),
       }).catch(() => {
         console.warn('[OdeKrai diagnóstico] Não foi possível atualizar a área de clique do pet.');
       });

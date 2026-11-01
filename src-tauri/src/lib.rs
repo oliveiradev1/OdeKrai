@@ -409,7 +409,7 @@ async fn monitor_pet_hit_test(app: tauri::AppHandle) {
         if let (Some(rect), Some((x, y))) = (rect, cursor) {
             cursor_in_hit_area = pet_hit_test::contains(rect, x, y);
         }
-        let ignore = pet_hit_test::should_ignore_cursor_events(true, rect, cursor);
+        let ignore = pet_hit_test::should_ignore_cursor_events(visible, enabled, rect, cursor);
         if let Ok(mut previous) = state.last_ignore.lock() {
             if *previous != Some(ignore) && window.set_ignore_cursor_events(ignore).is_ok() {
                 *previous = Some(ignore);
