@@ -404,6 +404,7 @@ fn github_grant_revoked_with(
         .is_ok_and(|status| status == StatusCode::NO_CONTENT)
 }
 
+#[cfg(test)]
 pub(crate) fn github_oauth_read_scopes() -> &'static str {
     "read:user"
 }
@@ -863,6 +864,8 @@ fn pkce_challenge(verifier: &str) -> String {
     URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()))
 }
 
+// Os parâmetros refletem os campos OAuth enviados separadamente à URL.
+#[allow(clippy::too_many_arguments)]
 fn build_authorization_url(
     metadata: &ServerMetadata,
     client_id: &str,
@@ -1101,6 +1104,8 @@ impl std::fmt::Debug for TokenResponse {
     }
 }
 
+// Os campos OAuth são mantidos explícitos para montar o formulário com segurança.
+#[allow(clippy::too_many_arguments)]
 fn exchange_code(
     client: &Client,
     metadata: &ServerMetadata,
@@ -1895,8 +1900,7 @@ mod tests {
             json!({"error":"invalid_grant"}),
             true,
         )
-        .err()
-        .expect("token revogado deve solicitar nova autorização");
+        .expect_err("token revogado deve solicitar nova autorização");
         assert!(response.contains("revogada ou expirou"));
         assert!(response.contains("Conecte novamente"));
     }

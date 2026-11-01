@@ -409,6 +409,8 @@ async fn run_action_with(
     .await
 }
 
+// Os argumentos separados permitem injetar transporte e prazos nos testes simulados.
+#[allow(clippy::too_many_arguments)]
 async fn run_action_paths_with(
     client: &Client,
     base: &str,
@@ -800,10 +802,11 @@ pub(crate) fn prepare_skill_params(
         .ok_or("Os parâmetros da habilidade são inválidos.")?;
     let expected = if matches!(
         skill_id,
-        "hostinger.vps_start" | "hostinger.vps_stop" | "hostinger.vps_restart"
+        "hostinger.vps_start"
+            | "hostinger.vps_stop"
+            | "hostinger.vps_restart"
+            | "hostinger.docker_list"
     ) {
-        1
-    } else if skill_id == "hostinger.docker_list" {
         1
     } else if skill_id == "hostinger.docker_deploy" {
         3
@@ -2579,10 +2582,10 @@ mod tests {
             rules: firewall_rules_from(&response),
         };
         assert_eq!(
-            resolve_approved_firewall(&[firewall.clone()], "edge").unwrap(),
+            resolve_approved_firewall(std::slice::from_ref(&firewall), "edge").unwrap(),
             firewall
         );
-        assert!(resolve_approved_firewall(&[firewall.clone()], "inventado").is_err());
+        assert!(resolve_approved_firewall(std::slice::from_ref(&firewall), "inventado").is_err());
         let rule = &firewall.rules[0];
         assert_eq!(rule.name, "accept TCP 443 de 192.0.2.0/24");
         assert_eq!(
