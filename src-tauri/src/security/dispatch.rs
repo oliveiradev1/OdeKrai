@@ -420,6 +420,28 @@ mod explicit_approval_tests {
     }
 
     #[test]
+    fn mcp_tool_call_always_requires_approval_even_with_permissive_override() {
+        let action = SimulatedAction::McpToolCall {
+            skill_id: "mcp.fake.lookup".into(),
+            server_id: "fake".into(),
+            server_name: "Servidor falso".into(),
+            tool_name: "lookup".into(),
+            schema_sha256: "schema-hash".into(),
+            params: json!({"query":"teste"}),
+        };
+        let (_, risk, inside, fixed) = action_metadata(&action);
+        assert_eq!(risk, Risk::ComunicacaoExterna);
+        for mode in [
+            Mode::SemprePerguntar,
+            Mode::AprovarPorMim,
+            Mode::ControleTotal,
+        ] {
+            let decision = policy::decide(mode, risk, &Origin::Model, inside, fixed, true);
+            assert!(matches!(decision, Decision::AskUser(_)), "{mode:?}: {decision:?}");
+        }
+    }
+
+    #[test]
     fn discord_message_from_untrusted_content_still_requires_user_approval() {
         let action = SimulatedAction::Productivity {
             skill_id: "discord.send".into(),

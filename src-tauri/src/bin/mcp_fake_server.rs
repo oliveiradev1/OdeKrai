@@ -31,6 +31,9 @@ fn main() {
         if mode == "crash" && request["method"] == "tools/list" {
             return;
         }
+        if mode == "crash_call" && request["method"] == "tools/call" {
+            return;
+        }
         if mode == "hang" && request["method"] == "tools/call" {
             std::thread::sleep(std::time::Duration::from_secs(2));
             continue;
