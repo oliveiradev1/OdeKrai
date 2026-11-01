@@ -462,7 +462,8 @@ pub(crate) fn database(app: &tauri::AppHandle) -> Result<Connection, String> {
                 .map_err(|_| {
                     "Não foi possível verificar a migração dos servidores MCP.".to_string()
                 })?;
-            rows.filter_map(Result::ok).any(|name| name == column)
+            let present = rows.filter_map(Result::ok).any(|name| name == column);
+            present
         };
         if !present {
             db.execute_batch(&format!(

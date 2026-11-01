@@ -109,6 +109,14 @@ pub struct McpRuntime(
 );
 
 impl McpRuntime {
+    pub(crate) fn remove_connection(&self, server_id: &str) -> Result<(), String> {
+        self.0
+            .lock()
+            .map_err(|_| "Estado MCP indisponível.".to_string())?
+            .remove(server_id);
+        Ok(())
+    }
+
     pub(crate) fn connected_tools(&self) -> Vec<McpTool> {
         self.0
             .lock()
@@ -155,7 +163,7 @@ fn connected_tool(
     let runtime = app
         .try_state::<McpRuntime>()
         .ok_or("O servidor MCP não está conectado; teste a conexão novamente.")?;
-    connected_tool_in_runtime(runtime, tool_id, server_id, tool_name, schema_sha256)
+    connected_tool_in_runtime(&runtime, tool_id, server_id, tool_name, schema_sha256)
 }
 
 fn connected_tool_in_runtime(
@@ -220,7 +228,7 @@ pub(crate) fn execute_tool_action(
         .try_state::<McpRuntime>()
         .ok_or("O servidor MCP não está conectado; teste a conexão novamente.")?;
     execute_connected_tool_action(
-        runtime,
+        &runtime,
         tool_id,
         server_id,
         tool_name,

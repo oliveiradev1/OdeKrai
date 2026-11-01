@@ -808,7 +808,7 @@ pub(crate) fn revoke_before_remove(server_id: &str, access_token: Option<&str>) 
     )
 }
 
-fn removal_warning(revoked: bool) -> Option<String> {
+pub(crate) fn removal_warning(revoked: bool) -> Option<String> {
     (!revoked).then(|| {
         "Servidor removido deste dispositivo, mas o provedor não confirmou a revogação do token. Revogue-o no painel do provedor, se necessário.".to_string()
     })
@@ -910,10 +910,7 @@ pub async fn mcp_oauth_authorize(
         })
         .map_err(|_| "Não foi possível substituir o token pessoal salvo.".to_string())?;
     runtime
-        .0
-        .lock()
-        .map_err(|_| "Estado MCP indisponível.".to_string())?
-        .remove(&server_id);
+        .remove_connection(&server_id)?;
     runtime
         .1
         .lock()

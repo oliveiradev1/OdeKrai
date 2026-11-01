@@ -379,6 +379,7 @@ fn action_id(action: &SimulatedAction) -> &str {
         SimulatedAction::DeleteFile { .. } => "workspace.delete_file",
         SimulatedAction::SendMessage { .. } => "simulated.send_message",
         SimulatedAction::Payment { .. } => "simulated.payment",
+        SimulatedAction::McpToolCall { skill_id, .. } => skill_id,
         SimulatedAction::Productivity { skill_id, .. } => match skill_id.as_str() {
             "plan.propose" => skill_id,
             "screen.capture" => skill_id,
@@ -2124,6 +2125,7 @@ mod tests {
             description: "consulta".into(),
             input_schema: serde_json::json!({"type":"object"}),
             schema_sha256: "hash".into(),
+            risk_hint: None,
             available: true,
             reason: None,
         };
