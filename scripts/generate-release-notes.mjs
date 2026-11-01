@@ -25,6 +25,7 @@ function parseReleaseNote(filename, source) {
 
   const plainSectionNames = [
     'Importante antes de instalar',
+    'Aviso sobre o instalador não assinado',
     'Novidades',
     'Correções',
     'Limitações conhecidas',

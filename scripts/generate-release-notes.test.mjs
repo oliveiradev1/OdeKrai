@@ -72,6 +72,29 @@ describe('manifesto de notas de versão', () => {
     }
   });
 
+  it('mantém o aviso do instalador como seção separada do resumo', async () => {
+    temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), 'odekrai-release-notes-'));
+    const note = [
+      '# v1.2.3 — Marco de teste',
+      '',
+      'Resumo curto.',
+      '',
+      'Aviso sobre o instalador não assinado',
+      '',
+      '- O instalador não é assinado. O Windows pode mostrar "Protegeu o computador".',
+      '',
+      'Novidades',
+      '',
+      '- Recurso documentado.',
+      '',
+    ].join('\n');
+    await writeFile(path.join(temporaryDirectory, 'v1.2.3.md'), note);
+
+    const manifest = await buildReleaseNotes(temporaryDirectory, '1.2.3');
+    expect(manifest.releases[0].summary).toBe('Resumo curto.');
+    expect(manifest.releases[0].changes).toEqual(['Recurso documentado.']);
+  });
+
   it('falha com erro explícito quando uma nota está mal formatada', async () => {
     temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), 'odekrai-release-notes-'));
     await writeFile(path.join(temporaryDirectory, 'v1.2.3.md'), '# nota inválida');
