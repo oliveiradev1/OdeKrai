@@ -141,6 +141,7 @@ mod google_calendar;
 pub mod google_oauth;
 mod hardware;
 mod history;
+mod hostinger;
 mod local_models;
 pub mod mcp;
 mod mcp_http;
@@ -1236,6 +1237,16 @@ pub fn run() -> Result<(), tauri::Error> {
             shardcloud::shardcloud_get_vm_details,
             shardcloud::shardcloud_get_vm_metrics,
             shardcloud::shardcloud_list_distros,
+            hostinger::save_hostinger_token,
+            hostinger::has_hostinger_token,
+            hostinger::remove_hostinger_token,
+            hostinger::hostinger_test_connection,
+            hostinger::hostinger_list_vms,
+            hostinger::hostinger_get_vm_details,
+            hostinger::hostinger_list_data_centers,
+            hostinger::hostinger_list_templates,
+            hostinger::hostinger_list_recent_actions,
+            hostinger::hostinger_list_backups,
             hardware::get_hardware_profile,
             local_models::download_local_model,
             local_models::cancel_local_model_download,

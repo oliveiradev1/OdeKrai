@@ -1,9 +1,9 @@
 # Auditoria da API da Hostinger para VPS
 
-Pesquisa documental para preparar uma possível integração. **Não há integração Hostinger
-implementada neste repositório**; as linhas abaixo são um inventário de endpoints confirmados no
-OpenAPI, não uma autorização para chamá-los. Risco e confirmação por nome são a avaliação proposta
-para o OdeKrai, não campos fornecidos pela Hostinger.
+Pesquisa documental para a integração somente de leitura da Hostinger. O OdeKrai implementa apenas
+as consultas listadas como comandos de leitura; operações mutáveis e financeiras permanecem fora
+de escopo. Risco e confirmação por nome são a avaliação do OdeKrai, não campos fornecidos pela
+Hostinger.
 
 Pesquisa realizada em 2026-11-01. O OpenAPI declara `openapi: 3.0.0`, título `Hostinger API`,
 versão `2.6.1` e servidor de produção `https://developers.hostinger.com`. O documento descreve
