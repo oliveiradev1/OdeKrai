@@ -31,35 +31,68 @@
   {
     "name": "Gmail",
     "supplier": "Google Workspace",
-    "documentationUrl": "https://developers.google.com/workspace/guides/configure-mcp-servers",
+    "documentationUrl": "https://developers.google.com/workspace/gmail/api/guides/configure-mcp-server",
     "endpoint": "https://gmailmcp.googleapis.com/mcp/v1",
     "transport": "Streamable HTTP",
     "authentication": "OAuth 2.0 com client ID e client secret do projeto Google Cloud",
     "authenticationMethods": ["oauth"],
     "programStatus": "Developer Preview",
-    "status": "not_available"
+    "oauthScopeLabels": [
+      "Leitura de mensagens: https://www.googleapis.com/auth/gmail.readonly",
+      "Criar rascunhos: https://www.googleapis.com/auth/gmail.compose (o OdeKrai não oferece ferramenta de envio)"
+    ],
+    "oauthSetupSteps": [
+      "Inscreva-se no Google Workspace Developer Preview Program.",
+      "Crie um projeto no Google Cloud e ative Gmail API e Gmail MCP API.",
+      "Configure a tela de consentimento OAuth e inclua os escopos listados acima.",
+      "Crie um cliente OAuth Web, marque Use this client for an AI-powered agent e adicione o redirecionamento http://127.0.0.1:43117/callback.",
+      "Copie o identificador e o segredo. O identificador precisa estar configurado nesta versão do OdeKrai; o segredo é salvo no Gerenciador de Credenciais."
+    ],
+    "status": "available_to_configure"
   },
   {
     "name": "Google Calendar",
     "supplier": "Google Workspace",
-    "documentationUrl": "https://developers.google.com/workspace/guides/configure-mcp-servers",
+    "documentationUrl": "https://developers.google.com/workspace/calendar/api/guides/configure-mcp-server",
     "endpoint": "https://calendarmcp.googleapis.com/mcp/v1",
     "transport": "Streamable HTTP",
     "authentication": "OAuth 2.0 com client ID e client secret do projeto Google Cloud",
     "authenticationMethods": ["oauth"],
     "programStatus": "Developer Preview",
-    "status": "not_available"
+    "oauthScopeLabels": [
+      "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
+      "https://www.googleapis.com/auth/calendar.events.freebusy",
+      "https://www.googleapis.com/auth/calendar.events.readonly"
+    ],
+    "oauthSetupSteps": [
+      "Inscreva-se no Google Workspace Developer Preview Program.",
+      "Crie um projeto no Google Cloud e ative Google Calendar API e Google Calendar MCP API.",
+      "Configure a tela de consentimento OAuth e inclua os escopos de leitura listados acima.",
+      "Crie um cliente OAuth Web, marque Use this client for an AI-powered agent e adicione o redirecionamento http://127.0.0.1:43117/callback.",
+      "Copie o identificador e o segredo. O identificador precisa estar configurado nesta versão do OdeKrai; o segredo é salvo no Gerenciador de Credenciais."
+    ],
+    "status": "available_to_configure"
   },
   {
     "name": "Google Sheets",
     "supplier": "Google Workspace",
-    "documentationUrl": "https://developers.google.com/workspace/guides/configure-mcp-servers",
+    "documentationUrl": "https://developers.google.com/workspace/sheets/api/guides/configure-mcp-server",
     "endpoint": "https://sheetsmcp.googleapis.com/mcp/v1",
     "transport": "Streamable HTTP",
     "authentication": "OAuth 2.0 com client ID e client secret do projeto Google Cloud",
     "authenticationMethods": ["oauth"],
     "programStatus": "Developer Preview",
-    "status": "not_available"
+    "oauthScopeLabels": [
+      "Leitura de planilhas: https://www.googleapis.com/auth/spreadsheets.readonly"
+    ],
+    "oauthSetupSteps": [
+      "Inscreva-se no Google Workspace Developer Preview Program.",
+      "Crie um projeto no Google Cloud e ative Google Sheets API e Google Sheets MCP API.",
+      "Configure a tela de consentimento OAuth e inclua o escopo de leitura listado acima.",
+      "Crie um cliente OAuth Web, marque Use this client for an AI-powered agent e adicione o redirecionamento http://127.0.0.1:43117/callback.",
+      "Copie o identificador e o segredo. O identificador precisa estar configurado nesta versão do OdeKrai; o segredo é salvo no Gerenciador de Credenciais."
+    ],
+    "status": "available_to_configure"
   },
   {
     "name": "Lovable",

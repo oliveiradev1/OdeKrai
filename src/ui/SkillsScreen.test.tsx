@@ -332,7 +332,7 @@ describe('catálogo de habilidades', () => {
     }
     expect(markup).toContain('Disponível para configurar');
     expect(markup).toContain('Não disponível');
-    expect(markup.match(/Developer Preview/g)).toHaveLength(3);
+    expect(markup.match(/class="public-mcp-program-status"/g)).toHaveLength(3);
     expect(markup).not.toContain('>Conectado</span>');
     expect(markup).toContain('Configurar');
     expect(markup).toMatch(/id="skills-panel-personal"[^>]*hidden=""/);
@@ -410,6 +410,61 @@ describe('catálogo de habilidades', () => {
     );
   });
 
+  it('mostra Developer Preview, preparo individual dos projetos Google e não permite editar escopos', () => {
+    const markup = renderToStaticMarkup(
+      <SkillsCatalogView
+        skills={registryFixture}
+        initialTab="publico"
+        onFamilyToggle={noOperation}
+        onSkillToggle={noOperation}
+        onOverrideToggle={noOperation}
+      />,
+    );
+    for (const service of ['Gmail', 'Google Calendar', 'Google Sheets']) {
+      const start = markup.indexOf(`<h3>${service}</h3>`);
+      const end = markup.indexOf('<article class="public-mcp-card">', start + 1);
+      const card = markup.slice(start, end < 0 ? undefined : end);
+      expect(card).toContain('Developer Preview');
+      expect(card).toContain('Como preparar o projeto Google');
+      expect(card).toContain('Google Cloud');
+      expect(card).toContain('identificador e o segredo');
+      expect(card).toContain('Abrir guia oficial');
+    }
+    const gmail = markup.slice(
+      markup.indexOf('<h3>Gmail</h3>'),
+      markup.indexOf('<h3>Google Calendar</h3>'),
+    );
+    expect(gmail).toContain('gmail.readonly');
+    expect(gmail).toContain('gmail.compose');
+    expect(gmail).toContain('não oferece ferramenta de envio');
+  });
+
+  it('oferece nova autorização no mesmo servidor Google depois de revogação do refresh token', () => {
+    const markup = renderToStaticMarkup(
+      <SkillsCatalogView
+        skills={registryFixture}
+        initialTab="publico"
+        mcpServers={[
+          {
+            id: 'server-gmail',
+            name: 'Gmail',
+            endpoint: 'https://gmailmcp.googleapis.com/mcp/v1',
+            enabled: true,
+            status: 'Conectado',
+          },
+        ]}
+        onFamilyToggle={noOperation}
+        onSkillToggle={noOperation}
+        onOverrideToggle={noOperation}
+        onConfigurePublicMcp={async () => true}
+      />,
+    );
+    expect(markup).toContain('Autorizar novamente com Google');
+    const source = readFileSync(new URL('./SkillsScreen.tsx', import.meta.url), 'utf8');
+    expect(source).toContain('(item) => item.endpoint === endpoint && item.name === service.name');
+    expect(source).toContain('setRegistrationOptions({ dynamicRegistration: false });');
+  });
+
   it('exibe conta conectada e fornece desconexão OAuth separada do gerenciamento PAT', () => {
     const markup = renderToStaticMarkup(
       <SkillsCatalogView
@@ -457,7 +512,7 @@ describe('catálogo de habilidades', () => {
     expect(source).toContain('Segredo do cliente OAuth');
     expect(source).toContain('autoComplete="off"');
     expect(source).toContain("setClientSecret('')");
-    expect(source).toContain('Escopos OAuth (opcional)');
+    expect(source).toContain('!isGoogleWorkspace && (');
     expect(source).toContain('canConnectWithOAuth(registrationOptions, clientId, busy)');
     expect(source).not.toContain('clientSecretSaved && clientSecret');
   });

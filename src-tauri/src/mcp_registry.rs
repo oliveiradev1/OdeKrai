@@ -655,6 +655,8 @@ fn tool_catalog_with_native_ids(
                 Some("O nome colide com uma habilidade nativa.".to_string())
             } else if counts.get(name).copied().unwrap_or_default() > 1 {
                 Some("O servidor repetiu o nome de uma ferramenta.".to_string())
+            } else if !is_gmail_tool_allowed(server.endpoint.as_deref(), name) {
+                Some("Esta ferramenta Gmail está fora do modo de leitura e rascunhos disponível no OdeKrai.".to_string())
             } else if !schema_is_valid {
                 Some("O schema da ferramenta é inválido ou usa regras não suportadas.".to_string())
             } else {
@@ -676,6 +678,21 @@ fn tool_catalog_with_native_ids(
             }
         })
         .collect()
+}
+
+fn is_gmail_tool_allowed(endpoint: Option<&str>, tool_name: &str) -> bool {
+    if endpoint != Some("https://gmailmcp.googleapis.com/mcp/v1") {
+        return true;
+    }
+    matches!(
+        tool_name.to_ascii_lowercase().as_str(),
+        "create_draft"
+            | "get_message"
+            | "get_thread"
+            | "list_drafts"
+            | "list_labels"
+            | "search_threads"
+    )
 }
 
 fn unavailable_tool(
@@ -1186,6 +1203,37 @@ mod tests {
             false,
         );
         assert!(offer.offered_agent_skills().is_empty());
+    }
+
+    #[test]
+    fn gmail_tools_are_limited_to_read_and_drafts() {
+        let mut gmail = server_for_catalog();
+        gmail.transport = "streamable_http".into();
+        gmail.endpoint = Some("https://gmailmcp.googleapis.com/mcp/v1".into());
+        let response = serde_json::json!({"tools":[
+            {"name":"create_draft","inputSchema":{"type":"object","additionalProperties":false}},
+            {"name":"get_message","inputSchema":{"type":"object","additionalProperties":false}},
+            {"name":"send_message","inputSchema":{"type":"object","additionalProperties":false}},
+            {"name":"label_message","inputSchema":{"type":"object","additionalProperties":false}},
+            {"name":"unexpected_delivery","inputSchema":{"type":"object","additionalProperties":false}}
+        ]});
+        let tools = tool_catalog(&gmail, &response);
+        assert_eq!(tools.len(), 5);
+        assert!(tools
+            .iter()
+            .find(|tool| tool.name == "create_draft")
+            .unwrap()
+            .available);
+        assert!(tools
+            .iter()
+            .find(|tool| tool.name == "get_message")
+            .unwrap()
+            .available);
+        for name in ["send_message", "label_message", "unexpected_delivery"] {
+            let tool = tools.iter().find(|tool| tool.name == name).unwrap();
+            assert!(!tool.available);
+            assert!(tool.reason.as_deref().unwrap().contains("leitura e rascunhos"));
+        }
     }
 
     #[test]

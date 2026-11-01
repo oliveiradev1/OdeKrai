@@ -449,6 +449,7 @@ function PublicMcpServiceCard({
   const [githubAccountLoading, setGithubAccountLoading] = useState(false);
   const [githubNotice, setGithubNotice] = useState('');
   const isGitHub = service.name === 'GitHub';
+  const isGoogleWorkspace = service.supplier === 'Google Workspace';
   const githubOAuthReady = canConnectToPublicOAuth(
     oauthClientSettings,
     { dynamicRegistration: false },
@@ -470,6 +471,9 @@ function PublicMcpServiceCard({
         if (!current) return;
         setOauthClientSettings(settings);
         setClientId(settings.clientId);
+        if (service.supplier === 'Google Workspace') {
+          setRegistrationOptions({ dynamicRegistration: false });
+        }
       })
       .catch((cause) => {
         if (current) setOauthError(String(cause));
@@ -620,6 +624,29 @@ function PublicMcpServiceCard({
       </div>
       {service.programStatus && (
         <p className="public-mcp-program-status">{service.programStatus}</p>
+      )}
+      {isGoogleWorkspace && (
+        <section className="public-mcp-google-setup" aria-label={`Configuração de ${service.name}`}>
+          <h4>Como preparar o projeto Google</h4>
+          <ul>
+            {service.oauthScopeLabels?.map((scope) => (
+              <li key={scope}>{scope}</li>
+            ))}
+          </ul>
+          <ol>
+            {service.oauthSetupSteps?.map((step) => (
+              <li key={step}>{step}</li>
+            ))}
+          </ol>
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={() => void openOfficialLink(service.documentationUrl)}
+          >
+            Abrir guia oficial do {service.name}
+          </Button>
+          {linkError && <p role="alert">{linkError}</p>}
+        </section>
       )}
       {isGitHub && (
         <div className="public-mcp-github-oauth">
@@ -806,6 +833,14 @@ function PublicMcpServiceCard({
                   )}
                 </form>
               )}
+            {isGoogleWorkspace &&
+              oauthClientSettings.clientId.trim() &&
+              !oauthClientSettings.clientSecretSaved && (
+                <p role="alert">
+                  Salve o segredo OAuth deste serviço no Gerenciador de Credenciais antes de
+                  conectar.
+                </p>
+              )}
             {!oauthClientSettings.clientId.trim() && !oauthClientSettings.dynamicRegistration && (
               <Button type="button" variant="secondary" disabled>
                 Conectar
@@ -879,7 +914,21 @@ function PublicMcpServiceCard({
           Configurar
         </Button>
       )}
-      {expanded && (!isGitHub || !server) && onConfigure && (
+      {isGoogleWorkspace && server && onConfigure && (
+        <Button
+          type="button"
+          variant="secondary"
+          disabled={busy}
+          onClick={() => {
+            setAuthentication('oauth');
+            setRegistrationOptions({ dynamicRegistration: false });
+            setExpanded(true);
+          }}
+        >
+          Autorizar novamente com Google
+        </Button>
+      )}
+      {expanded && (!isGitHub || !server || isGoogleWorkspace) && onConfigure && (
         <form id={formId} className="public-mcp-form" onSubmit={(event) => void submit(event)}>
           <label>
             URL do servidor
@@ -958,17 +1007,19 @@ function PublicMcpServiceCard({
               {endpoint === service.endpoint && oauthClientSettings?.clientId.trim() && (
                 <p role="status">Identificador público configurado para este serviço.</p>
               )}
-              <label>
-                Escopos OAuth (opcional)
-                <input
-                  type="text"
-                  name={`${formId}-oauth-scopes`}
-                  id={`${formId}-oauth-scopes`}
-                  value={scopes}
-                  onChange={(event) => setScopes(event.target.value)}
-                  placeholder="Separados por espaço"
-                />
-              </label>
+              {!isGoogleWorkspace && (
+                <label>
+                  Escopos OAuth (opcional)
+                  <input
+                    type="text"
+                    name={`${formId}-oauth-scopes`}
+                    id={`${formId}-oauth-scopes`}
+                    value={scopes}
+                    onChange={(event) => setScopes(event.target.value)}
+                    placeholder="Separados por espaço"
+                  />
+                </label>
+              )}
               <Button
                 type="button"
                 variant="secondary"
@@ -1524,10 +1575,15 @@ export function SkillsScreen({
     setError('');
     let server: { id: string } | undefined;
     try {
-      server = await invoke<{ id: string }>('mcp_add_http_server', {
-        name: service.name,
-        endpoint,
-      });
+      const existing = mcpServers.find(
+        (item) => item.endpoint === endpoint && item.name === service.name,
+      );
+      server =
+        existing ??
+        (await invoke<{ id: string }>('mcp_add_http_server', {
+          name: service.name,
+          endpoint,
+        }));
       if (authentication === 'bearer') {
         await invoke('mcp_set_http_token', { serverId: server.id, value: token });
         await invoke('mcp_set_enabled', { serverId: server.id, enabled: true });

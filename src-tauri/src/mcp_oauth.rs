@@ -18,6 +18,7 @@ use url::Url;
 
 const SERVICE: &str = "site.anceryx.odekrai.mcp";
 const CALLBACK_TIMEOUT: Duration = Duration::from_secs(180);
+const GOOGLE_OAUTH_CALLBACK_PORT: u16 = 43117;
 const MAX_METADATA_BYTES: usize = 256 * 1024;
 const MAX_GITHUB_PROFILE_BYTES: usize = 64 * 1024;
 const OAUTH_CLIENTS_JSON: &str = include_str!("../resources/oauth-clients.json");
@@ -38,6 +39,8 @@ struct OAuthClientDefinition {
     guide_url: String,
     dynamic_registration: bool,
     client_secret_required: bool,
+    #[serde(default)]
+    oauth_scopes_by_endpoint: std::collections::HashMap<String, Vec<String>>,
     endpoints: Vec<String>,
 }
 
@@ -669,6 +672,77 @@ fn normalize_scopes(scopes: Option<&str>) -> Result<Option<String>, String> {
     ))
 }
 
+fn service_scopes(
+    endpoint: &str,
+    config: Option<&OAuthClientDefinition>,
+    requested_scopes: Option<&str>,
+) -> Result<Option<String>, String> {
+    if let Some(scopes) =
+        config.and_then(|definition| definition.oauth_scopes_by_endpoint.get(endpoint))
+    {
+        if scopes.is_empty()
+            || scopes
+                .iter()
+                .any(|scope| scope.is_empty() || scope.chars().any(char::is_control))
+        {
+            return Err("A configuração de escopos OAuth do Google está inválida.".into());
+        }
+        return Ok(Some(scopes.join(" ")));
+    }
+    normalize_scopes(requested_scopes)
+}
+
+fn missing_client_secret_error(client_secret_required: bool, saved: bool) -> Option<&'static str> {
+    (client_secret_required && !saved).then_some(
+        "Salve o segredo OAuth deste serviço no Gerenciador de Credenciais antes de conectar.",
+    )
+}
+
+fn refresh_failure_message(
+    status: StatusCode,
+    oauth_error: Option<&str>,
+    google_workspace: bool,
+) -> &'static str {
+    if google_workspace
+        && (status == StatusCode::UNAUTHORIZED || oauth_error == Some("invalid_grant"))
+    {
+        "A autorização foi revogada ou expirou. Conecte novamente este serviço Google para continuar."
+    } else {
+        "A renovação OAuth falhou. Conecte novamente o servidor MCP."
+    }
+}
+
+fn parse_refresh_response(
+    status: StatusCode,
+    body: Value,
+    google_workspace: bool,
+) -> Result<TokenResponse, String> {
+    let parsed_tokens = serde_json::from_value::<TokenResponse>(body).ok();
+    if status == StatusCode::UNAUTHORIZED || !status.is_success() {
+        let oauth_error = parsed_tokens
+            .as_ref()
+            .and_then(|tokens| tokens.error.as_deref());
+        return Err(refresh_failure_message(status, oauth_error, google_workspace).into());
+    }
+    let tokens = parsed_tokens
+        .ok_or("Resposta de renovação OAuth inválida. Conecte novamente.")?;
+    if let Some(error) = tokens.error.as_deref() {
+        return Err(refresh_failure_message(status, Some(error), google_workspace).into());
+    }
+    if !tokens
+        .token_type
+        .as_deref()
+        .is_some_and(|kind| kind.eq_ignore_ascii_case("bearer"))
+    {
+        return Err("A renovação OAuth foi recusada. Conecte novamente o servidor MCP.".into());
+    }
+    Ok(tokens)
+}
+
+fn loopback_callback_uri(port: u16) -> String {
+    format!("http://127.0.0.1:{port}/callback")
+}
+
 fn register_client(
     client: &Client,
     metadata: &ServerMetadata,
@@ -758,9 +832,26 @@ fn build_authorization_url(
     challenge: &str,
     resource: &str,
     scope: Option<&str>,
+    google_workspace: bool,
 ) -> Result<String, String> {
     let mut url = Url::parse(&metadata.authorization_endpoint)
         .map_err(|_| "authorization_endpoint inválido.".to_string())?;
+    if google_workspace {
+        let retained = url
+            .query_pairs()
+            .filter(|(key, _)| {
+                !matches!(
+                    key.as_ref(),
+                    "scope" | "include_granted_scopes" | "access_type" | "prompt"
+                )
+            })
+            .map(|(key, value)| (key.into_owned(), value.into_owned()))
+            .collect::<Vec<_>>();
+        url.set_query(None);
+        for (key, value) in retained {
+            url.query_pairs_mut().append_pair(&key, &value);
+        }
+    }
     url.query_pairs_mut()
         .append_pair("response_type", "code")
         .append_pair("client_id", client_id)
@@ -771,6 +862,11 @@ fn build_authorization_url(
         .append_pair("resource", resource);
     if let Some(scope) = scope.filter(|scope| !scope.is_empty()) {
         url.query_pairs_mut().append_pair("scope", scope);
+    }
+    if google_workspace {
+        url.query_pairs_mut()
+            .append_pair("access_type", "offline")
+            .append_pair("prompt", "consent");
     }
     Ok(url.to_string())
 }
@@ -1054,19 +1150,11 @@ pub(crate) fn refresh_access(server_id: &str) -> Result<OAuthAccessToken, String
         return Err("Redirecionamento na renovação OAuth foi recusado. Conecte novamente.".into());
     }
     let (status, _, body) = bounded_json(response)?;
-    if status == StatusCode::UNAUTHORIZED || !status.is_success() {
-        return Err("A renovação OAuth falhou. Conecte novamente o servidor MCP.".into());
-    }
-    let tokens: TokenResponse = serde_json::from_value(body)
-        .map_err(|_| "Resposta de renovação OAuth inválida. Conecte novamente.".to_string())?;
-    if tokens.error.is_some()
-        || !tokens
-            .token_type
-            .as_deref()
-            .is_some_and(|kind| kind.eq_ignore_ascii_case("bearer"))
-    {
-        return Err("A renovação OAuth foi recusada. Conecte novamente o servidor MCP.".into());
-    }
+    let tokens = parse_refresh_response(
+        status,
+        body,
+        stored.service.as_deref() == Some("google"),
+    )?;
     let access_token = tokens
         .access_token
         .filter(|token| {
@@ -1232,9 +1320,13 @@ fn run_authorization(
             ));
         }
         let secret = if config.client_secret_required && !configured_id.is_empty() {
-            Some(load_public_client_secret(service)?.ok_or(
-                "Cadastre o segredo OAuth deste serviço antes de conectar.",
-            )?)
+            let secret = load_public_client_secret(service)?;
+            if let Some(message) =
+                missing_client_secret_error(config.client_secret_required, secret.is_some())
+            {
+                return Err(message.into());
+            }
+            secret
         } else {
             None
         };
@@ -1261,14 +1353,23 @@ fn run_authorization(
     }) {
         metadata.registration_endpoint = None;
     }
-    let listener = TcpListener::bind(("127.0.0.1", 0))
+    let callback_port = if service.as_deref() == Some("google") {
+        GOOGLE_OAUTH_CALLBACK_PORT
+    } else {
+        0
+    };
+    let listener = TcpListener::bind(("127.0.0.1", callback_port))
         .map_err(|_| "Não foi possível abrir a porta local de retorno OAuth.".to_string())?;
     let port = listener
         .local_addr()
         .map_err(|_| "Não foi possível ler a porta local OAuth.".to_string())?
         .port();
-    let redirect_uri = format!("http://127.0.0.1:{port}/callback");
-    let requested_scopes = normalize_scopes(requested_scopes)?;
+    let redirect_uri = loopback_callback_uri(port);
+    let requested_scopes = service_scopes(
+        endpoint.as_str(),
+        service_config.as_ref(),
+        requested_scopes,
+    )?;
     let registered_client = register_client(
         &client,
         &metadata,
@@ -1288,6 +1389,7 @@ fn run_authorization(
         &pkce_challenge(&verifier),
         &resource,
         effective_scope,
+        service.as_deref() == Some("google"),
     )?;
     crate::external_links::open_oauth_authorization_url(&app, &auth_url)?;
     let code = accept_callback(
@@ -1647,6 +1749,97 @@ mod tests {
             .is_none());
     }
 
+    #[test]
+    fn google_services_use_fixed_minimal_independent_scopes_and_ignore_ui_scopes() {
+        let cases = [
+            (
+                "https://gmailmcp.googleapis.com/mcp/v1",
+                "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.compose",
+            ),
+            (
+                "https://calendarmcp.googleapis.com/mcp/v1",
+                "https://www.googleapis.com/auth/calendar.calendarlist.readonly https://www.googleapis.com/auth/calendar.events.freebusy https://www.googleapis.com/auth/calendar.events.readonly",
+            ),
+            (
+                "https://sheetsmcp.googleapis.com/mcp/v1",
+                "https://www.googleapis.com/auth/spreadsheets.readonly",
+            ),
+        ];
+        for (endpoint, expected) in cases {
+            let (_, definition) = oauth_service_for_endpoint(endpoint)
+                .unwrap()
+                .expect("endpoint Google conhecido");
+            assert_eq!(
+                service_scopes(endpoint, Some(&definition), Some("https://evil.example/full"))
+                    .unwrap()
+                    .as_deref(),
+                Some(expected),
+                "escopos indevidos em {endpoint}"
+            );
+        }
+    }
+
+    #[test]
+    fn google_authorization_requests_offline_consent_without_incremental_scope_parameter() {
+        let mut metadata = registration_metadata(None);
+        metadata.authorization_endpoint =
+            "https://auth.example/authorize?include_granted_scopes=true&scope=evil".into();
+        let authorization = build_authorization_url(
+            &metadata,
+            "google-client",
+            "http://127.0.0.1:43117/callback",
+            "state-fixture",
+            "pkce-fixture",
+            "https://gmailmcp.googleapis.com/mcp/v1",
+            Some(
+                "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.compose",
+            ),
+            true,
+        )
+        .unwrap();
+        let url = Url::parse(&authorization).unwrap();
+        let query: std::collections::HashMap<_, _> = url.query_pairs().into_owned().collect();
+        assert_eq!(
+            query.get("access_type").map(String::as_str),
+            Some("offline")
+        );
+        assert_eq!(query.get("prompt").map(String::as_str), Some("consent"));
+        assert!(!query.contains_key("include_granted_scopes"));
+        assert_eq!(
+            query.get("scope").map(String::as_str),
+            Some("https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.compose")
+        );
+        assert_eq!(
+            loopback_callback_uri(GOOGLE_OAUTH_CALLBACK_PORT),
+            "http://127.0.0.1:43117/callback"
+        );
+    }
+
+    #[test]
+    fn missing_google_client_secret_blocks_authorization_with_clear_message() {
+        assert_eq!(
+            missing_client_secret_error(true, false),
+            Some(
+                "Salve o segredo OAuth deste serviço no Gerenciador de Credenciais antes de conectar."
+            )
+        );
+        assert_eq!(missing_client_secret_error(true, true), None);
+        assert_eq!(missing_client_secret_error(false, false), None);
+    }
+
+    #[test]
+    fn revoked_google_refresh_token_requires_a_new_authorization() {
+        let response = parse_refresh_response(
+            StatusCode::BAD_REQUEST,
+            json!({"error":"invalid_grant"}),
+            true,
+        )
+        .err()
+        .expect("token revogado deve solicitar nova autorização");
+        assert!(response.contains("revogada ou expirou"));
+        assert!(response.contains("Conecte novamente"));
+    }
+
     struct SimulatedRevocationServer {
         statuses: std::collections::VecDeque<Result<StatusCode, ()>>,
         submitted_tokens: Vec<String>,
@@ -1801,6 +1994,7 @@ mod tests {
             "pkce-fixture",
             "https://api.githubcopilot.com/mcp/",
             Some(github_oauth_read_scopes()),
+            false,
         )
         .unwrap();
         let url = Url::parse(&authorization).unwrap();
@@ -1829,6 +2023,7 @@ mod tests {
             "pkce-challenge-fixture",
             "https://api.githubcopilot.com/mcp/",
             Some(github_oauth_read_scopes()),
+            false,
         )
         .unwrap();
         let auth_url = Url::parse(&auth_url).unwrap();

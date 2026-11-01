@@ -37,7 +37,7 @@ describe('catálogo público de servidores MCP', () => {
       .filter(({ status }) => status === 'not_available')
       .map(({ name }) => name);
 
-    expect(unavailable).toEqual(['Figma', 'Gmail', 'Google Calendar', 'Google Sheets', 'Lovable']);
+    expect(unavailable).toEqual(['Figma', 'Lovable']);
   });
 
   it('identifica o Developer Preview do Google e usa fontes oficiais da Lovable', () => {
@@ -53,6 +53,26 @@ describe('catálogo público de servidores MCP', () => {
       'https://docs.lovable.dev/integrations/lovable-mcp-server',
     );
     expect(lovable?.sourceCodeUrl).toBe('https://github.com/lovablelabs/mcp');
+  });
+
+  it('documenta os passos e escopos mínimos independentes dos três serviços Google', () => {
+    const googleServices = catalog.filter(({ supplier }) => supplier === 'Google Workspace');
+    expect(googleServices).toHaveLength(3);
+    for (const service of googleServices) {
+      expect(service.status).toBe('available_to_configure');
+      expect(service.programStatus).toBe('Developer Preview');
+      expect(service.oauthSetupSteps?.join(' ')).toContain('Google Cloud');
+      expect(service.oauthSetupSteps?.join(' ')).toContain('identificador e o segredo');
+      expect(service.oauthScopeLabels?.length).toBeGreaterThan(0);
+    }
+    const gmail = googleServices.find(({ name }) => name === 'Gmail');
+    expect(gmail?.oauthScopeLabels).toEqual([
+      'Leitura de mensagens: https://www.googleapis.com/auth/gmail.readonly',
+      'Criar rascunhos: https://www.googleapis.com/auth/gmail.compose (o OdeKrai não oferece ferramenta de envio)',
+    ]);
+    expect(gmail?.oauthSetupSteps?.join(' ')).toContain('Developer Preview Program');
+    expect(gmail?.oauthSetupSteps?.join(' ')).toContain('Gmail MCP API');
+    expect(gmail?.oauthSetupSteps?.join(' ')).toContain('127.0.0.1:43117/callback');
   });
 
   it('mantém o endpoint oficial fixo do GitHub e recomenda permissões de PAT de menor privilégio', () => {
@@ -147,6 +167,12 @@ describe('catálogo público de servidores MCP', () => {
     expect(
       canConnectToPublicOAuth(
         { ...blankStaticSettings, clientId: 'public-client' },
+        { dynamicRegistration: false },
+      ),
+    ).toBe(false);
+    expect(
+      canConnectToPublicOAuth(
+        { ...blankStaticSettings, clientId: 'public-client', clientSecretSaved: false },
         { dynamicRegistration: false },
       ),
     ).toBe(false);

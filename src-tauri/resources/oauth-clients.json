@@ -40,6 +40,20 @@
       "guideUrl": "https://developers.google.com/workspace/guides/configure-mcp-servers",
       "dynamicRegistration": false,
       "clientSecretRequired": true,
+      "oauthScopesByEndpoint": {
+        "https://gmailmcp.googleapis.com/mcp/v1": [
+          "https://www.googleapis.com/auth/gmail.readonly",
+          "https://www.googleapis.com/auth/gmail.compose"
+        ],
+        "https://calendarmcp.googleapis.com/mcp/v1": [
+          "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
+          "https://www.googleapis.com/auth/calendar.events.freebusy",
+          "https://www.googleapis.com/auth/calendar.events.readonly"
+        ],
+        "https://sheetsmcp.googleapis.com/mcp/v1": [
+          "https://www.googleapis.com/auth/spreadsheets.readonly"
+        ]
+      },
       "endpoints": [
         "https://gmailmcp.googleapis.com/mcp/v1",
         "https://calendarmcp.googleapis.com/mcp/v1",
