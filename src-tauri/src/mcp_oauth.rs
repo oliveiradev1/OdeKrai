@@ -1689,11 +1689,13 @@ mod tests {
     fn github_account_rejects_redirect_and_invalid_login() {
         let mut redirected = mock_github_profile(StatusCode::FOUND, br#"{"login":"octocat"}"#);
         redirected.0.url = Url::parse("https://attacker.example/user").unwrap();
-        assert!(github_account_with("token", &mut redirected)
-            .unwrap_err()
-            .contains("redirecionar"));
+        assert!(
+            github_account_with("access-token-fixture", &mut redirected)
+                .unwrap_err()
+                .contains("redirecionar")
+        );
         let mut invalid = mock_github_profile(StatusCode::OK, br#"{"login":"octo cat"}"#);
-        assert!(github_account_with("token", &mut invalid).is_err());
+        assert!(github_account_with("access-token-fixture", &mut invalid).is_err());
     }
 
     #[test]
@@ -1760,7 +1762,7 @@ mod tests {
             assert!(service.get("clientSecret").is_none());
             assert!(service.get("client_secret").is_none());
         }
-        let public_view = serde_json::to_string(&PublicOAuthClientSettings {
+        let public_view = serde_json::to_value(PublicOAuthClientSettings {
             service: "google".into(),
             client_id: String::new(),
             guide_url: concat!(
@@ -1773,7 +1775,7 @@ mod tests {
             client_secret_saved: true,
         })
         .unwrap();
-        assert!(!public_view.contains("client-secret-fixture"));
+        assert!(!public_view.to_string().contains("client-secret-fixture"));
         for secret_field in [
             "accessToken",
             "refreshToken",
@@ -1781,7 +1783,7 @@ mod tests {
             "authorizationCode",
             "codeVerifier",
         ] {
-            assert!(!public_view.contains(secret_field));
+            assert!(public_view.get(secret_field).is_none());
         }
     }
 
