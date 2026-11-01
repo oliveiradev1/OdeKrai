@@ -32,12 +32,18 @@ describe('ProvidersScreen', () => {
         onSave={() => undefined}
         onChat={() => undefined}
         onCredentialRemoved={() => undefined}
+        onOpenComputer={() => undefined}
       />,
     );
     expect(markup).toContain('Provedores de IA');
   });
 
   it('mostra as três abas e um ícone de fallback no cartão local', () => {
+    const providerCatalog = readFileSync(
+      new URL('../ProviderCatalog.tsx', import.meta.url),
+      'utf8',
+    );
+    const app = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
     const markup = renderToStaticMarkup(
       <ProvidersScreen
         settings={defaultSettings}
@@ -48,13 +54,20 @@ describe('ProvidersScreen', () => {
         onSave={() => undefined}
         onChat={() => undefined}
         onCredentialRemoved={() => undefined}
+        onOpenComputer={() => undefined}
+        initialTab="free"
       />,
     );
 
     expect(markup).toContain('Conectados');
     expect(markup).toContain('Gratuitos');
     expect(markup).toContain('Todos');
-    expect(markup).toContain(renderToStaticMarkup(<Icon name="harddrives" size={18} />));
+    expect(markup).toContain(renderToStaticMarkup(<Icon name="harddrives" size={23} />));
+    expect(markup).toContain('IA local (gratuita)');
+    expect(markup).toContain('Serviço local não verificado');
+    expect(markup).toContain('Abrir Meu computador');
+    expect(providerCatalog).toContain('onClick={onOpenComputer}');
+    expect(app).toContain("onOpenComputer={() => navigate('computer')}");
   });
 
   it('mantém estados dos cards legíveis sem credenciais e elimina alturas vazias forçadas', () => {
@@ -81,6 +94,7 @@ describe('ProvidersScreen', () => {
         onSave={() => undefined}
         onChat={() => undefined}
         onCredentialRemoved={() => undefined}
+        onOpenComputer={() => undefined}
       />,
     );
     const css = readFileSync(new URL('../styles.css', import.meta.url), 'utf8');

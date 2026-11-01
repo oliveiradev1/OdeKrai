@@ -18,6 +18,7 @@ import {
   removeProviderCredential,
   confirmProviderCredentialRemoval,
   saveProviderDirectoryTab,
+  localServiceStatus,
   type ProviderDirectoryTab,
 } from '../core/provider-directory';
 import { PageHeader } from './DesignSystem';
@@ -39,6 +40,7 @@ type Props = {
   onSave: (provider: ProviderSettings) => void;
   onChat: () => void;
   onCredentialRemoved: (providerId: string) => void;
+  onOpenComputer: () => void;
   initialTab?: ProviderDirectoryTab;
   onboardingMode?: boolean;
 };
@@ -69,6 +71,7 @@ export function ProviderCatalog({
   onSave,
   onChat,
   onCredentialRemoved,
+  onOpenComputer,
   initialTab,
   onboardingMode = false,
 }: Props) {
@@ -91,6 +94,7 @@ export function ProviderCatalog({
   const [credentialSavedIds, setCredentialSavedIds] = useState<Set<string>>(new Set());
   const [localServiceOnline, setLocalServiceOnline] = useState(false);
   const [localServiceChecked, setLocalServiceChecked] = useState(false);
+  const localStatus = localServiceStatus(localServiceOnline, localServiceChecked);
   const connectedIds = useMemo(
     () =>
       new Set(
@@ -614,6 +618,25 @@ export function ProviderCatalog({
             </p>
           )}
           <div className="provider-grid">
+            {tab === 'free' && (
+              <article className="provider-card provider-local-free-card">
+                <div className="provider-tile">
+                  <Icon name="harddrives" size={23} />
+                  <span className="provider-tile-copy">
+                    <strong>IA local (gratuita)</strong>
+                    <small>Execute modelos no próprio computador.</small>
+                  </span>
+                  <span className="provider-badges">
+                    <span className={`provider-badge--${localStatus.tone}`} role="status">
+                      {localStatus.label}
+                    </span>
+                  </span>
+                </div>
+                <button type="button" className="provider-local-action" onClick={onOpenComputer}>
+                  Abrir Meu computador
+                </button>
+              </article>
+            )}
             {filtered.map((provider) => {
               const connected = connectedIds.has(provider.id);
               const credentialSaved = credentialSavedIds.has(provider.id);
@@ -646,12 +669,8 @@ export function ProviderCatalog({
                 freePlanVerified && { label: 'Plano gratuito verificado', tone: 'free' },
                 provider.id === 'local' && { label: 'Local', tone: 'local' },
                 provider.id === 'local' && {
-                  label: localServiceOnline
-                    ? 'Serviço local online'
-                    : localServiceChecked
-                      ? 'Serviço local offline'
-                      : 'Serviço local não verificado',
-                  tone: localServiceOnline ? 'connected' : 'disconnected',
+                  label: localStatus.label,
+                  tone: localStatus.tone,
                 },
               ].filter((badge): badge is { label: string; tone: string } => Boolean(badge));
               return (

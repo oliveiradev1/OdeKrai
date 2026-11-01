@@ -1663,6 +1663,7 @@ function MainApp() {
             onSave={saveProviderSettings}
             onChat={beginChat}
             onCredentialRemoved={handleCredentialRemoved}
+            onOpenComputer={() => navigate('computer')}
             initialTab="free"
             onboardingMode
           />
@@ -2125,6 +2126,7 @@ function MainApp() {
                   onSave={saveProviderSettings}
                   onChat={beginChat}
                   onCredentialRemoved={handleCredentialRemoved}
+                  onOpenComputer={() => navigate('computer')}
                 />
               )}
               {section === 'computer' && <ComputerScreen />}

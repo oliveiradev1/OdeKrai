@@ -16,6 +16,7 @@ import {
   confirmProviderCredentialRemoval,
   providerCardHasManagement,
   isProviderConnected,
+  localServiceStatus,
 } from './provider-directory';
 
 describe('diretório de provedores', () => {
@@ -74,6 +75,21 @@ describe('diretório de provedores', () => {
   it('classifica serviço local online independentemente da credencial opcional', () => {
     expect(isProviderConnected('local', false, undefined, true)).toBe(true);
     expect(isProviderConnected('local', false, undefined, false)).toBe(false);
+  });
+
+  it('resume os estados do serviço local no catálogo de provedores', () => {
+    expect(localServiceStatus(true, true)).toEqual({
+      label: 'Serviço local online',
+      tone: 'connected',
+    });
+    expect(localServiceStatus(false, true)).toEqual({
+      label: 'Serviço local offline',
+      tone: 'disconnected',
+    });
+    expect(localServiceStatus(false, false)).toEqual({
+      label: 'Serviço local não verificado',
+      tone: 'disconnected',
+    });
   });
 
   it('não anuncia Cerebras como plano gratuito por causa de crédito promocional', () => {

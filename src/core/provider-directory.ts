@@ -4,6 +4,17 @@ import { defaultProviderSettings, type AppSettings } from './settings';
 export type ProviderDirectoryTab = 'connected' | 'free' | 'all';
 export const providerCardHasManagement = (tab: ProviderDirectoryTab, connected: boolean): boolean =>
   tab === 'connected' && connected;
+
+export function localServiceStatus(
+  online: boolean,
+  checked: boolean,
+): { label: string; tone: 'connected' | 'disconnected' } {
+  if (online) return { label: 'Serviço local online', tone: 'connected' };
+  return {
+    label: checked ? 'Serviço local offline' : 'Serviço local não verificado',
+    tone: 'disconnected',
+  };
+}
 const PROVIDER_TAB_STORAGE_KEY = 'odekrai.provider-directory.tab';
 
 export function loadProviderDirectoryTab(storage?: Pick<Storage, 'getItem'>): ProviderDirectoryTab {
