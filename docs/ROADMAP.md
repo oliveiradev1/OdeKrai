@@ -13,6 +13,9 @@ Cada fase depende de validação no Windows real antes de ser declarada pronta.
 
 A execução hospedada de habilidades em nuvem continua planejada e não está disponível nesta versão.
 A integração ShardCloud consulta VMs, detalhes, métricas e distribuições; o agente também pode
-iniciar ou parar VMs obtidas pela lista da conta, sempre com aprovação nativa. Ela não executa
-comandos dentro das VMs. Os outros provedores listados na interface continuam planejados. Uma futura
-execução hospedada de habilidades deverá pedir aprovação para cada ação e aplicar limites de gasto.
+iniciar ou parar VMs obtidas pela lista da conta, sempre com aprovação nativa. Também pode executar
+de 1 a 10 comandos em uma VM consultada: o conteúdo integral dos comandos é enviado à API ShardCloud
+somente após aprovação nativa em qualquer modo. A execução usa o diretório `/` e um limite fixo de
+30 segundos por comando; a saída volta ao modelo como dado externo não confiável. Isso não habilita
+uma execução genérica de habilidades hospedada na nuvem, que continua planejada. Os outros
+provedores listados na interface também continuam planejados.
