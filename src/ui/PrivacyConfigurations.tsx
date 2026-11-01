@@ -22,7 +22,19 @@ type McpServer = {
   status: string;
   error: string | null;
 };
-type McpState = { label: string; tools?: unknown; error?: string };
+type McpToolView = {
+  id: string;
+  serverId: string;
+  serverName: string;
+  name: string;
+  description: string;
+  inputSchema: unknown;
+  riskHint: string | null;
+  available: boolean;
+  reason: string | null;
+  enabled: boolean;
+};
+type McpState = { label: string; tools?: McpToolView[]; error?: string };
 
 export function PrivacyConfigurationSummary({ onOpen }: { onOpen?: () => void }) {
   return (
@@ -254,7 +266,7 @@ export function PrivacyConfigurations({
       return;
     setServerStates((states) => ({ ...states, [server.id]: { label: 'Conectando…' } }));
     try {
-      const tools = await invoke<unknown>('mcp_test_connection', {
+      const tools = await invoke<McpToolView[]>('mcp_test_connection', {
         serverId: server.id,
         confirmed: true,
       });
@@ -295,6 +307,25 @@ export function PrivacyConfigurations({
       setError(String(cause));
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function setMcpToolEnabled(serverId: string, toolId: string, enabled: boolean) {
+    try {
+      await invoke('set_skill_enabled', { skillId: toolId, enabled });
+      setServerStates((states) => {
+        const current = states[serverId];
+        if (!current?.tools) return states;
+        return {
+          ...states,
+          [serverId]: {
+            ...current,
+            tools: current.tools.map((tool) => (tool.id === toolId ? { ...tool, enabled } : tool)),
+          },
+        };
+      });
+    } catch (cause) {
+      setError(String(cause));
     }
   }
 
@@ -537,9 +568,49 @@ export function PrivacyConfigurations({
                     </form>
                   ))}
                   {state.tools !== undefined && (
-                    <pre aria-label="Ferramentas e formatos não confiáveis">
-                      {String(JSON.stringify(state.tools, null, 2))}
-                    </pre>
+                    <section aria-label="Ferramentas MCP externas">
+                      <h4>Ferramentas encontradas</h4>
+                      {state.tools.length === 0 ? (
+                        <p>O servidor não anunciou ferramentas.</p>
+                      ) : (
+                        <ul>
+                          {state.tools.map((tool) => (
+                            <li key={tool.id}>
+                              <strong>{tool.name}</strong>
+                              <p>{tool.description || 'Sem descrição fornecida pelo servidor.'}</p>
+                              <small>Nome externo: {tool.id}</small>
+                              {tool.riskHint && (
+                                <p>
+                                  Sugestão do servidor: {tool.riskHint.toLowerCase()}. Esta sugestão
+                                  não altera o risco nem a aprovação obrigatória.
+                                </p>
+                              )}
+                              {tool.reason && <p role="status">Indisponível: {tool.reason}</p>}
+                              {tool.available && (
+                                <label className="skill-switch">
+                                  <input
+                                    type="checkbox"
+                                    checked={tool.enabled}
+                                    onChange={(event) =>
+                                      void setMcpToolEnabled(
+                                        server.id,
+                                        tool.id,
+                                        event.target.checked,
+                                      )
+                                    }
+                                  />{' '}
+                                  Ativar esta ferramenta MCP (desativada por padrão)
+                                </label>
+                              )}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                      <p className="cloud-untrusted-label">
+                        Nomes, descrições e schemas fornecidos pelo servidor são dados externos não
+                        confiáveis.
+                      </p>
+                    </section>
                   )}
                   <div className="skill-switch">
                     <label>

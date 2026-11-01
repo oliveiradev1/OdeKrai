@@ -3,6 +3,9 @@ use super::*;
 pub(super) fn action_metadata(
     action: &SimulatedAction,
 ) -> (&str, Risk, bool, Option<&'static str>) {
+    if matches!(action, SimulatedAction::McpToolCall { .. }) {
+        return ("mcp.tool_call", Risk::ComunicacaoExterna, false, None);
+    }
     let tool = tool_for(action);
     let workspace_action = match action {
         SimulatedAction::ReadFile { .. }
@@ -569,6 +572,11 @@ mod explicit_approval_tests {
 
 pub(super) fn summary(action: &SimulatedAction) -> String {
     match action {
+        SimulatedAction::McpToolCall {
+            server_name,
+            tool_name,
+            ..
+        } => format!("Chamar {tool_name} no servidor MCP {}", clipped(server_name, 100)),
         SimulatedAction::ReadFile { path } | SimulatedAction::DeleteFile { path } => {
             format!("{}: {}", tool_for(action).name(), path)
         }
@@ -623,6 +631,18 @@ pub(super) fn summary(action: &SimulatedAction) -> String {
 
 pub(super) fn audit_params(action: &SimulatedAction) -> String {
     match action {
+        SimulatedAction::McpToolCall {
+            server_id,
+            tool_name,
+            params,
+            ..
+        } => format!(
+            "mcp_server_id={}; mcp_tool={}; params_sha256={}; bytes={}",
+            clipped(server_id, 100),
+            clipped(tool_name, 100),
+            digest(params.to_string().as_bytes()),
+            params.to_string().len()
+        ),
         SimulatedAction::ReadFile { path } | SimulatedAction::DeleteFile { path } => {
             format!("path={path}")
         }
@@ -673,6 +693,9 @@ pub(super) fn preview_for(
     app: &tauri::AppHandle,
     action: &SimulatedAction,
 ) -> Result<String, String> {
+    if matches!(action, SimulatedAction::McpToolCall { .. }) {
+        return tool_for(action).preview(action, Path::new(""));
+    }
     if let SimulatedAction::Productivity { skill_id, params } = action {
         if skill_id.starts_with("calendar.") {
             return crate::calendar::preview_skill(app, skill_id, params);
@@ -909,6 +932,38 @@ async fn execute_action_with_timeout(
     operation_id: &str,
     on_output: &mut (dyn FnMut(String) + Send),
 ) -> Result<String, String> {
+    if let SimulatedAction::McpToolCall {
+        skill_id,
+        server_id,
+        tool_name,
+        schema_sha256,
+        params,
+        ..
+    } = action
+    {
+        let app = app.clone();
+        let skill_id = skill_id.clone();
+        let server_id = server_id.clone();
+        let tool_name = tool_name.clone();
+        let schema_sha256 = schema_sha256.clone();
+        let params = params.clone();
+        return tokio::time::timeout(
+            timeout,
+            tokio::task::spawn_blocking(move || {
+                crate::mcp_registry::execute_tool_action(
+                    &app,
+                    &skill_id,
+                    &server_id,
+                    &tool_name,
+                    &schema_sha256,
+                    &params,
+                )
+            }),
+        )
+        .await
+        .map_err(|_| "A ferramenta MCP excedeu o tempo limite.".to_string())?
+        .map_err(|_| "Não foi possível concluir a chamada MCP.".to_string())?;
+    }
     let workspace_action = match action {
         SimulatedAction::ReadFile { .. }
         | SimulatedAction::WriteFile { .. }
@@ -1038,6 +1093,24 @@ pub(super) async fn submit_agent_action(
     let params = audit_params(&action);
     let (preview, preview_image) = match validate_action(&action)
         .and_then(|_| crate::shardcloud::validate_action_against_catalog(app, &action))
+        .and_then(|_| match &action {
+            SimulatedAction::McpToolCall {
+                skill_id,
+                server_id,
+                tool_name,
+                schema_sha256,
+                params,
+                ..
+            } => crate::mcp_registry::validate_tool_action(
+                app,
+                skill_id,
+                server_id,
+                tool_name,
+                schema_sha256,
+                params,
+            ),
+            _ => Ok(()),
+        })
         .and_then(|_| preview_for_with_image(app, &action))
     {
         Ok(preview) => preview,

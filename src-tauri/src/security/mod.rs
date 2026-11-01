@@ -258,6 +258,15 @@ pub enum SimulatedAction {
         skill_id: String,
         params: serde_json::Value,
     },
+    #[serde(rename = "mcp.tool_call")]
+    McpToolCall {
+        skill_id: String,
+        server_id: String,
+        server_name: String,
+        tool_name: String,
+        schema_sha256: String,
+        params: serde_json::Value,
+    },
     #[serde(rename = "workspace.read_file")]
     ReadFile { path: String },
     #[serde(rename = "workspace.write_file")]

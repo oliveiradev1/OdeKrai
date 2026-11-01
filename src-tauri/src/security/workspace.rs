@@ -36,6 +36,38 @@ pub(super) struct FilesSearch;
 pub(super) struct SimulatedSend;
 pub(super) struct SimulatedPayment;
 pub(super) struct Productivity;
+pub(super) struct McpExternalTool;
+
+impl Tool for McpExternalTool {
+    fn name(&self) -> &'static str {
+        "mcp.tool_call"
+    }
+    fn risk(&self, _: &SimulatedAction) -> Risk {
+        Risk::ComunicacaoExterna
+    }
+    fn preview(&self, action: &SimulatedAction, _: &Path) -> Result<String, String> {
+        let SimulatedAction::McpToolCall {
+            server_name,
+            tool_name,
+            params,
+            ..
+        } = action
+        else {
+            return Err("Parâmetros incompatíveis com a chamada MCP.".into());
+        };
+        Ok(format!(
+            "Servidor MCP: {server_name}\nFerramenta: {tool_name}\nArgumentos completos enviados ao servidor após aprovação:\n{}",
+            serde_json::to_string(params)
+                .map_err(|_| "Não foi possível preparar a prévia da ferramenta MCP.".to_string())?
+        ))
+    }
+    fn execute(&self, _: &SimulatedAction, _: &Path) -> Result<String, String> {
+        Err("A execução MCP precisa passar pelo dispatcher de aprovações.".into())
+    }
+    fn timeout(&self) -> Duration {
+        Duration::from_secs(crate::mcp::REQUEST_TIMEOUT_SECONDS)
+    }
+}
 
 impl Tool for WorkspaceRead {
     fn name(&self) -> &'static str {
@@ -939,6 +971,7 @@ impl Tool for Productivity {
 
 pub(super) fn tool_for(action: &SimulatedAction) -> &'static dyn Tool {
     match action {
+        SimulatedAction::McpToolCall { .. } => &McpExternalTool,
         SimulatedAction::FilesList { .. } => &FilesList,
         SimulatedAction::FilesSearch { .. } => &FilesSearch,
         SimulatedAction::FilesRead { .. } => &FilesRead,
@@ -1703,6 +1736,14 @@ pub(super) fn validate_action(action: &SimulatedAction) -> Result<(), String> {
         SimulatedAction::Payment { currency, .. } => {
             if currency.len() > 10 || !currency.bytes().all(|b| b.is_ascii_alphabetic()) {
                 return Err("Moeda inválida.".into());
+            }
+        }
+        SimulatedAction::McpToolCall { params, .. } => {
+            if !params.is_object()
+                || serde_json::to_vec(params)
+                    .map_or(true, |value| value.len() > crate::mcp::MAX_TOOL_ARGUMENT_BYTES)
+            {
+                return Err("Os argumentos da ferramenta MCP excedem os limites locais.".into());
             }
         }
         SimulatedAction::Productivity { skill_id, params } => {

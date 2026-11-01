@@ -84,6 +84,17 @@ describe('configurações de privacidade', () => {
     expect(ui.match(/autoComplete="off"/g)).toHaveLength(2);
   });
 
+  it('apresenta ferramentas MCP separadas por disponibilidade e trata anotações como sugestão', () => {
+    const ui = readFileSync(new URL('./PrivacyConfigurations.tsx', import.meta.url), 'utf8');
+    expect(ui).toContain('Ferramentas encontradas');
+    expect(ui).toContain('Ativar esta ferramenta MCP (desativada por padrão)');
+    expect(ui).toContain('Indisponível: {tool.reason}');
+    expect(ui).toContain('Sugestão do servidor:');
+    expect(ui).toContain('não altera o risco nem a aprovação obrigatória');
+    expect(ui).toContain('dados externos não');
+    expect(ui).toContain('confiáveis.');
+  });
+
   it('submete a URL do Discord pelo formulário de gravação e testa sem recarregar', () => {
     const markup = renderToStaticMarkup(<DiscordWebhooksSettings />);
     const formStart = markup.indexOf('<form>');
