@@ -2504,7 +2504,7 @@ mod tests {
             assert_eq!(properties.len(), 1);
             assert!(properties.contains_key("vm_name"));
             assert!(!properties.contains_key("vm_id"));
-            assert!(parse_action(id, &json!({"vm_name":"VPS"})).is_ok());
+            assert!(parse_action(id, &json!({"vm_name":"VPS", "vm_id":42})).is_ok());
         }
     }
 
@@ -2530,7 +2530,8 @@ mod tests {
             .iter()
             .find(|skill| skill.id == "hostinger.docker_deploy")
             .unwrap();
-        assert!(parse_action("hostinger.docker_deploy", &json!({"vm_name":"VPS", "project_name":"demo", "compose_yaml":"services:\n  app:\n    image: nginx\n"})).is_ok());
+        let valid_deploy = json!({"vm_name":"VPS", "vm_id":42, "project_name":"demo", "compose_yaml":"services:\n  app:\n    image: nginx\n"});
+        assert!(parse_action("hostinger.docker_deploy", &valid_deploy).is_ok());
         assert!(parse_action("hostinger.docker_deploy", &json!({"vm_name":"VPS", "project_name":"demo", "compose_yaml":"https://example.test/compose.yml"})).is_err());
         assert_eq!(
             deploy.schema["properties"]["compose_yaml"]["maxLength"],
