@@ -55,14 +55,17 @@ struct BuildInfo {
 }
 
 #[tauri::command]
-fn get_build_info(caller: tauri::WebviewWindow) -> Result<BuildInfo, String> {
+async fn get_build_info(caller: tauri::WebviewWindow) -> Result<BuildInfo, String> {
     require_main(&caller)?;
+    let windows_version = tokio::task::spawn_blocking(windows_version)
+        .await
+        .map_err(|_| "Não foi possível consultar a versão do Windows.".to_string())?;
     Ok(BuildInfo {
         version: env!("CARGO_PKG_VERSION").to_string(),
         commit: option_env!("ODEKRAI_BUILD_COMMIT").unwrap_or("local"),
         build_date: option_env!("ODEKRAI_BUILD_DATE").unwrap_or("não definida"),
         webview_version: tauri::webview_version().map_err(|error| error.to_string())?,
-        windows_version: windows_version(),
+        windows_version,
     })
 }
 
@@ -102,7 +105,10 @@ fn open_build_commit(app: tauri::AppHandle, caller: tauri::WebviewWindow) -> Res
 }
 
 #[tauri::command]
-fn open_logs_folder(app: tauri::AppHandle, caller: tauri::WebviewWindow) -> Result<(), String> {
+async fn open_logs_folder(
+    app: tauri::AppHandle,
+    caller: tauri::WebviewWindow,
+) -> Result<(), String> {
     require_main(&caller)?;
     let logs = app
         .path()
@@ -112,11 +118,15 @@ fn open_logs_folder(app: tauri::AppHandle, caller: tauri::WebviewWindow) -> Resu
     if !logs.is_dir() {
         return Err("A pasta de logs ainda não foi criada.".into());
     }
-    std::process::Command::new("explorer.exe")
-        .arg(logs)
-        .spawn()
-        .map(|_| ())
-        .map_err(|_| "Não foi possível abrir a pasta de logs.".to_string())
+    tokio::task::spawn_blocking(move || {
+        std::process::Command::new("explorer.exe")
+            .arg(logs)
+            .spawn()
+            .map(|_| ())
+            .map_err(|_| "Não foi possível abrir a pasta de logs.".to_string())
+    })
+    .await
+    .map_err(|_| "A tarefa de abertura da pasta de logs foi interrompida.".to_string())?
 }
 
 pub mod agent;

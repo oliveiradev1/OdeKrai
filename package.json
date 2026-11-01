@@ -16,6 +16,7 @@
     "publish:releases": "node scripts/publish-releases.mjs",
     "check:release-features": "node scripts/check-release-features.mjs",
     "check:tauri-window-commands": "node scripts/check-tauri-window-commands.mjs",
+    "check:blocking-commands": "node scripts/check-blocking-commands.mjs",
     "check:window-api-acl": "node scripts/check-window-api-acl.mjs",
     "test:release-artifact": "node scripts/test-release-artifact.mjs",
     "check:encoding": "node scripts/check-encoding.mjs",

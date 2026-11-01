@@ -106,10 +106,10 @@ pub struct McpToolView {
     pub enabled: bool,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct McpRuntime(
-    Mutex<HashMap<String, RuntimeStatus>>,
-    pub(crate) Mutex<HashMap<String, crate::mcp_oauth::OAuthAccessToken>>,
+    Arc<Mutex<HashMap<String, RuntimeStatus>>>,
+    pub(crate) Arc<Mutex<HashMap<String, crate::mcp_oauth::OAuthAccessToken>>>,
 );
 
 impl McpRuntime {
@@ -458,7 +458,10 @@ pub(crate) fn set_enabled_internal(
     Ok(())
 }
 
-fn inspect(server: &McpServer, runtime: &McpRuntime) -> Result<(Arc<McpClient>, serde_json::Value), String> {
+fn inspect(
+    server: &McpServer,
+    runtime: &McpRuntime,
+) -> Result<(Arc<McpClient>, serde_json::Value), String> {
     if !server.enabled {
         return Err("Ative o servidor antes de testar a conexão.".into());
     }
@@ -491,6 +494,23 @@ fn inspect(server: &McpServer, runtime: &McpRuntime) -> Result<(Arc<McpClient>, 
     ));
     let result = client.tools_list()?;
     Ok((client, result))
+}
+
+async fn inspect_async(
+    server: McpServer,
+    runtime: McpRuntime,
+) -> Result<(Arc<McpClient>, serde_json::Value), String> {
+    run_blocking(move || inspect(&server, &runtime)).await?
+}
+
+async fn run_blocking<T, F>(operation: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    tokio::task::spawn_blocking(operation)
+        .await
+        .map_err(|_| "A tarefa de conexão MCP foi interrompida.".to_string())
 }
 
 fn tool_catalog(server: &McpServer, response: &serde_json::Value) -> Vec<McpTool> {
@@ -881,7 +901,7 @@ pub fn mcp_set_enabled(
 }
 
 #[tauri::command]
-pub fn mcp_test_connection(
+pub async fn mcp_test_connection(
     app: tauri::AppHandle,
     caller: tauri::WebviewWindow,
     server_id: String,
@@ -896,25 +916,36 @@ pub fn mcp_test_connection(
         .lock()
         .map_err(|_| "Estado MCP indisponível.".to_string())?
         .insert(server_id.clone(), RuntimeStatus::Connecting);
-    match inspect(&server, &runtime) {
+    let runtime = runtime.inner().clone();
+    let result = match inspect_async(server.clone(), runtime.clone()).await {
         Ok((client, response)) => {
             let tools = tool_catalog(&server, &response);
-            let db = crate::security::database(&app)?;
-            let views = tools
-                .iter()
-                .cloned()
-                .map(|tool| {
-                    let enabled = db
-                        .query_row(
-                            "SELECT enabled FROM skill_settings WHERE skill_id=?1",
-                            [tool_setting_key(&tool)],
-                            |row| row.get::<_, i64>(0),
-                        )
-                        .unwrap_or(0)
-                        != 0;
-                    McpToolView { tool, enabled }
-                })
-                .collect::<Vec<_>>();
+            let views = (|| {
+                let db = crate::security::database(&app)?;
+                Ok::<_, String>(
+                    tools
+                        .iter()
+                        .cloned()
+                        .map(|tool| {
+                            let enabled = db
+                                .query_row(
+                                    "SELECT enabled FROM skill_settings WHERE skill_id=?1",
+                                    [tool_setting_key(&tool)],
+                                    |row| row.get::<_, i64>(0),
+                                )
+                                .unwrap_or(0)
+                                != 0;
+                            McpToolView { tool, enabled }
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            })();
+            views.map(|views| (client, tools, views))
+        }
+        Err(error) => Err(error),
+    };
+    match result {
+        Ok((client, tools, views)) => {
             runtime
                 .0
                 .lock()
@@ -1139,6 +1170,18 @@ mod tests {
         assert!(runtime.connected_tools().is_empty());
         assert!(require_connection_confirmation(false).is_err());
         assert!(require_connection_confirmation(true).is_ok());
+    }
+
+    #[tokio::test]
+    async fn conexao_simulada_nao_bloqueia_a_thread_assincrona() {
+        let async_thread = std::thread::current().id();
+        let worker_thread = run_blocking(|| {
+            std::thread::sleep(Duration::from_millis(20));
+            std::thread::current().id()
+        })
+        .await
+        .unwrap();
+        assert_ne!(async_thread, worker_thread);
     }
 
     fn db() -> Connection {

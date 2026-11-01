@@ -76,6 +76,7 @@ detalhes sanitizados de stack ficam limitados ao painel local da interface.
 - `cargo check --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc`: compilação Rust para Windows.
 - `cargo test --manifest-path src-tauri/Cargo.toml --lib`: testes Rust de lógica e cabeçalhos de autenticação com servidor local simulado.
 - `cargo test --manifest-path src-tauri/Cargo.toml --test mock_window --features mock-window-tests`: teste de integração Tauri com `MockRuntime`; no Windows MSVC, o harness recebe um manifesto Common Controls v6 próprio.
+- `npm run check:blocking-commands`: falha se um comando Tauri síncrono contiver chamadas diretas a `reqwest::blocking`, `TcpListener`, `TcpStream`, `Command::new` ou `.spawn()`; exemplos de comando síncrono e assíncrono são verificados pelo próprio script.
 - `window_config_tests::main_window_uses_requested_default_and_minimum_size`: dimensões, mínimos e centralização da janela principal em `tauri.conf.json`.
 - Testes Rust da validação do endpoint, mapeamento de status, recusa de formatos de imagem e normalização de avatar; sem chamadas às APIs reais.
 - Testes Vitest da migração v1 e isolamento de endpoint/modelo entre provedores.

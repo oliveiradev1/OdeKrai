@@ -479,17 +479,21 @@ pub async fn agent_home_status(
 }
 
 #[tauri::command]
-pub fn agent_home_open_folder(
+pub async fn agent_home_open_folder(
     app: tauri::AppHandle,
     caller: tauri::WebviewWindow,
 ) -> Result<(), String> {
     super::require_main(&caller)?;
     let (_, home) = configured_home(&app)?.ok_or("Configure a pasta do OdeKrai primeiro.")?;
-    std::process::Command::new("explorer.exe")
-        .arg(home)
-        .spawn()
-        .map(|_| ())
-        .map_err(|_| "Não foi possível abrir a pasta do OdeKrai.".to_string())
+    tokio::task::spawn_blocking(move || {
+        std::process::Command::new("explorer.exe")
+            .arg(home)
+            .spawn()
+            .map(|_| ())
+            .map_err(|_| "Não foi possível abrir a pasta do OdeKrai.".to_string())
+    })
+    .await
+    .map_err(|_| "A tarefa de abertura da pasta do OdeKrai foi interrompida.".to_string())?
 }
 
 #[tauri::command]
