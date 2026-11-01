@@ -20,7 +20,7 @@ const SERVICE: &str = "site.anceryx.odekrai.mcp";
 const CALLBACK_TIMEOUT: Duration = Duration::from_secs(180);
 const MAX_METADATA_BYTES: usize = 256 * 1024;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct StoredOAuth {
     pub issuer: String,
@@ -32,10 +32,37 @@ pub(crate) struct StoredOAuth {
     pub refresh_token: Option<String>,
 }
 
+impl std::fmt::Debug for StoredOAuth {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("StoredOAuth")
+            .field("issuer", &self.issuer)
+            .field("resource", &self.resource)
+            .field("client_id", &self.client_id)
+            .field("token_endpoint", &self.token_endpoint)
+            .field("revocation_endpoint", &self.revocation_endpoint)
+            .field(
+                "refresh_token",
+                &self.refresh_token.as_ref().map(|_| "[REDACTED]"),
+            )
+            .finish()
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct OAuthAccessToken {
     pub value: String,
     pub expires_at: Instant,
+}
+
+impl std::fmt::Debug for OAuthAccessToken {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("OAuthAccessToken")
+            .field("value", &"[REDACTED]")
+            .field("expires_at", &self.expires_at)
+            .finish()
+    }
 }
 
 pub(crate) fn should_refresh(expires_at: Instant, now: Instant) -> bool {
@@ -587,6 +614,19 @@ mod tests {
             revocation_endpoint: Some("https://auth.example/revoke".into()),
             refresh_token: Some("refresh-secret-fixture".into()),
         }
+    }
+
+    #[test]
+    fn debug_redacts_refresh_and_access_tokens() {
+        let stored = stored_oauth();
+        let access = OAuthAccessToken {
+            value: "access-secret-fixture".into(),
+            expires_at: Instant::now(),
+        };
+        let debug = format!("{stored:?} {access:?}");
+        assert!(!debug.contains("refresh-secret-fixture"));
+        assert!(!debug.contains("access-secret-fixture"));
+        assert_eq!(debug.matches("[REDACTED]").count(), 2);
     }
 
     #[test]
