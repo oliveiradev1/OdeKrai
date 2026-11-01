@@ -2384,19 +2384,50 @@ mod tests {
 
     #[tokio::test]
     async fn unchanged_action_status_expires_at_the_deadline() {
-        let pending = br#"{"id":8,"state":"delayed"}"#;
-        let (base, _requests) = sequence_server(vec![("200 OK", pending); 256]);
+        use std::io::{Read, Write};
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let (release_sender, release_receiver) = std::sync::mpsc::channel();
+        let server = thread::spawn(move || {
+            let (mut action_stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 8192];
+            let count = action_stream.read(&mut request).unwrap_or_default();
+            let action_request = String::from_utf8_lossy(&request[..count]).into_owned();
+            let body = br#"{"id":8,"state":"delayed"}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            action_stream.write_all(response.as_bytes()).unwrap();
+            action_stream.write_all(body).unwrap();
+
+            let (mut status_stream, _) = listener.accept().unwrap();
+            let count = status_stream.read(&mut request).unwrap_or_default();
+            let status_request = String::from_utf8_lossy(&request[..count]).into_owned();
+            let _ = release_receiver.recv_timeout(Duration::from_secs(2));
+            (action_request, status_request)
+        });
+
         let error = run_action_with(
             &test_client(),
-            &base,
+            &format!("http://{address}/"),
             Some("test-token"),
             42,
             "stop",
             Duration::from_secs(1),
-            Duration::from_millis(100),
+            Duration::from_millis(10),
         )
         .await
         .unwrap_err();
+        let _ = release_sender.send(());
+        let (action_request, status_request) = server.join().unwrap();
+        assert!(action_request.starts_with(
+            "POST /api/vps/v1/virtual-machines/42/stop "
+        ));
+        assert!(status_request.starts_with(
+            "GET /api/vps/v1/virtual-machines/42/actions/8 "
+        ));
         assert!(error.contains("tempo limite"), "erro inesperado: {error}");
     }
 
