@@ -1548,7 +1548,7 @@ pub(crate) fn preview_skill(skill_id: &str, params: &Value) -> Result<String, St
                 let date = params.get("backup_created_at").and_then(Value::as_str).ok_or("A data do backup não foi confirmada pela lista.")?;
                 format!("RESTAURAR backup de {date} na VPS ‘{}’ (identificador {vm_id}). Todos os dados atuais serão substituídos. Esta ação é irreversível, não tem desfazer e exige digitar o nome exato da VPS.", display_vm_name(vm_name))
             }
-            "hostinger.recovery_start" => format!("Iniciar o modo de recuperação da VPS ‘{}’ (identificador {vm_id}). Enquanto o modo estiver ativo, o sistema normal não inicia.", display_vm_name(vm_name)),
+            "hostinger.recovery_start" => format!("Iniciar o modo de recuperação da VPS ‘{}’ (identificador {vm_id}). Enquanto o modo estiver ativo, o sistema normal não sobe.", display_vm_name(vm_name)),
             _ => format!("Parar o modo de recuperação da VPS ‘{}’ (identificador {vm_id}) e retornar à operação normal. Enquanto o modo estiver ativo, o sistema normal não sobe; esta ação também exige aprovação.", display_vm_name(vm_name)),
         });
     }
@@ -2222,6 +2222,7 @@ mod tests {
     fn test_client() -> Client {
         Client::builder()
             .redirect(Policy::none())
+            .no_proxy()
             .timeout(Duration::from_secs(2))
             .build()
             .unwrap()
