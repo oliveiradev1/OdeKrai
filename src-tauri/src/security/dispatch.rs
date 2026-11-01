@@ -2068,7 +2068,7 @@ mod batch_approval_tests {
                     risk,
                     &Origin::User,
                     skill_id == "hostinger.docker_list",
-                    false,
+                    None,
                     true,
                 );
                 assert!(
@@ -2190,7 +2190,7 @@ mod batch_approval_tests {
                     Risk::EscritaReversivel,
                     &Origin::User,
                     false,
-                    false,
+                    None,
                     true,
                 );
                 assert!(
@@ -2233,7 +2233,7 @@ mod batch_approval_tests {
                     Risk::EscritaReversivel,
                     &Origin::User,
                     false,
-                    false,
+                    None,
                     true,
                 );
                 assert!(
