@@ -6853,6 +6853,20 @@ html[data-performance='on'] .ui-tooltip-content {
   max-height: 280px;
   margin: 0;
 }
+.approval-project-confirmation {
+  display: grid;
+  gap: 8px;
+  color: #e6e2f2;
+}
+.approval-project-confirmation input {
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  color: inherit;
+  background: #17151f;
+}
 .approval-window footer {
   display: flex;
   justify-content: flex-end;

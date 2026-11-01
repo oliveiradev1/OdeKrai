@@ -41,6 +41,17 @@ export type AuditEntry = {
 export function auditRuleLabel(ruleId: string): string {
   return ruleId.trim() || 'configuração ausente';
 }
+
+export function canApprovePending(
+  busy: boolean,
+  remaining: number,
+  requiredConfirmation: string | null,
+  typedConfirmation: string,
+): boolean {
+  return (
+    !busy && remaining > 0 && (!requiredConfirmation || typedConfirmation === requiredConfirmation)
+  );
+}
 type Pending = {
   id: string;
   tool: string;
@@ -52,6 +63,7 @@ type Pending = {
   fullPreview: boolean;
   expiresAt: number;
   displayHash: string;
+  requiredConfirmation: string | null;
 };
 
 const modes: { id: Mode; title: string; description: string }[] = [
@@ -584,6 +596,7 @@ export function ApprovalWindow() {
   const [full, setFull] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [projectConfirmation, setProjectConfirmation] = useState('');
   const approvalSoundGate = useRef(new SoundTriggerGate());
 
   async function refresh() {
@@ -622,6 +635,7 @@ export function ApprovalWindow() {
     }
     setCompletePreview('');
     setFull(false);
+    setProjectConfirmation('');
     if (approvalSoundGate.current.claim(pending.id)) {
       void playSound('approval_needed', normalizeSoundPreferences(loadSettings().companion.sounds));
     }
@@ -635,6 +649,7 @@ export function ApprovalWindow() {
         id: pending.id,
         displayHash: pending.displayHash,
         approve,
+        projectConfirmation: pending.requiredConfirmation ? projectConfirmation : null,
       });
       if (result.status === 'completed') {
         void playSound('action_done', normalizeSoundPreferences(loadSettings().companion.sounds));
@@ -717,6 +732,18 @@ export function ApprovalWindow() {
               </button>
             )}
           </section>
+          {pending.requiredConfirmation && (
+            <label className="approval-project-confirmation">
+              Para confirmar a remoção, digite exatamente{' '}
+              <strong>{pending.requiredConfirmation}</strong>.
+              <input
+                aria-label="Digite o nome do projeto para confirmar a remoção"
+                autoComplete="off"
+                value={projectConfirmation}
+                onChange={(event) => setProjectConfirmation(event.target.value)}
+              />
+            </label>
+          )}
           <footer>
             <button
               className="secondary-button"
@@ -727,7 +754,14 @@ export function ApprovalWindow() {
             </button>
             <button
               className="primary-button"
-              disabled={busy || remaining === 0}
+              disabled={
+                !canApprovePending(
+                  busy,
+                  remaining,
+                  pending.requiredConfirmation,
+                  projectConfirmation,
+                )
+              }
               onClick={() => void respond(true)}
             >
               Aprovar só desta vez

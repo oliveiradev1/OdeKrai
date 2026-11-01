@@ -160,9 +160,11 @@ pub async fn approval_respond(
     id: String,
     display_hash: String,
     approve: bool,
+    project_confirmation: Option<String>,
 ) -> Result<ActionResult, String> {
     crate::require_caller(&caller, &["approval"])?;
-    dispatch::approval_respond_inner(app, state, id, display_hash, approve).await
+    dispatch::approval_respond_inner(app, state, id, display_hash, approve, project_confirmation)
+        .await
 }
 
 #[tauri::command]
@@ -377,6 +379,7 @@ pub struct PendingView {
     pub full_preview: bool,
     pub expires_at: u64,
     pub display_hash: String,
+    pub required_confirmation: Option<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]

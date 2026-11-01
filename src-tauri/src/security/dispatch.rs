@@ -106,7 +106,13 @@ pub(super) fn action_metadata(
             | "shardcloud.vm_exec"
             | "hostinger.vps_start"
             | "hostinger.vps_stop"
-            | "hostinger.vps_restart" => skill_id,
+            | "hostinger.vps_restart"
+            | "hostinger.docker_list"
+            | "hostinger.docker_start"
+            | "hostinger.docker_stop"
+            | "hostinger.docker_restart"
+            | "hostinger.docker_deploy"
+            | "hostinger.docker_remove" => skill_id,
             "code.delegate" => "code.delegate",
             "web.fetch" => "web.fetch",
             "system.open_url"
@@ -139,7 +145,7 @@ pub(super) fn action_metadata(
     };
     let policy_scope = workspace_action
         || matches!(action, SimulatedAction::Productivity { skill_id, .. }
-            if matches!(skill_id.as_str(), "shardcloud.vm_list" | "shardcloud.vm_details"));
+            if matches!(skill_id.as_str(), "shardcloud.vm_list" | "shardcloud.vm_details" | "hostinger.docker_list"));
     (tool_name, tool.risk(action), policy_scope, fixed)
 }
 
@@ -164,10 +170,17 @@ fn is_workspace_skill(skill_id: &str) -> bool {
 }
 
 fn require_batch_approval(action: &SimulatedAction, decision: Decision) -> Decision {
-    if matches!(action, SimulatedAction::Productivity { skill_id, .. } if matches!(skill_id.as_str(), "hostinger.vps_start" | "hostinger.vps_stop" | "hostinger.vps_restart"))
+    if matches!(action, SimulatedAction::Productivity { skill_id, .. } if matches!(skill_id.as_str(), "hostinger.vps_start" | "hostinger.vps_stop" | "hostinger.vps_restart" | "hostinger.docker_list" | "hostinger.docker_start" | "hostinger.docker_stop" | "hostinger.docker_restart" | "hostinger.docker_deploy" | "hostinger.docker_remove"))
         && matches!(decision, Decision::Allow(_))
     {
-        Decision::AskUser("hostinger_vps_action_requires_approval")
+        Decision::AskUser(
+            if matches!(action, SimulatedAction::Productivity { skill_id, .. } if skill_id.starts_with("hostinger.docker_"))
+            {
+                "hostinger_docker_action_requires_approval"
+            } else {
+                "hostinger_vps_action_requires_approval"
+            },
+        )
     } else if matches!(action, SimulatedAction::Productivity { skill_id, .. } if matches!(skill_id.as_str(), "shardcloud.vm_start" | "shardcloud.vm_stop" | "shardcloud.vm_exec"))
         && matches!(decision, Decision::Allow(_))
     {
@@ -200,6 +213,33 @@ fn require_batch_approval(action: &SimulatedAction, decision: Decision) -> Decis
         Decision::AskUser("batch_requires_approval")
     } else {
         decision
+    }
+}
+
+fn validate_project_removal_confirmation(
+    action: &SimulatedAction,
+    supplied: Option<&str>,
+) -> Result<(), String> {
+    if let SimulatedAction::Productivity { skill_id, params } = action {
+        if skill_id == "hostinger.docker_remove" {
+            let expected = params
+                .get("project_name")
+                .and_then(serde_json::Value::as_str)
+                .ok_or("O nome do projeto pendente está inválido.")?;
+            if supplied != Some(expected) {
+                return Err("Digite exatamente o nome do projeto para confirmar a remoção.".into());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn preview_for_approval(action: &SimulatedAction, preview: &str) -> String {
+    if matches!(action, SimulatedAction::Productivity { skill_id, .. } if skill_id == "hostinger.docker_deploy")
+    {
+        preview.to_owned()
+    } else {
+        clipped(preview, 4_000)
     }
 }
 
@@ -631,7 +671,10 @@ mod explicit_approval_tests {
             ] {
                 let decision = policy::decide(mode, risk, &Origin::User, inside, fixed, true);
                 assert!(
-                    matches!(require_batch_approval(&action, decision), Decision::AskUser(_)),
+                    matches!(
+                        require_batch_approval(&action, decision),
+                        Decision::AskUser(_)
+                    ),
                     "{mode:?}, {tool}"
                 );
             }
@@ -687,10 +730,36 @@ pub(super) fn summary(action: &SimulatedAction) -> String {
         SimulatedAction::Productivity { skill_id, params }
             if matches!(
                 skill_id.as_str(),
-                "hostinger.vps_start" | "hostinger.vps_stop" | "hostinger.vps_restart"
+                "hostinger.vps_start"
+                    | "hostinger.vps_stop"
+                    | "hostinger.vps_restart"
+                    | "hostinger.docker_list"
+                    | "hostinger.docker_start"
+                    | "hostinger.docker_stop"
+                    | "hostinger.docker_restart"
+                    | "hostinger.docker_remove"
             ) =>
         {
             crate::hostinger::preview_skill(skill_id, params).unwrap_or_else(|_| skill_id.clone())
+        }
+        SimulatedAction::Productivity { skill_id, params }
+            if skill_id == "hostinger.docker_deploy" =>
+        {
+            format!(
+                "Criar ou atualizar o projeto Docker ‘{}’ na VPS ‘{}’ ({} bytes de compose)",
+                params
+                    .get("project_name")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("projeto"),
+                params
+                    .get("vm_name")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("VPS"),
+                params
+                    .get("compose_yaml")
+                    .and_then(serde_json::Value::as_str)
+                    .map_or(0, str::len)
+            )
         }
         SimulatedAction::Productivity { skill_id, params }
             if matches!(
@@ -1764,10 +1833,21 @@ pub(super) async fn get_pending_approval_inner(
         },
         summary: item.summary.clone(),
         full_preview: item.preview.chars().count() > 4_000,
-        preview: clipped(&item.preview, 4_000),
+        preview: preview_for_approval(&item.action, &item.preview),
         preview_image: item.preview_image.clone(),
         expires_at: item.expires_at,
         display_hash: item.digest.clone(),
+        required_confirmation: match &item.action {
+            SimulatedAction::Productivity { skill_id, params }
+                if skill_id == "hostinger.docker_remove" =>
+            {
+                params
+                    .get("project_name")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned)
+            }
+            _ => None,
+        },
     }))
 }
 
@@ -1812,6 +1892,7 @@ pub(super) async fn approval_respond_inner(
     id: String,
     display_hash: String,
     approve: bool,
+    project_confirmation: Option<String>,
 ) -> Result<ActionResult, String> {
     if state.approval_broker.contains(&id).await {
         let item = {
@@ -1821,6 +1902,12 @@ pub(super) async fn approval_respond_inner(
             };
             if item.id != id || !display_hash_matches(&item.action, &item.digest, &display_hash) {
                 return Err("Os parâmetros exibidos mudaram; a ação foi recusada.".into());
+            }
+            if approve {
+                validate_project_removal_confirmation(
+                    &item.action,
+                    project_confirmation.as_deref(),
+                )?;
             }
             take_pending_approval(&mut pending, &id, &display_hash)
                 .map_err(|_| "A aprovação não corresponde à ação pendente.".to_string())?
@@ -1866,6 +1953,93 @@ pub(super) fn close_approval_if_empty(app: &tauri::AppHandle, state: &SecuritySt
 #[cfg(test)]
 mod batch_approval_tests {
     use super::*;
+
+    #[test]
+    fn hostinger_docker_writes_always_ask_and_denial_does_not_dispatch() {
+        for skill_id in [
+            "hostinger.docker_list",
+            "hostinger.docker_start",
+            "hostinger.docker_stop",
+            "hostinger.docker_restart",
+            "hostinger.docker_deploy",
+            "hostinger.docker_remove",
+        ] {
+            let action = SimulatedAction::Productivity {
+                skill_id: skill_id.into(),
+                params: serde_json::json!({"vm_name":"VPS", "vm_id":42, "project_name":"demo", "compose_yaml":"services:\n  app:\n    image: nginx\n"}),
+            };
+            for mode in [
+                Mode::SemprePerguntar,
+                Mode::AprovarPorMim,
+                Mode::ControleTotal,
+            ] {
+                let risk = match skill_id {
+                    "hostinger.docker_list" => Risk::Leitura,
+                    "hostinger.docker_remove" => Risk::DestrutivoFinanceiro,
+                    "hostinger.docker_deploy" => Risk::ExecucaoDeCodigo,
+                    _ => Risk::EscritaReversivel,
+                };
+                let decision = policy::decide(
+                    mode,
+                    risk,
+                    &Origin::User,
+                    skill_id == "hostinger.docker_list",
+                    false,
+                    true,
+                );
+                assert!(
+                    matches!(
+                        require_batch_approval(&action, decision),
+                        Decision::AskUser(_)
+                    ),
+                    "{mode:?} {skill_id}"
+                );
+            }
+            assert!(!approval_granted_and_running(
+                &ApprovalDecision::Negada("user_denied".into()),
+                false,
+                false
+            ));
+        }
+    }
+
+    #[test]
+    fn docker_remove_requires_exact_project_name_confirmation() {
+        let action = SimulatedAction::Productivity {
+            skill_id: "hostinger.docker_remove".into(),
+            params: serde_json::json!({"project_name":"demo"}),
+        };
+        assert!(validate_project_removal_confirmation(&action, None).is_err());
+        assert!(validate_project_removal_confirmation(&action, Some("other")).is_err());
+        assert!(validate_project_removal_confirmation(&action, Some("demo")).is_ok());
+        let read = SimulatedAction::Productivity {
+            skill_id: "hostinger.docker_list".into(),
+            params: serde_json::json!({}),
+        };
+        assert!(validate_project_removal_confirmation(&read, None).is_ok());
+    }
+
+    #[test]
+    fn docker_compose_approval_keeps_the_full_file_in_the_preview() {
+        let action = SimulatedAction::Productivity {
+            skill_id: "hostinger.docker_deploy".into(),
+            params: serde_json::json!({}),
+        };
+        let full = "services:\n".to_owned() + &" ".repeat(4_100);
+        assert_eq!(preview_for_approval(&action, &full), full);
+    }
+
+    #[test]
+    fn docker_compose_audit_records_only_a_hash_and_size() {
+        let secret_text = "compose-content-fixture";
+        let action = SimulatedAction::Productivity {
+            skill_id: "hostinger.docker_deploy".into(),
+            params: serde_json::json!({"project_name":"demo", "compose_yaml":secret_text}),
+        };
+        let audit = audit_params(&action);
+        assert!(!audit.contains(secret_text));
+        assert!(audit.contains("params_sha256="));
+    }
 
     #[test]
     fn apply_plan_always_requires_one_explicit_batch_approval() {

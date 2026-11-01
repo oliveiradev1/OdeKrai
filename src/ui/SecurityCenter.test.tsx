@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
-import { auditRuleLabel, SecurityCenter } from './SecurityCenter';
+import { auditRuleLabel, canApprovePending, SecurityCenter } from './SecurityCenter';
 
 describe('SecurityCenter embutido', () => {
   it('nunca mostra o identificador da regra vazio na auditoria', () => {
@@ -15,6 +15,13 @@ describe('SecurityCenter embutido', () => {
     );
     expect(markup).toContain('Abrir tela completa');
     expect(markup).not.toContain('SEGURANÇA LOCAL');
+  });
+
+  it('só habilita a aprovação de remoção após digitar o nome exato do projeto', () => {
+    expect(canApprovePending(false, 20, 'meu-projeto', '')).toBe(false);
+    expect(canApprovePending(false, 20, 'meu-projeto', 'outro')).toBe(false);
+    expect(canApprovePending(false, 20, 'meu-projeto', 'meu-projeto')).toBe(true);
+    expect(canApprovePending(true, 20, 'meu-projeto', 'meu-projeto')).toBe(false);
   });
 
   it('não mostra a ação de tela completa fora do modo embutido', () => {

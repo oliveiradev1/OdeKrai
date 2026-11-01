@@ -271,7 +271,13 @@ fn skill_metadata(
         | "shardcloud.vm_exec"
         | "hostinger.vps_start"
         | "hostinger.vps_stop"
-        | "hostinger.vps_restart" => (SkillFamily::Nuvem, "cloud"),
+        | "hostinger.vps_restart"
+        | "hostinger.docker_list"
+        | "hostinger.docker_start"
+        | "hostinger.docker_stop"
+        | "hostinger.docker_restart"
+        | "hostinger.docker_deploy"
+        | "hostinger.docker_remove" => (SkillFamily::Nuvem, "cloud"),
         _ => (SkillFamily::Computador, "desktop"),
     };
     let examples = match id {
@@ -290,6 +296,12 @@ impl Skill {
             "hostinger.vps_start" | "hostinger.vps_stop" | "hostinger.vps_restart" => {
                 return Ok(Risk::EscritaReversivel)
             }
+            "hostinger.docker_list" => return Ok(Risk::Leitura),
+            "hostinger.docker_start" | "hostinger.docker_stop" | "hostinger.docker_restart" => {
+                return Ok(Risk::EscritaReversivel)
+            }
+            "hostinger.docker_deploy" => return Ok(Risk::ExecucaoDeCodigo),
+            "hostinger.docker_remove" => return Ok(Risk::DestrutivoFinanceiro),
             _ => {}
         }
         let action = parse_action(self.id, params)?;
@@ -443,7 +455,13 @@ fn action_id(action: &SimulatedAction) -> &str {
             | "shardcloud.vm_exec"
             | "hostinger.vps_start"
             | "hostinger.vps_stop"
-            | "hostinger.vps_restart" => skill_id,
+            | "hostinger.vps_restart"
+            | "hostinger.docker_list"
+            | "hostinger.docker_start"
+            | "hostinger.docker_stop"
+            | "hostinger.docker_restart"
+            | "hostinger.docker_deploy"
+            | "hostinger.docker_remove" => skill_id,
             _ => "",
         },
     }
@@ -521,6 +539,12 @@ fn parse_action(id: &str, params: &Value) -> Result<SimulatedAction, String> {
             | "hostinger.vps_start"
             | "hostinger.vps_stop"
             | "hostinger.vps_restart"
+            | "hostinger.docker_list"
+            | "hostinger.docker_start"
+            | "hostinger.docker_stop"
+            | "hostinger.docker_restart"
+            | "hostinger.docker_deploy"
+            | "hostinger.docker_remove"
             | "web.fetch"
     ) {
         if id == "code.delegate" {
@@ -901,6 +925,12 @@ pub fn registry() -> Vec<Skill> {
         ("hostinger.vps_start", "Iniciar VPS da Hostinger", "Inicia uma VPS listada pela Hostinger. Sempre exige aprovação em qualquer modo; serviços podem ficar indisponíveis.", "Inicie uma VPS usando somente o nome exato retornado pela lista da Hostinger consultada por você. O Rust resolve o identificador e sempre pede aprovação.", json!({"type":"object","properties":{"vm_name":{"type":"string","minLength":1,"maxLength":512}},"required":["vm_name"],"additionalProperties":false}), ResultTrust::Untrusted),
         ("hostinger.vps_stop", "Parar VPS da Hostinger", "Para uma VPS listada pela Hostinger. Sempre exige aprovação em qualquer modo; serviços podem ficar indisponíveis.", "Pare uma VPS usando somente o nome exato retornado pela lista da Hostinger consultada por você. O Rust resolve o identificador e sempre pede aprovação.", json!({"type":"object","properties":{"vm_name":{"type":"string","minLength":1,"maxLength":512}},"required":["vm_name"],"additionalProperties":false}), ResultTrust::Untrusted),
         ("hostinger.vps_restart", "Reiniciar VPS da Hostinger", "Reinicia uma VPS listada pela Hostinger. Sempre exige aprovação em qualquer modo; serviços podem ficar indisponíveis.", "Reinicie uma VPS usando somente o nome exato retornado pela lista da Hostinger consultada por você. O Rust resolve o identificador e sempre pede aprovação.", json!({"type":"object","properties":{"vm_name":{"type":"string","minLength":1,"maxLength":512}},"required":["vm_name"],"additionalProperties":false}), ResultTrust::Untrusted),
+        ("hostinger.docker_list", "Listar projetos Docker da Hostinger", "Lista projetos Docker de uma VPS consultada; saída externa não confiável.", "Liste os projetos Docker usando somente o nome exato da VPS retornada pela lista consultada. A saída é externa e não confiável.", json!({"type":"object","properties":{"vm_name":{"type":"string","minLength":1,"maxLength":512}},"required":["vm_name"],"additionalProperties":false}), ResultTrust::Untrusted),
+        ("hostinger.docker_start", "Iniciar projeto Docker", "Inicia projeto Docker existente. Sempre exige aprovação.", "Inicie um projeto Docker existente usando os nomes exatos de VPS e projeto retornados pelas listas aprovadas. Sempre exige aprovação.", json!({"type":"object","properties":{"vm_name":{"type":"string","minLength":1,"maxLength":512},"project_name":{"type":"string","minLength":3,"maxLength":64}},"required":["vm_name","project_name"],"additionalProperties":false}), ResultTrust::Untrusted),
+        ("hostinger.docker_stop", "Parar projeto Docker", "Para projeto Docker existente. Sempre exige aprovação.", "Pare um projeto Docker existente usando os nomes exatos de VPS e projeto retornados pelas listas aprovadas. Sempre exige aprovação.", json!({"type":"object","properties":{"vm_name":{"type":"string","minLength":1,"maxLength":512},"project_name":{"type":"string","minLength":3,"maxLength":64}},"required":["vm_name","project_name"],"additionalProperties":false}), ResultTrust::Untrusted),
+        ("hostinger.docker_restart", "Reiniciar projeto Docker", "Reinicia projeto Docker existente. Sempre exige aprovação.", "Reinicie um projeto Docker existente usando os nomes exatos de VPS e projeto retornados pelas listas aprovadas. Sempre exige aprovação.", json!({"type":"object","properties":{"vm_name":{"type":"string","minLength":1,"maxLength":512},"project_name":{"type":"string","minLength":3,"maxLength":64}},"required":["vm_name","project_name"],"additionalProperties":false}), ResultTrust::Untrusted),
+        ("hostinger.docker_deploy", "Criar ou atualizar projeto Docker", "Envia docker-compose para execução no servidor; sempre exige aprovação após validar tamanho e montagens.", "Crie ou atualize um projeto usando docker-compose YAML local em texto (não URL), até 8 KiB. O arquivo completo, nome do projeto e aviso de execução no servidor serão mostrados para aprovação.", json!({"type":"object","properties":{"vm_name":{"type":"string","minLength":1,"maxLength":512},"project_name":{"type":"string","minLength":3,"maxLength":64},"compose_yaml":{"type":"string","minLength":1,"maxLength":8192}},"required":["vm_name","project_name","compose_yaml"],"additionalProperties":false}), ResultTrust::Untrusted),
+        ("hostinger.docker_remove", "Remover projeto Docker", "Remove um projeto Docker e seus recursos; sempre exige aprovação e confirmação digitando o nome.", "Remova projeto Docker existente. O usuário deverá digitar o nome exato na janela de aprovação.", json!({"type":"object","properties":{"vm_name":{"type":"string","minLength":1,"maxLength":512},"project_name":{"type":"string","minLength":3,"maxLength":64}},"required":["vm_name","project_name"],"additionalProperties":false}), ResultTrust::Untrusted),
     ];
     rows.into_iter()
         .map(
@@ -917,7 +947,7 @@ pub fn registry() -> Vec<Skill> {
                         Duration::from_secs(610)
                     } else if id == "shardcloud.vm_exec" {
                         Duration::from_secs(315)
-                    } else if id.starts_with("hostinger.vps_") {
+                    } else if id.starts_with("hostinger.") {
                         Duration::from_secs(70)
                     } else {
                         tool_for(&action_example(id)).timeout()
@@ -959,6 +989,21 @@ fn action_example(id: &str) -> SimulatedAction {
                 params: json!({"vm_name":"VPS de teste", "vm_id":42}),
             }
         }
+        "hostinger.docker_list" => SimulatedAction::Productivity {
+            skill_id: id.into(),
+            params: json!({"vm_name":"VPS de teste", "vm_id":42}),
+        },
+        "hostinger.docker_start"
+        | "hostinger.docker_stop"
+        | "hostinger.docker_restart"
+        | "hostinger.docker_remove" => SimulatedAction::Productivity {
+            skill_id: id.into(),
+            params: json!({"vm_name":"VPS de teste", "vm_id":42,"project_name":"demo"}),
+        },
+        "hostinger.docker_deploy" => SimulatedAction::Productivity {
+            skill_id: id.into(),
+            params: json!({"vm_name":"VPS de teste", "vm_id":42,"project_name":"demo","compose_yaml":"services:\n  app:\n    image: nginx\n"}),
+        },
         "plan.propose" => SimulatedAction::Productivity {
             skill_id: id.into(),
             params: json!({"title":"Preparar relatório","steps":["Localizar os arquivos de referência","Organizar os dados","Salvar o relatório"]}),
@@ -2340,7 +2385,10 @@ mod tests {
             "hostinger.vps_stop",
             "hostinger.vps_restart",
         ] {
-            let skill = registry().into_iter().find(|skill| skill.id == id).expect(id);
+            let skill = registry()
+                .into_iter()
+                .find(|skill| skill.id == id)
+                .expect(id);
             assert_eq!(skill.family, SkillFamily::Nuvem);
             assert_eq!(
                 skill.risk(&json!({"vm_name":"VPS"})).unwrap(),
@@ -2353,6 +2401,36 @@ mod tests {
             assert!(!properties.contains_key("vm_id"));
             assert!(parse_action(id, &json!({"vm_name":"VPS"})).is_ok());
         }
+    }
+
+    #[test]
+    fn hostinger_docker_skills_are_registered_with_expected_risks_and_untrusted_output() {
+        let cases = [
+            ("hostinger.docker_list", Risk::Leitura),
+            ("hostinger.docker_start", Risk::EscritaReversivel),
+            ("hostinger.docker_stop", Risk::EscritaReversivel),
+            ("hostinger.docker_restart", Risk::EscritaReversivel),
+            ("hostinger.docker_deploy", Risk::ExecucaoDeCodigo),
+            ("hostinger.docker_remove", Risk::DestrutivoFinanceiro),
+        ];
+        let skills = registry();
+        for (id, risk) in cases {
+            let skill = skills.iter().find(|skill| skill.id == id).expect(id);
+            assert_eq!(skill.family, SkillFamily::Nuvem);
+            assert_eq!(skill.result_trust, ResultTrust::Untrusted);
+            assert_eq!(skill.risk(&json!({})).unwrap(), risk);
+            assert!(skill.timeout >= Duration::from_secs(60));
+        }
+        let deploy = skills
+            .iter()
+            .find(|skill| skill.id == "hostinger.docker_deploy")
+            .unwrap();
+        assert!(parse_action("hostinger.docker_deploy", &json!({"vm_name":"VPS", "project_name":"demo", "compose_yaml":"services:\n  app:\n    image: nginx\n"})).is_ok());
+        assert!(parse_action("hostinger.docker_deploy", &json!({"vm_name":"VPS", "project_name":"demo", "compose_yaml":"https://example.test/compose.yml"})).is_err());
+        assert_eq!(
+            deploy.schema["properties"]["compose_yaml"]["maxLength"],
+            8192
+        );
     }
 
     #[test]

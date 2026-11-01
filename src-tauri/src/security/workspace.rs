@@ -645,10 +645,30 @@ impl Tool for Productivity {
             SimulatedAction::Productivity { skill_id, .. }
                 if matches!(
                     skill_id.as_str(),
-                    "hostinger.vps_start" | "hostinger.vps_stop" | "hostinger.vps_restart"
+                    "hostinger.vps_start"
+                        | "hostinger.vps_stop"
+                        | "hostinger.vps_restart"
+                        | "hostinger.docker_start"
+                        | "hostinger.docker_stop"
+                        | "hostinger.docker_restart"
                 ) =>
             {
                 Risk::EscritaReversivel
+            }
+            SimulatedAction::Productivity { skill_id, .. }
+                if skill_id == "hostinger.docker_list" =>
+            {
+                Risk::Leitura
+            }
+            SimulatedAction::Productivity { skill_id, .. }
+                if skill_id == "hostinger.docker_deploy" =>
+            {
+                Risk::ExecucaoDeCodigo
+            }
+            SimulatedAction::Productivity { skill_id, .. }
+                if skill_id == "hostinger.docker_remove" =>
+            {
+                Risk::DestrutivoFinanceiro
             }
             SimulatedAction::Productivity { skill_id, .. } if skill_id == "shardcloud.vm_exec" => {
                 Risk::ExecucaoDeCodigo
@@ -830,8 +850,9 @@ impl Tool for Productivity {
         if skill_id.starts_with("hostinger.") {
             let skill_id = skill_id.clone();
             let params = params.clone();
+            let app = app.clone();
             return Box::pin(async move {
-                crate::hostinger::execute_skill(&skill_id, &params).await
+                crate::hostinger::execute_skill(&app, &skill_id, &params).await
             });
         }
         if skill_id == "plan.propose" {
@@ -1786,27 +1807,57 @@ pub(super) fn validate_action(action: &SimulatedAction) -> Result<(), String> {
 
 fn validate_hostinger_skill(id: &str, params: &serde_json::Value) -> Result<(), String> {
     let object = params.as_object().ok_or("Parâmetros inválidos.")?;
-    if !matches!(
-        id,
-        "hostinger.vps_start" | "hostinger.vps_stop" | "hostinger.vps_restart"
-    )
-        || object.len() != 2
-        || object
-            .keys()
-            .any(|key| !["vm_name", "vm_id"].contains(&key.as_str()))
-    {
+    let allowed: &[&str] = match id {
+        "hostinger.vps_start"
+        | "hostinger.vps_stop"
+        | "hostinger.vps_restart"
+        | "hostinger.docker_list" => &["vm_name", "vm_id"],
+        "hostinger.docker_start"
+        | "hostinger.docker_stop"
+        | "hostinger.docker_restart"
+        | "hostinger.docker_remove" => &["vm_name", "vm_id", "project_name"],
+        "hostinger.docker_deploy" => &["vm_name", "vm_id", "project_name", "compose_yaml"],
+        _ => return Err("Os parâmetros da ação Hostinger não correspondem à habilidade.".into()),
+    };
+    if object.len() != allowed.len() || object.keys().any(|key| !allowed.contains(&key.as_str())) {
         return Err("Os parâmetros da ação Hostinger não correspondem à habilidade.".into());
     }
     let name = object
         .get("vm_name")
         .and_then(serde_json::Value::as_str)
         .ok_or("Informe o nome da VPS.")?;
-    let id = object
+    let vm_id = object
         .get("vm_id")
         .and_then(serde_json::Value::as_i64)
         .ok_or("A VPS não foi confirmada pela lista consultada.")?;
-    if name.trim().is_empty() || name.chars().count() > 512 || id <= 0 {
+    if name.trim().is_empty() || name.chars().count() > 512 || vm_id <= 0 {
         return Err("O nome ou identificador da VPS é inválido.".into());
+    }
+    if id.starts_with("hostinger.docker_") && id != "hostinger.docker_list" {
+        let project = object
+            .get("project_name")
+            .and_then(serde_json::Value::as_str)
+            .ok_or("Informe o nome do projeto Docker.")?;
+        if !(3..=64).contains(&project.len())
+            || !project
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
+        {
+            return Err("O nome do projeto Docker é inválido.".into());
+        }
+    }
+    if id == "hostinger.docker_deploy" {
+        let compose = object
+            .get("compose_yaml")
+            .and_then(serde_json::Value::as_str)
+            .ok_or("Informe o conteúdo do docker-compose.")?;
+        crate::hostinger::validate_skill_compose(
+            object
+                .get("project_name")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default(),
+            compose,
+        )?;
     }
     Ok(())
 }

@@ -3,6 +3,7 @@ use reqwest::{redirect::Policy, Client, StatusCode, Url};
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value;
 use std::{
+    collections::HashMap,
     sync::Mutex,
     time::{Duration, Instant},
 };
@@ -11,6 +12,7 @@ use tauri::Manager;
 #[derive(Default)]
 pub(crate) struct HostingerState {
     approved_vms: Mutex<Vec<ApprovedVm>>,
+    approved_projects: Mutex<HashMap<i64, Vec<String>>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -30,6 +32,10 @@ const MAX_COLLECTION_ITEMS: usize = 100;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 const ACTION_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const ACTION_MAX_WAIT: Duration = Duration::from_secs(60);
+const MAX_COMPOSE_BYTES: usize = 8192;
+const BLOCKED_MOUNT_ROOTS: &[&str] = &[
+    "/", "/etc", "/root", "/var/run", "/proc", "/sys", "/dev", "/boot",
+];
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -81,8 +87,9 @@ pub fn remove_hostinger_token(caller: tauri::WebviewWindow) -> Result<(), String
             clear_vms(caller.app_handle());
             Ok(())
         }
-        Err(_) => Err("Não foi possível remover o token do Gerenciador de Credenciais do Windows."
-            .into()),
+        Err(_) => {
+            Err("Não foi possível remover o token do Gerenciador de Credenciais do Windows.".into())
+        }
     }
 }
 
@@ -116,10 +123,7 @@ fn endpoint_for_base(base: &str, path: &str) -> Result<Url, String> {
     }
     let base = Url::parse(base).map_err(|_| "A URL da API Hostinger é inválida.")?;
     #[cfg(test)]
-    if base.scheme() == "http"
-        && base.host_str() == Some("127.0.0.1")
-        && base.port().is_some()
-    {
+    if base.scheme() == "http" && base.host_str() == Some("127.0.0.1") && base.port().is_some() {
         return base
             .join(path)
             .map_err(|_| "O caminho interno da API Hostinger é inválido.".into());
@@ -137,12 +141,14 @@ fn api_endpoint(path: &str) -> Result<Url, String> {
 }
 
 fn token_from_keyring() -> Result<String, String> {
-    keyring_entry()?.get_password().map_err(|error| match error {
-        keyring::Error::NoEntry => {
-            "Salve o token da Hostinger em Configurações > Nuvem para continuar.".into()
-        }
-        _ => "Não foi possível ler o token no Gerenciador de Credenciais do Windows.".into(),
-    })
+    keyring_entry()?
+        .get_password()
+        .map_err(|error| match error {
+            keyring::Error::NoEntry => {
+                "Salve o token da Hostinger em Configurações > Nuvem para continuar.".into()
+            }
+            _ => "Não foi possível ler o token no Gerenciador de Credenciais do Windows.".into(),
+        })
 }
 
 fn external_text(value: &str, secret: &str) -> String {
@@ -258,27 +264,28 @@ async fn request_at<T: DeserializeOwned>(
     read_limited(response).await
 }
 
-async fn mutate_at<T: DeserializeOwned>(
+async fn request_action_at<T: DeserializeOwned>(
     client: &Client,
     endpoint: Url,
     token: Option<&str>,
+    method: reqwest::Method,
+    body: Option<&Value>,
 ) -> Result<T, String> {
     let token = token.ok_or_else(|| {
         "Salve o token da Hostinger em Configurações > Nuvem para continuar.".to_string()
     })?;
     let token = validate_token(token)?;
-    let response = client
-        .post(endpoint)
-        .bearer_auth(token)
-        .send()
-        .await
-        .map_err(|error| {
-            if error.is_timeout() {
-                "A solicitação à Hostinger excedeu o tempo limite.".to_string()
-            } else {
-                "Falha de rede ao conectar à Hostinger.".to_string()
-            }
-        })?;
+    let mut request = client.request(method, endpoint).bearer_auth(token);
+    if let Some(body) = body {
+        request = request.json(body);
+    }
+    let response = request.send().await.map_err(|error| {
+        if error.is_timeout() {
+            "A solicitação à Hostinger excedeu o tempo limite.".to_string()
+        } else {
+            "Falha de rede ao conectar à Hostinger.".to_string()
+        }
+    })?;
     if !response.status().is_success() {
         return Err(status_error(response.status()));
     }
@@ -320,12 +327,36 @@ async fn run_action_with(
     if !matches!(action, "start" | "stop" | "restart") {
         return Err("Ação de VPS inválida.".into());
     }
+    run_action_paths_with(
+        client,
+        base,
+        token,
+        &format!("api/vps/v1/virtual-machines/{vm_id}/{action}"),
+        &format!("api/vps/v1/virtual-machines/{vm_id}/actions"),
+        reqwest::Method::POST,
+        None,
+        max_wait,
+        poll_interval,
+    )
+    .await
+}
+
+async fn run_action_paths_with(
+    client: &Client,
+    base: &str,
+    token: Option<&str>,
+    post_path: &str,
+    status_path: &str,
+    method: reqwest::Method,
+    body: Option<Value>,
+    max_wait: Duration,
+    poll_interval: Duration,
+) -> Result<Value, String> {
     let deadline = Instant::now() + max_wait;
-    let path = format!("api/vps/v1/virtual-machines/{vm_id}/{action}");
-    let endpoint = endpoint_for_base(base, &path)?;
+    let endpoint = endpoint_for_base(base, post_path)?;
     let initial: Value = tokio::time::timeout_at(
         tokio::time::Instant::from_std(deadline),
-        mutate_at(client, endpoint, token),
+        request_action_at(client, endpoint, token, method, body.as_ref()),
     )
     .await
     .map_err(|_| "A ação da Hostinger excedeu o tempo limite de 60 segundos.".to_string())??;
@@ -346,7 +377,7 @@ async fn run_action_with(
     {
         return Err("A Hostinger retornou um identificador de ação inválido.".into());
     }
-    let status_path = format!("api/vps/v1/virtual-machines/{vm_id}/actions/{action_id}");
+    let status_path = format!("{status_path}/{action_id}");
     loop {
         let endpoint = endpoint_for_base(base, &status_path)?;
         let status: Value = tokio::time::timeout_at(
@@ -357,7 +388,11 @@ async fn run_action_with(
         .map_err(|_| "A ação da Hostinger excedeu o tempo limite de 60 segundos.".to_string())??;
         match action_status(&status)? {
             ActionStatus::Complete => {
-                return Ok(sanitize_external_value(status, 0, token.unwrap_or_default()));
+                return Ok(sanitize_external_value(
+                    status,
+                    0,
+                    token.unwrap_or_default(),
+                ));
             }
             ActionStatus::Failed => {
                 return Err("A Hostinger informou que a ação na VPS falhou.".into());
@@ -410,6 +445,9 @@ fn clear_vms(app: &tauri::AppHandle) {
         if let Ok(mut vms) = state.approved_vms.lock() {
             vms.clear();
         }
+        if let Ok(mut projects) = state.approved_projects.lock() {
+            projects.clear();
+        }
     }
 }
 
@@ -427,13 +465,31 @@ pub(crate) fn prepare_skill_params(
     skill_id: &str,
     mut params: Value,
 ) -> Result<Value, String> {
-    if !matches!(
+    if !skill_id.starts_with("hostinger.") {
+        return Ok(params);
+    }
+    let object = params
+        .as_object()
+        .ok_or("Os parâmetros da habilidade são inválidos.")?;
+    let expected = if matches!(
         skill_id,
         "hostinger.vps_start" | "hostinger.vps_stop" | "hostinger.vps_restart"
     ) {
-        return Ok(params);
+        1
+    } else if skill_id == "hostinger.docker_list" {
+        1
+    } else if skill_id == "hostinger.docker_deploy" {
+        3
+    } else {
+        2
+    };
+    if object.len() != expected || object.contains_key("vm_id") {
+        return Err("Os parâmetros da habilidade Hostinger são inválidos.".into());
     }
-    let name = validate_vm_name_request(&params)?;
+    let name = object
+        .get("vm_name")
+        .and_then(Value::as_str)
+        .ok_or("Informe o nome da VPS consultada.")?;
     let state = app_state(app)?;
     let approved = state
         .approved_vms
@@ -444,9 +500,33 @@ pub(crate) fn prepare_skill_params(
         .as_object_mut()
         .ok_or("Os parâmetros da habilidade são inválidos.")?
         .insert("vm_id".into(), Value::from(vm.id));
+    if skill_id.starts_with("hostinger.docker_") && skill_id != "hostinger.docker_list" {
+        let project = params
+            .get("project_name")
+            .and_then(Value::as_str)
+            .ok_or("Informe o nome do projeto Docker.")?;
+        validate_project_name(project)?;
+        if skill_id != "hostinger.docker_deploy" {
+            let projects = state
+                .approved_projects
+                .lock()
+                .map_err(|_| "Não foi possível consultar a lista local de projetos.".to_string())?;
+            resolve_approved_project(
+                projects.get(&vm.id).map(Vec::as_slice).unwrap_or_default(),
+                project,
+            )?;
+        } else {
+            let compose = params
+                .get("compose_yaml")
+                .and_then(Value::as_str)
+                .ok_or("Informe o conteúdo do docker-compose.")?;
+            validate_docker_compose(project, compose)?;
+        }
+    }
     Ok(params)
 }
 
+#[cfg(test)]
 fn validate_vm_name_request(params: &Value) -> Result<&str, String> {
     let object = params
         .as_object()
@@ -469,7 +549,15 @@ pub(crate) fn validate_action_against_catalog(
     };
     if !matches!(
         skill_id.as_str(),
-        "hostinger.vps_start" | "hostinger.vps_stop" | "hostinger.vps_restart"
+        "hostinger.vps_start"
+            | "hostinger.vps_stop"
+            | "hostinger.vps_restart"
+            | "hostinger.docker_list"
+            | "hostinger.docker_start"
+            | "hostinger.docker_stop"
+            | "hostinger.docker_restart"
+            | "hostinger.docker_deploy"
+            | "hostinger.docker_remove"
     ) {
         return Ok(());
     }
@@ -490,6 +578,35 @@ pub(crate) fn validate_action_against_catalog(
     if vm.id != id {
         return Err("O identificador não corresponde à VPS da lista consultada.".into());
     }
+    if skill_id.starts_with("hostinger.docker_")
+        && skill_id != "hostinger.docker_list"
+        && skill_id != "hostinger.docker_deploy"
+    {
+        let project = params
+            .get("project_name")
+            .and_then(Value::as_str)
+            .ok_or("Informe o nome do projeto Docker.")?;
+        let projects = state
+            .approved_projects
+            .lock()
+            .map_err(|_| "Não foi possível consultar a lista local de projetos.".to_string())?;
+        resolve_approved_project(
+            projects.get(&vm.id).map(Vec::as_slice).unwrap_or_default(),
+            project,
+        )?;
+    }
+    if skill_id == "hostinger.docker_deploy" {
+        validate_docker_compose(
+            params
+                .get("project_name")
+                .and_then(Value::as_str)
+                .ok_or("Informe o nome do projeto Docker.")?,
+            params
+                .get("compose_yaml")
+                .and_then(Value::as_str)
+                .ok_or("Informe o conteúdo do docker-compose.")?,
+        )?;
+    }
     Ok(())
 }
 
@@ -505,11 +622,225 @@ fn display_vm_name(name: &str) -> String {
         .collect()
 }
 
+fn validate_project_name(name: &str) -> Result<&str, String> {
+    if !(3..=64).contains(&name.len())
+        || !name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err(
+            "O nome do projeto deve ter de 3 a 64 letras, números, hífens ou sublinhados.".into(),
+        );
+    }
+    Ok(name)
+}
+
+fn normalize_mount_source(source: &str) -> Result<String, String> {
+    let source = source.trim().trim_matches(['\'', '"']);
+    if source.is_empty() || source.contains('$') || source.contains(['*', '&', '!']) {
+        return Err("A montagem do compose não pode ser validada com segurança.".into());
+    }
+    let normalized = source.replace('\\', "/");
+    if !normalized.starts_with('/') {
+        if normalized.split('/').any(|part| part == "..") {
+            return Err("O compose não pode montar caminhos com travessia de diretório.".into());
+        }
+        return Ok(normalized);
+    }
+    let mut parts = Vec::new();
+    for part in normalized.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            value => parts.push(value),
+        }
+    }
+    let absolute = format!("/{}", parts.join("/"));
+    if BLOCKED_MOUNT_ROOTS
+        .iter()
+        .any(|root| absolute == *root || absolute.starts_with(&format!("{root}/")))
+    {
+        return Err("O compose tenta montar um caminho protegido do sistema do servidor.".into());
+    }
+    Ok(absolute)
+}
+
+fn validate_compose_mounts(compose: &str) -> Result<(), String> {
+    let mut in_volumes = false;
+    let mut volume_indent = 0usize;
+    for raw in compose.lines() {
+        let line = raw.trim();
+        let indent = raw.len() - raw.trim_start().len();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if ["volumes:", "devices:"]
+            .iter()
+            .any(|key| line == *key || line.starts_with(*key))
+        {
+            in_volumes = true;
+            volume_indent = indent;
+            if let Some(inline) = line
+                .strip_prefix("volumes:")
+                .or_else(|| line.strip_prefix("devices:"))
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                if inline.contains(['&', '*', '!']) {
+                    return Err("A montagem do compose usa âncora ou tag YAML e não pode ser validada com segurança.".into());
+                }
+                if inline.starts_with('[') {
+                    for entry in inline.trim_matches(['[', ']']).split(',') {
+                        let value = entry.trim().trim_matches(['\'', '"']);
+                        if value.starts_with('/')
+                            || value.starts_with('.')
+                            || value.starts_with('~')
+                        {
+                            normalize_mount_source(value.split(':').next().unwrap_or_default())?;
+                        }
+                    }
+                }
+            }
+            continue;
+        }
+        if in_volumes && indent <= volume_indent && !line.starts_with('-') {
+            in_volumes = false;
+        }
+        if !in_volumes {
+            continue;
+        }
+        if let Some(rest) = line
+            .strip_prefix("source:")
+            .or_else(|| line.strip_prefix("device:"))
+        {
+            let source = rest
+                .split(" #")
+                .next()
+                .unwrap_or(rest)
+                .trim()
+                .trim_matches(['\'', '"']);
+            normalize_mount_source(source)?;
+        } else if let Some(rest) = line.strip_prefix('-') {
+            // Short bind syntax is source:target[:options]. Named volumes are ignored.
+            let value = rest.trim().trim_matches(['\'', '"']);
+            if value.contains(['&', '*', '!']) {
+                return Err("A montagem do compose usa âncora ou tag YAML e não pode ser validada com segurança.".into());
+            }
+            if value.starts_with('$') {
+                return Err(
+                    "A montagem do compose usa variável e não pode ser validada com segurança."
+                        .into(),
+                );
+            }
+            if value.starts_with('/') || value.starts_with('.') || value.starts_with("~") {
+                let source = value.split(':').next().unwrap_or_default();
+                normalize_mount_source(source)?;
+            } else if value.starts_with(['{', '|', '>']) {
+                return Err(
+                    "A montagem do compose usa sintaxe YAML não suportada para validação.".into(),
+                );
+            } else {
+                let source = value.split(':').next().unwrap_or_default();
+                let long_syntax_key =
+                    ["type", "source", "target", "read_only", "consistency"].contains(&source);
+                let valid_named_volume = !source.is_empty()
+                    && source.bytes().all(|byte| {
+                        byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.')
+                    });
+                if !long_syntax_key && !valid_named_volume {
+                    return Err("A montagem do compose não pode ser validada com segurança.".into());
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_docker_compose(project_name: &str, compose: &str) -> Result<(), String> {
+    validate_project_name(project_name)?;
+    if compose.trim().is_empty() || compose.len() > MAX_COMPOSE_BYTES {
+        return Err("O docker-compose deve ter conteúdo e no máximo 8 KiB.".into());
+    }
+    let trimmed = compose.trim_start();
+    if trimmed.starts_with("http://")
+        || trimmed.starts_with("https://")
+        || trimmed.starts_with("git@")
+        || trimmed.starts_with("github.com/")
+    {
+        return Err(
+            "URLs remotas não são aceitas; envie o conteúdo YAML do docker-compose.".into(),
+        );
+    }
+    if !compose
+        .lines()
+        .any(|line| line.trim() == "services:" || line.trim_start().starts_with("services:"))
+    {
+        return Err("O arquivo precisa ser um docker-compose YAML com uma seção services.".into());
+    }
+    if compose
+        .lines()
+        .any(|line| line.trim_start().starts_with("include:"))
+    {
+        return Err(
+            "Referências externas a outros arquivos compose não são aceitas nesta versão.".into(),
+        );
+    }
+    validate_compose_mounts(compose)
+}
+
+pub(crate) fn validate_skill_compose(project_name: &str, compose: &str) -> Result<(), String> {
+    validate_docker_compose(project_name, compose)
+}
+
+fn project_names(data: &Value) -> Vec<String> {
+    data.get("data")
+        .unwrap_or(data)
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|project| {
+            project
+                .get("project_name")
+                .or_else(|| project.get("name"))
+                .and_then(Value::as_str)
+                .and_then(|name| validate_project_name(name).ok())
+                .map(str::to_owned)
+        })
+        .collect()
+}
+
+fn remember_projects(app: &tauri::AppHandle, vm_id: i64, data: &Value) -> Result<(), String> {
+    let state = app_state(app)?;
+    state
+        .approved_projects
+        .lock()
+        .map_err(|_| "Não foi possível atualizar a lista local de projetos.".to_string())?
+        .insert(vm_id, project_names(data));
+    Ok(())
+}
+
+fn resolve_approved_project(projects: &[String], name: &str) -> Result<(), String> {
+    validate_project_name(name)?;
+    if projects.iter().any(|project| project == name) {
+        Ok(())
+    } else {
+        Err("O projeto precisa aparecer na lista consultada por você nesta sessão.".into())
+    }
+}
+
 pub(crate) fn preview_skill(skill_id: &str, params: &Value) -> Result<String, String> {
     let action = match skill_id {
         "hostinger.vps_start" => "iniciar",
         "hostinger.vps_stop" => "parar",
         "hostinger.vps_restart" => "reiniciar",
+        "hostinger.docker_start" => "iniciar projeto Docker",
+        "hostinger.docker_stop" => "parar projeto Docker",
+        "hostinger.docker_restart" => "reiniciar projeto Docker",
+        "hostinger.docker_deploy" => "criar ou atualizar projeto Docker",
+        "hostinger.docker_remove" => "remover projeto Docker",
+        "hostinger.docker_list" => "listar projetos Docker",
         _ => return Err("Ação de VPS inválida.".into()),
     };
     let name = params
@@ -520,34 +851,168 @@ pub(crate) fn preview_skill(skill_id: &str, params: &Value) -> Result<String, St
         .get("vm_id")
         .and_then(Value::as_i64)
         .ok_or("A VPS não foi confirmada pela lista consultada.")?;
-    Ok(format!(
-        "Hostinger: {action} a VPS ‘{}’ (identificador {id}). Serviços podem ficar indisponíveis durante esta ação.",
-        display_vm_name(name)
-    ))
+    if skill_id == "hostinger.docker_deploy" {
+        let project = params
+            .get("project_name")
+            .and_then(Value::as_str)
+            .ok_or("Informe o nome do projeto Docker.")?;
+        let compose = params
+            .get("compose_yaml")
+            .and_then(Value::as_str)
+            .ok_or("Informe o conteúdo do docker-compose.")?;
+        validate_docker_compose(project, compose)?;
+        return Ok(format!("Hostinger: criar ou atualizar o projeto ‘{project}’ na VPS ‘{}’ (identificador {id}). O conteúdo será executado no servidor. Arquivo docker-compose completo ({} bytes):\n{}", display_vm_name(name), compose.len(), compose));
+    }
+    if skill_id == "hostinger.docker_list" {
+        return Ok(format!(
+            "Listar projetos Docker da VPS ‘{}’ (identificador {id}).",
+            display_vm_name(name)
+        ));
+    }
+    let project = if skill_id.starts_with("hostinger.docker_") {
+        Some(
+            params
+                .get("project_name")
+                .and_then(Value::as_str)
+                .ok_or("Informe o nome do projeto Docker.")?,
+        )
+    } else {
+        None
+    };
+    Ok(format!("Hostinger: {action}{} na VPS ‘{}’ (identificador {id}). Serviços podem ficar indisponíveis durante esta ação.{}", project.map(|value| format!(" ‘{value}’")).unwrap_or_default(), display_vm_name(name), if skill_id == "hostinger.docker_remove" { " A remoção apaga containers, redes, volumes e imagens do projeto; não há desfazer." } else { "" }))
 }
 
-pub(crate) async fn execute_skill(skill_id: &str, params: &Value) -> Result<String, String> {
+pub(crate) async fn execute_skill(
+    app: &tauri::AppHandle,
+    skill_id: &str,
+    params: &Value,
+) -> Result<String, String> {
     let vm_id = params
         .get("vm_id")
         .and_then(Value::as_i64)
         .ok_or("A VPS não foi confirmada pela lista consultada.")?;
+    if skill_id == "hostinger.docker_list" {
+        let token = token_from_keyring()?;
+        let endpoint = api_endpoint(&format!("api/vps/v1/virtual-machines/{vm_id}/docker"))?;
+        let value: Value = request_at(&production_client()?, endpoint, Some(&token)).await?;
+        remember_projects(app, vm_id, &value)?;
+        let result = ExternalData {
+            source_label: "Projetos Docker da Hostinger — dados externos não confiáveis",
+            untrusted: true,
+            data: sanitize_external_value(value, 0, &token),
+        };
+        return serde_json::to_string(&result)
+            .map_err(|_| "Não foi possível preparar a lista de projetos Docker.".into());
+    }
     let action = match skill_id {
         "hostinger.vps_start" => "start",
         "hostinger.vps_stop" => "stop",
         "hostinger.vps_restart" => "restart",
-        _ => return Err("Ação de VPS inválida.".into()),
+        "hostinger.docker_start" => "start",
+        "hostinger.docker_stop" => "stop",
+        "hostinger.docker_restart" => "restart",
+        _ => "",
     };
     let token = token_from_keyring()?;
-    let result = run_action_with(
-        &production_client()?,
-        API_BASE,
-        Some(&token),
-        vm_id,
-        action,
-        ACTION_MAX_WAIT,
-        ACTION_POLL_INTERVAL,
-    )
-    .await?;
+    let client = production_client()?;
+    let status_path = format!("api/vps/v1/virtual-machines/{vm_id}/actions");
+    let result = if matches!(
+        skill_id,
+        "hostinger.vps_start" | "hostinger.vps_stop" | "hostinger.vps_restart"
+    ) {
+        run_action_with(
+            &client,
+            API_BASE,
+            Some(&token),
+            vm_id,
+            action,
+            ACTION_MAX_WAIT,
+            ACTION_POLL_INTERVAL,
+        )
+        .await?
+    } else if !action.is_empty() {
+        let path = if skill_id.starts_with("hostinger.docker_") {
+            let project = validate_project_name(
+                params
+                    .get("project_name")
+                    .and_then(Value::as_str)
+                    .ok_or("Informe o nome do projeto Docker.")?,
+            )?;
+            format!("api/vps/v1/virtual-machines/{vm_id}/docker/{project}/{action}")
+        } else {
+            format!("api/vps/v1/virtual-machines/{vm_id}/{action}")
+        };
+        run_action_paths_with(
+            &client,
+            API_BASE,
+            Some(&token),
+            &path,
+            &status_path,
+            reqwest::Method::POST,
+            None,
+            ACTION_MAX_WAIT,
+            ACTION_POLL_INTERVAL,
+        )
+        .await?
+    } else if skill_id == "hostinger.docker_deploy" {
+        let project = validate_project_name(
+            params
+                .get("project_name")
+                .and_then(Value::as_str)
+                .ok_or("Informe o nome do projeto Docker.")?,
+        )?;
+        let compose = params
+            .get("compose_yaml")
+            .and_then(Value::as_str)
+            .ok_or("Informe o conteúdo do docker-compose.")?;
+        validate_docker_compose(project, compose)?;
+        let body = serde_json::json!({"project_name": project, "content": compose});
+        run_action_paths_with(
+            &client,
+            API_BASE,
+            Some(&token),
+            &format!("api/vps/v1/virtual-machines/{vm_id}/docker"),
+            &status_path,
+            reqwest::Method::POST,
+            Some(body),
+            ACTION_MAX_WAIT,
+            ACTION_POLL_INTERVAL,
+        )
+        .await?
+    } else if skill_id == "hostinger.docker_remove" {
+        let project = validate_project_name(
+            params
+                .get("project_name")
+                .and_then(Value::as_str)
+                .ok_or("Informe o nome do projeto Docker.")?,
+        )?;
+        run_action_paths_with(
+            &client,
+            API_BASE,
+            Some(&token),
+            &format!("api/vps/v1/virtual-machines/{vm_id}/docker/{project}/down"),
+            &status_path,
+            reqwest::Method::DELETE,
+            None,
+            ACTION_MAX_WAIT,
+            ACTION_POLL_INTERVAL,
+        )
+        .await?
+    } else {
+        return Err("Ação Docker da Hostinger inválida.".into());
+    };
+    if skill_id == "hostinger.docker_remove" {
+        if let (Some(state), Some(project)) = (
+            app.try_state::<HostingerState>(),
+            params.get("project_name").and_then(Value::as_str),
+        ) {
+            if let Ok(mut projects) = state.approved_projects.lock() {
+                if let Some(names) = projects.get_mut(&vm_id) {
+                    names.retain(|name| name != project);
+                }
+            }
+        }
+    }
     serde_json::to_string(&ExternalData {
         source_label: "Resultado externo da Hostinger — não confiável",
         untrusted: true,
@@ -562,7 +1027,9 @@ async fn request_json<T: DeserializeOwned>(
     token: &str,
 ) -> Result<T, String> {
     let mut endpoint = api_endpoint(path)?;
-    endpoint.query_pairs_mut().extend_pairs(query.iter().copied());
+    endpoint
+        .query_pairs_mut()
+        .extend_pairs(query.iter().copied());
     let client = production_client()?;
     request_at(&client, endpoint, Some(token)).await
 }
@@ -647,11 +1114,7 @@ pub async fn hostinger_get_vm_details(
 ) -> Result<ExternalData<Value>, String> {
     crate::require_main(&caller)?;
     validate_vm_id(vm_id)?;
-    read_resource(
-        &format!("api/vps/v1/virtual-machines/{vm_id}"),
-        &[],
-    )
-    .await
+    read_resource(&format!("api/vps/v1/virtual-machines/{vm_id}"), &[]).await
 }
 
 #[tauri::command]
@@ -725,7 +1188,8 @@ mod tests {
             if let Ok((mut stream, _)) = listener.accept() {
                 let mut request = [0_u8; 8192];
                 let count = stream.read(&mut request).unwrap_or_default();
-                let _ = request_sender.send(String::from_utf8_lossy(&request[..count]).into_owned());
+                let _ =
+                    request_sender.send(String::from_utf8_lossy(&request[..count]).into_owned());
                 let header = format!(
                     "HTTP/1.1 {status}\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n",
                     body.len()
@@ -865,8 +1329,38 @@ mod tests {
         assert!(requests[0].starts_with("POST /api/vps/v1/virtual-machines/42/restart "));
         assert!(requests[1].starts_with("GET /api/vps/v1/virtual-machines/42/actions/7 "));
         assert!(requests.iter().all(|request| {
-            request.to_ascii_lowercase().contains("authorization: bearer never-logged-token")
+            request
+                .to_ascii_lowercase()
+                .contains("authorization: bearer never-logged-token")
         }));
+    }
+
+    #[tokio::test]
+    async fn docker_deploy_sends_raw_compose_and_polls_mocked_action() {
+        let (base, requests) = sequence_server(vec![
+            ("200 OK", br#"{"id":27,"state":"sent"}"#),
+            ("200 OK", br#"{"id":27,"state":"success"}"#),
+        ]);
+        let compose = "services:\n  app:\n    image: nginx\n";
+        let output = run_action_paths_with(
+            &test_client(),
+            &base,
+            Some("mock-token"),
+            "api/vps/v1/virtual-machines/42/docker",
+            "api/vps/v1/virtual-machines/42/actions",
+            reqwest::Method::POST,
+            Some(serde_json::json!({"project_name":"demo", "content":compose})),
+            Duration::from_secs(1),
+            Duration::from_millis(1),
+        )
+        .await
+        .unwrap();
+        assert_eq!(output["state"], "success");
+        let requests = requests.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(requests[0].starts_with("POST /api/vps/v1/virtual-machines/42/docker "));
+        assert!(requests[0].contains("\"project_name\":\"demo\""));
+        assert!(requests[0].contains("image: nginx"));
+        assert!(requests[1].starts_with("GET /api/vps/v1/virtual-machines/42/actions/27 "));
     }
 
     #[tokio::test]
@@ -902,7 +1396,10 @@ mod tests {
         .await
         .unwrap_err();
         assert!(error.contains("Salve o token"));
-        assert!(requests.recv_timeout(Duration::from_millis(20)).unwrap().is_empty());
+        assert!(requests
+            .recv_timeout(Duration::from_millis(20))
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
@@ -925,7 +1422,9 @@ mod tests {
             "https://developers.hostinger.com/api/vps/v1/virtual-machines"
         );
         assert!(endpoint_for_base("https://evil.example/", "api/vps/v1/templates").is_err());
-        assert!(endpoint_for_base("http://developers.hostinger.com/", "api/vps/v1/templates").is_err());
+        assert!(
+            endpoint_for_base("http://developers.hostinger.com/", "api/vps/v1/templates").is_err()
+        );
         assert!(api_endpoint("../evil").is_err());
     }
 
@@ -993,13 +1492,17 @@ mod tests {
         .await
         .unwrap_err();
         assert!(error.contains("redirecionar"));
-        assert!(request_receiver.recv().unwrap().starts_with("GET /api/vps/v1/"));
+        assert!(request_receiver
+            .recv()
+            .unwrap()
+            .starts_with("GET /api/vps/v1/"));
     }
 
     #[test]
     fn external_text_is_truncated_and_values_are_json_data_not_html() {
-        assert!(external_text(&"a".repeat(MAX_TEXT_CHARS + 1), "")
-            .contains("texto externo truncado"));
+        assert!(
+            external_text(&"a".repeat(MAX_TEXT_CHARS + 1), "").contains("texto externo truncado")
+        );
         let value = sanitize_external_value(
             serde_json::json!({"name":"<script>alert(1)</script>", "nested":["texto"]}),
             0,
@@ -1029,6 +1532,111 @@ mod tests {
         let serialized = serde_json::to_string(&value).unwrap();
         assert!(!serialized.contains(secret));
         assert!(serialized.contains("[token removido]"));
+    }
+
+    #[test]
+    fn docker_compose_blocks_system_bind_mounts_and_remote_urls_before_submission() {
+        for path in [
+            "/etc:/host-etc",
+            "/root:/host-root",
+            "/var/run/docker.sock:/socket",
+            "/tmp/../etc:/host",
+        ] {
+            let compose =
+                format!("services:\n  app:\n    image: nginx\n    volumes:\n      - {path}\n");
+            assert!(
+                validate_docker_compose("demo", &compose)
+                    .unwrap_err()
+                    .contains("protegido"),
+                "{path}"
+            );
+        }
+        let long_syntax = "services:\n  app:\n    image: nginx\n    volumes:\n      - type: bind\n        source: /etc\n        target: /host\n";
+        assert!(validate_docker_compose("demo", long_syntax).is_err());
+        assert!(validate_docker_compose(
+            "demo",
+            "services:\n  app:\n    image: nginx\n    volumes: ['/etc:/host']\n"
+        )
+        .is_err());
+        assert!(validate_docker_compose(
+            "demo",
+            "services:\n  app:\n    image: nginx\n    volumes: *shared\n"
+        )
+        .is_err());
+        assert!(validate_docker_compose(
+            "demo",
+            "services:\n  app:\n    image: nginx\n    volumes:\n      - ${HOST_PATH}:/data\n"
+        )
+        .is_err());
+        assert!(validate_docker_compose(
+            "demo",
+            "services:\n  app:\n    image: nginx\n    devices:\n      - /dev/sda:/dev/xvda\n"
+        )
+        .is_err());
+        assert!(validate_docker_compose(
+            "demo",
+            "services:\n  app:\n    image: nginx\n    volumes:\n      - /:/host\n"
+        )
+        .is_err());
+        assert!(
+            validate_docker_compose("demo", "https://example.test/compose.yml")
+                .unwrap_err()
+                .contains("URLs remotas")
+        );
+        assert!(validate_docker_compose(
+            "demo",
+            "services:\n  app:\n    image: nginx\ninclude: https://example.test/other.yml\n"
+        )
+        .unwrap_err()
+        .contains("Referências externas"));
+        assert!(validate_docker_compose(
+            "demo",
+            &format!(
+                "services:\n  app:\n    image: {}\n",
+                "x".repeat(MAX_COMPOSE_BYTES)
+            )
+        )
+        .unwrap_err()
+        .contains("8 KiB"));
+        assert!(validate_docker_compose(
+            "demo",
+            "services:\n  app:\n    image: nginx\n    volumes:\n      - ./data:/data\n"
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn docker_projects_are_truncated_and_wrapped_as_untrusted_data() {
+        let raw = serde_json::json!([{"name":"demo","status":"x".repeat(MAX_TEXT_CHARS + 1)}]);
+        let projects = project_names(&raw);
+        assert_eq!(projects, vec!["demo"]);
+        let sanitized = sanitize_external_value(raw, 0, "");
+        let output = serde_json::to_string(&ExternalData {
+            source_label: "Projetos Docker da Hostinger — dados externos não confiáveis",
+            untrusted: true,
+            data: sanitized,
+        })
+        .unwrap();
+        assert!(output.contains("texto externo truncado"));
+        assert!(output.contains("\"untrusted\":true"));
+    }
+
+    #[test]
+    fn only_project_names_from_the_read_result_are_resolvable() {
+        let listed =
+            project_names(&serde_json::json!([{"name":"allowed-project"}, {"name":"bad/path"}]));
+        assert!(resolve_approved_project(&listed, "allowed-project").is_ok());
+        assert!(resolve_approved_project(&listed, "not-listed").is_err());
+        assert_eq!(listed, vec!["allowed-project"]);
+    }
+
+    #[test]
+    fn deploy_preview_includes_the_complete_compose_and_server_execution_warning() {
+        let compose = "services:\n  app:\n    image: nginx\n";
+        let preview = preview_skill("hostinger.docker_deploy", &serde_json::json!({"vm_name":"vps", "vm_id":42, "project_name":"demo", "compose_yaml":compose})).unwrap();
+        assert!(preview.contains(compose));
+        assert!(preview.contains("conteúdo será executado no servidor"));
+        assert!(preview.contains("demo"));
     }
 
     #[tokio::test]
