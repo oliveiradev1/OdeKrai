@@ -1800,7 +1800,7 @@ select:focus-visible {
 }
 .skills-installed,
 .skills-public-empty,
-.skills-public-sections section,
+.public-mcp-card,
 .skills-family-card {
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-lg);
@@ -2167,22 +2167,92 @@ select:focus-visible {
   color: var(--color-text);
 }
 .skills-public-empty p,
-.skills-public-sections p {
+.public-mcp-card p {
   margin: 0;
   color: var(--color-text-muted);
   font-size: var(--font-size-12);
 }
-.skills-public-sections {
+.public-mcp-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
   gap: var(--space-3);
 }
-.skills-public-sections section {
+.public-mcp-card {
+  display: grid;
+  align-content: start;
+  gap: var(--space-3);
   padding: var(--space-4);
 }
-.skills-public-sections h3 {
-  margin: 0 0 var(--space-2);
+.public-mcp-card-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+.public-mcp-card-heading h3 {
+  margin: 0;
   font-size: var(--font-size-14);
+}
+.public-mcp-card-heading p,
+.public-mcp-connected {
+  margin: var(--space-1) 0 0;
+}
+.public-mcp-status {
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-pill);
+  padding: 4px 8px;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-11);
+  text-align: center;
+}
+.public-mcp-status--connected {
+  color: var(--color-success);
+  border-color: var(--color-border-strong);
+}
+.public-mcp-status--not_available {
+  color: var(--color-text-muted);
+}
+.public-mcp-card dl {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  font-size: var(--font-size-12);
+}
+.public-mcp-card dt {
+  color: var(--color-text-muted);
+}
+.public-mcp-card dd {
+  margin: 2px 0 0;
+  overflow-wrap: anywhere;
+}
+.public-mcp-unavailable {
+  border-left: 2px solid var(--color-border-strong);
+  padding-left: var(--space-2);
+}
+.public-mcp-form {
+  display: grid;
+  gap: var(--space-3);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--color-border-subtle);
+}
+.public-mcp-form label {
+  display: grid;
+  gap: var(--space-1);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-12);
+}
+.public-mcp-form input,
+.public-mcp-form select {
+  width: 100%;
+  min-height: 36px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 7px 9px;
+  background: var(--color-surface-raised);
+  color: var(--color-text);
+}
+.public-mcp-form small {
+  color: var(--color-text-muted);
 }
 .skills-catalog-page :is(button, input):focus-visible,
 .skills-tab-panel:focus-visible {

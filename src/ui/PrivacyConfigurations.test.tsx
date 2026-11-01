@@ -49,9 +49,21 @@ describe('configurações de privacidade', () => {
       'trust_external_domain',
       'forget_external_domain',
     ];
+    const publicCatalogCommands = new Set([
+      'mcp_list_servers',
+      'mcp_add_http_server',
+      'mcp_set_http_token',
+      'mcp_oauth_authorize',
+      'mcp_set_enabled',
+      'mcp_test_connection',
+    ]);
     for (const command of commands) {
       expect(ui, `interface: ${command}`).toContain(command);
-      expect(skillsUi, `sem duplicação em Habilidades: ${command}`).not.toContain(command);
+      if (publicCatalogCommands.has(command)) {
+        expect(skillsUi, `catálogo público reutiliza o fluxo MCP: ${command}`).toContain(command);
+      } else {
+        expect(skillsUi, `sem duplicação em Habilidades: ${command}`).not.toContain(command);
+      }
       expect(rustCommands, `registro Rust: ${command}`).toContain(command);
     }
     for (const readCommand of ['get_allowed_folders', 'get_allowed_apps']) {

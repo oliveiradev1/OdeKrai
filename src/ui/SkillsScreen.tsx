@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type FormEvent,
+  type ReactNode,
+} from 'react';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import {
   familyEnableTarget,
@@ -20,6 +28,13 @@ import { Icon } from './Icon';
 import { submitSecretForm } from './secret-form';
 import { RiskBadge } from './RiskBadge';
 import { PrivacyConfigurationSummary } from './PrivacyConfigurations';
+import {
+  getPublicMcpStatus,
+  publicMcpCatalog,
+  publicMcpStatusLabels,
+  type PublicMcpCatalogEntry,
+  type PublicMcpServer,
+} from '../core/mcp-service-catalog';
 
 type SkillsCatalogViewProps = {
   skills: CatalogSkill[];
@@ -36,6 +51,15 @@ type SkillsCatalogViewProps = {
   onOverrideToggle: (skill: CatalogSkill, enabled: boolean) => void;
   googleConnection?: ReactNode;
   prerequisites?: SkillPrerequisites;
+  mcpServers?: Array<PublicMcpServer & { id: string }>;
+  mcpBusy?: boolean;
+  onConfigurePublicMcp?: (
+    service: PublicMcpCatalogEntry,
+    endpoint: string,
+    authentication: 'oauth' | 'bearer',
+    token: string,
+  ) => Promise<boolean>;
+  onTestPublicMcp?: (server: PublicMcpServer & { id: string }) => Promise<boolean>;
 };
 
 type GoogleOAuthStatus = {
@@ -91,6 +115,10 @@ export function SkillsCatalogView({
   onOpenPrivacy,
   googleConnection,
   prerequisites = { folderAvailable: true, appCount: 0, googleConnected: null },
+  mcpServers = [],
+  mcpBusy = false,
+  onConfigurePublicMcp,
+  onTestPublicMcp,
 }: SkillsCatalogViewProps) {
   const [query, setQuery] = useState('');
   const [tab, setTab] = useState<SkillsCatalogTab>(initialTab);
@@ -313,27 +341,166 @@ export function SkillsCatalogView({
           >
             <div className="skills-public-empty">
               <Icon name="connectors" size={28} />
-              <h2>Plugins públicos em breve</h2>
-              <p>O catálogo público ainda não tem plugins publicados.</p>
+              <h2>Servidores MCP públicos</h2>
+              <p>
+                Consulte os servidores oficiais. Um serviço só aparece como conectado depois de um
+                teste de conexão bem-sucedido.
+              </p>
             </div>
-            <div className="skills-public-sections" aria-label="Seções do catálogo público">
-              <section aria-labelledby="skills-public-popular">
-                <h3 id="skills-public-popular">Populares</h3>
-                <p>Nenhum plugin publicado.</p>
-              </section>
-              <section aria-labelledby="skills-public-new">
-                <h3 id="skills-public-new">Novidades</h3>
-                <p>Nenhum plugin publicado.</p>
-              </section>
-              <section aria-labelledby="skills-public-all">
-                <h3 id="skills-public-all">Todas as categorias</h3>
-                <p>As categorias serão exibidas quando houver plugins publicados.</p>
-              </section>
+            <div className="public-mcp-grid" aria-label="Catálogo de serviços MCP">
+              {publicMcpCatalog.map((service) => {
+                const server = mcpServers.find(
+                  (item) => item.endpoint === service.endpoint || item.name === service.name,
+                );
+                return (
+                  <PublicMcpServiceCard
+                    key={service.name}
+                    service={service}
+                    status={getPublicMcpStatus(service, mcpServers)}
+                    server={server}
+                    busy={mcpBusy}
+                    onConfigure={onConfigurePublicMcp}
+                    onTest={onTestPublicMcp}
+                  />
+                );
+              })}
             </div>
           </section>
         </>
       )}
     </div>
+  );
+}
+
+function PublicMcpServiceCard({
+  service,
+  status,
+  server,
+  busy,
+  onConfigure,
+  onTest,
+}: {
+  service: PublicMcpCatalogEntry;
+  status: ReturnType<typeof getPublicMcpStatus>;
+  server?: PublicMcpServer & { id: string };
+  busy: boolean;
+  onConfigure?: SkillsCatalogViewProps['onConfigurePublicMcp'];
+  onTest?: SkillsCatalogViewProps['onTestPublicMcp'];
+}) {
+  const formId = useId();
+  const [expanded, setExpanded] = useState(false);
+  const [endpoint, setEndpoint] = useState(service.endpoint);
+  const [authentication, setAuthentication] = useState<'oauth' | 'bearer'>(
+    (service.authenticationMethods[0] as 'oauth' | 'bearer' | undefined) ?? 'oauth',
+  );
+  const [token, setToken] = useState('');
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!onConfigure) return;
+    if (await onConfigure(service, endpoint, authentication, token)) {
+      setToken('');
+      setExpanded(false);
+    }
+  }
+
+  return (
+    <article className="public-mcp-card">
+      <div className="public-mcp-card-heading">
+        <div>
+          <h3>{service.name}</h3>
+          <p>{service.supplier}</p>
+        </div>
+        <span className={`public-mcp-status public-mcp-status--${status}`} role="status">
+          {publicMcpStatusLabels[status]}
+        </span>
+      </div>
+      <dl>
+        <div>
+          <dt>Transporte</dt>
+          <dd>{service.transport}</dd>
+        </div>
+        <div>
+          <dt>Autenticação</dt>
+          <dd>{service.authentication}</dd>
+        </div>
+      </dl>
+      {status === 'not_available' && (
+        <p className="public-mcp-unavailable">
+          Este serviço ainda não pode ser configurado no OdeKrai por uma limitação de
+          compatibilidade.
+        </p>
+      )}
+      {status === 'available' && onConfigure && (
+        <>
+          <Button
+            type="button"
+            variant="secondary"
+            disabled={busy}
+            aria-expanded={expanded}
+            aria-controls={formId}
+            onClick={() => setExpanded((open) => !open)}
+          >
+            Configurar
+          </Button>
+          {expanded && (
+            <form id={formId} className="public-mcp-form" onSubmit={(event) => void submit(event)}>
+              <label>
+                URL do servidor
+                <input
+                  type="url"
+                  value={endpoint}
+                  required
+                  onChange={(event) => setEndpoint(event.target.value)}
+                />
+              </label>
+              <label>
+                Autenticação
+                <select
+                  value={authentication}
+                  onChange={(event) => setAuthentication(event.target.value as 'oauth' | 'bearer')}
+                >
+                  {service.authenticationMethods.map((method) => (
+                    <option key={method} value={method}>
+                      {method === 'oauth' ? 'OAuth' : 'Token Bearer'}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {authentication === 'bearer' && (
+                <label>
+                  Token Bearer
+                  <input
+                    type="password"
+                    autoComplete="off"
+                    value={token}
+                    required
+                    onChange={(event) => setToken(event.target.value)}
+                  />
+                  <small>
+                    O token é salvo no Gerenciador de Credenciais e não volta a ser exibido.
+                  </small>
+                </label>
+              )}
+              <Button type="submit" disabled={busy || !onConfigure}>
+                Salvar e testar conexão
+              </Button>
+            </form>
+          )}
+        </>
+      )}
+      {status === 'configured' && server && onTest && (
+        <Button
+          type="button"
+          variant="secondary"
+          disabled={busy}
+          onClick={() => void onTest(server)}
+        >
+          Testar conexão
+        </Button>
+      )}
+      {status === 'connected' && <p className="public-mcp-connected">Teste MCP concluído.</p>}
+    </article>
   );
 }
 
@@ -678,6 +845,8 @@ export function SkillsScreen({
   const [loadError, setLoadError] = useState('');
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [mcpServers, setMcpServers] = useState<Array<PublicMcpServer & { id: string }>>([]);
+  const [mcpBusy, setMcpBusy] = useState(false);
   const [googleStatus, setGoogleStatus] = useState<GoogleOAuthStatus | null>(null);
   const [prerequisites, setPrerequisites] = useState<SkillPrerequisites>({
     folderAvailable: true,
@@ -696,10 +865,12 @@ export function SkillsScreen({
     try {
       const nextSkills = await invoke<CatalogSkill[]>('get_skills');
       setSkills(nextSkills);
-      const [folders, apps] = await Promise.all([
+      const [folders, apps, servers] = await Promise.all([
         invoke<Array<{ workspace: boolean }>>('get_allowed_folders').catch(() => null),
         invoke<Array<{ id: string }>>('get_allowed_apps').catch(() => null),
+        invoke<Array<PublicMcpServer & { id: string }>>('mcp_list_servers').catch(() => null),
       ]);
+      if (servers) setMcpServers(servers);
       setPrerequisites({
         folderAvailable: folders === null ? null : folders.some((folder) => folder.workspace),
         appCount: apps === null ? null : apps.length,
@@ -739,6 +910,75 @@ export function SkillsScreen({
     }
   }
 
+  async function configurePublicMcp(
+    service: PublicMcpCatalogEntry,
+    endpoint: string,
+    authentication: 'oauth' | 'bearer',
+    token: string,
+  ): Promise<boolean> {
+    if (!isTauri()) {
+      setError('A configuração MCP só está disponível no aplicativo OdeKrai.');
+      return false;
+    }
+    if (!endpoint.startsWith('https://')) {
+      setError('O servidor MCP precisa usar uma URL HTTPS.');
+      return false;
+    }
+    if (authentication === 'bearer' && !token.trim()) {
+      setError('Informe o token de autenticação.');
+      return false;
+    }
+    setMcpBusy(true);
+    setError('');
+    let server: { id: string } | undefined;
+    try {
+      server = await invoke<{ id: string }>('mcp_add_http_server', {
+        name: service.name,
+        endpoint,
+      });
+      if (authentication === 'bearer') {
+        await invoke('mcp_set_http_token', { serverId: server.id, value: token });
+        await invoke('mcp_set_enabled', { serverId: server.id, enabled: true });
+      } else {
+        await invoke('mcp_oauth_authorize', { serverId: server.id });
+      }
+      await invoke('mcp_test_connection', { serverId: server.id, confirmed: true });
+      await refreshMcpServers().catch(() => undefined);
+      return true;
+    } catch (cause) {
+      setError(`Não foi possível configurar ou testar ${service.name}: ${String(cause)}`);
+      await refreshMcpServers().catch(() => undefined);
+      return false;
+    } finally {
+      setMcpBusy(false);
+    }
+  }
+
+  const refreshMcpServers = useCallback(async () => {
+    if (!isTauri()) return;
+    const servers = await invoke<Array<PublicMcpServer & { id: string }>>('mcp_list_servers');
+    setMcpServers(servers);
+  }, []);
+
+  async function testPublicMcp(server: PublicMcpServer & { id: string }): Promise<boolean> {
+    setMcpBusy(true);
+    setError('');
+    try {
+      if (!server.enabled) {
+        await invoke('mcp_set_enabled', { serverId: server.id, enabled: true });
+      }
+      await invoke('mcp_test_connection', { serverId: server.id, confirmed: true });
+      await refreshMcpServers().catch(() => undefined);
+      return true;
+    } catch (cause) {
+      setError(`Não foi possível testar a conexão MCP: ${String(cause)}`);
+      await refreshMcpServers().catch(() => undefined);
+      return false;
+    } finally {
+      setMcpBusy(false);
+    }
+  }
+
   return (
     <SkillsCatalogView
       skills={skills}
@@ -760,6 +1000,10 @@ export function SkillsScreen({
           />
         ) : undefined
       }
+      mcpServers={mcpServers}
+      mcpBusy={mcpBusy}
+      onConfigurePublicMcp={configurePublicMcp}
+      onTestPublicMcp={testPublicMcp}
       prerequisites={prerequisites}
       initialFamily={initialFamily}
       onFamilyToggle={(family, enabled) =>

@@ -306,7 +306,7 @@ describe('catálogo de habilidades', () => {
     expect(failed).toContain('Falha ao carregar habilidades.');
   });
 
-  it('apresenta Público vazio e sem ações fictícias', () => {
+  it('apresenta os servidores MCP públicos e os estados reais do catálogo', () => {
     const markup = renderToStaticMarkup(
       <SkillsCatalogView
         skills={registryFixture}
@@ -314,17 +314,73 @@ describe('catálogo de habilidades', () => {
         onFamilyToggle={noOperation}
         onSkillToggle={noOperation}
         onOverrideToggle={noOperation}
+        onConfigurePublicMcp={async () => true}
       />,
     );
     expect(markup).toContain('Pessoal');
     expect(markup).toContain('Público');
-    expect(markup).toContain('Plugins públicos em breve');
-    expect(markup).toContain('Populares');
-    expect(markup).toContain('Novidades');
-    expect(markup).toContain('Nenhum plugin publicado.');
+    for (const service of [
+      'GitHub',
+      'Figma',
+      'Gmail',
+      'Google Calendar',
+      'Google Sheets',
+      'Lovable',
+      'Notion',
+    ]) {
+      expect(markup).toContain(`<h3>${service}</h3>`);
+    }
+    expect(markup).toContain('Disponível para configurar');
+    expect(markup).toContain('Não disponível');
+    expect(markup).not.toContain('>Conectado</span>');
+    expect(markup).toContain('Configurar');
     expect(markup).toMatch(/id="skills-panel-personal"[^>]*hidden=""/);
     expect(markup).not.toMatch(/id="skills-panel-public"[^>]*hidden=""/);
-    expect(markup).not.toContain('Instalar');
+    expect(markup).not.toContain('Instalar pacote');
+  });
+
+  it('não confunde servidor salvo com conexão MCP aprovada pelo teste', () => {
+    const props = {
+      skills: registryFixture,
+      initialTab: 'publico' as const,
+      onFamilyToggle: noOperation,
+      onSkillToggle: noOperation,
+      onOverrideToggle: noOperation,
+    };
+    const configuredMarkup = renderToStaticMarkup(
+      <SkillsCatalogView
+        {...props}
+        mcpServers={[
+          {
+            id: 'server-github',
+            name: 'GitHub',
+            endpoint: 'https://api.githubcopilot.com/mcp/',
+            enabled: false,
+            status: 'Parado',
+          },
+        ]}
+        onTestPublicMcp={async () => true}
+      />,
+    );
+    expect(configuredMarkup).toContain('>Configurado</span>');
+    expect(configuredMarkup).toContain('Testar conexão');
+
+    const connectedMarkup = renderToStaticMarkup(
+      <SkillsCatalogView
+        {...props}
+        mcpServers={[
+          {
+            id: 'server-github',
+            name: 'GitHub',
+            endpoint: 'https://api.githubcopilot.com/mcp/',
+            enabled: true,
+            status: 'Conectado',
+          },
+        ]}
+      />,
+    );
+    expect(connectedMarkup).toContain('>Conectado</span>');
+    expect(connectedMarkup).toContain('Teste MCP concluído.');
   });
 
   it('abre os detalhes, preserva exemplos e deixa overrides avançados recolhidos', () => {
