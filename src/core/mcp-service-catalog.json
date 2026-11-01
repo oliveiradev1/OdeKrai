@@ -24,8 +24,13 @@
     "documentationUrl": "https://help.figma.com/hc/en-us/articles/39216419318551-Get-started-with-the-Figma-MCP-server",
     "endpoint": "https://mcp.figma.com/mcp",
     "transport": "HTTP remoto",
-    "authentication": "OAuth com conta Figma",
+    "authentication": "Login com conta Figma no navegador; protocolo OAuth específico NÃO VERIFICADO",
     "authenticationMethods": ["oauth"],
+    "setupSteps": [
+      "O servidor remoto usa https://mcp.figma.com/mcp e pede login com uma conta Figma.",
+      "A Figma permite conexão somente de clientes listados no catálogo MCP.",
+      "Para adicionar o OdeKrai, o desenvolvedor precisa entrar na lista de espera da Figma; a conexão fica indisponível até essa inclusão."
+    ],
     "status": "not_available"
   },
   {

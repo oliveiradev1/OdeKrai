@@ -55,6 +55,17 @@ describe('catálogo público de servidores MCP', () => {
     expect(lovable?.sourceCodeUrl).toBe('https://github.com/lovablelabs/mcp');
   });
 
+  it('mantém Figma sem ações de conexão até o OdeKrai entrar no catálogo autorizado', () => {
+    const figma = catalog.find(({ name }) => name === 'Figma');
+    if (!figma) throw new Error('Serviço Figma ausente do catálogo.');
+
+    expect(figma.endpoint).toBe('https://mcp.figma.com/mcp');
+    expect(figma.authenticationMethods).toEqual(['oauth']);
+    expect(figma.authentication).toContain('NÃO VERIFICADO');
+    expect(figma.status).toBe('not_available');
+    expect(figma.setupSteps?.join(' ')).toContain('lista de espera da Figma');
+  });
+
   it('documenta os passos e escopos mínimos independentes dos três serviços Google', () => {
     const googleServices = catalog.filter(({ supplier }) => supplier === 'Google Workspace');
     expect(googleServices).toHaveLength(3);

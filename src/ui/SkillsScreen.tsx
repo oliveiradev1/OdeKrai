@@ -863,6 +863,24 @@ function PublicMcpServiceCard({
           <dd>{service.authentication}</dd>
         </div>
       </dl>
+      {service.setupSteps && (
+        <section className="public-mcp-service-setup" aria-label={`Como conectar ${service.name}`}>
+          <h4>Como conectar</h4>
+          <ol>
+            {service.setupSteps.map((step) => (
+              <li key={step}>{step}</li>
+            ))}
+          </ol>
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={() => void openOfficialLink(service.documentationUrl)}
+          >
+            Ver guia oficial do {service.name}
+          </Button>
+          {linkError && <p role="alert">{linkError}</p>}
+        </section>
+      )}
       {service.tokenCreationUrl && service.tokenPermissions && (
         <div className="public-mcp-token-guide">
           <p>Crie um token pessoal fine-grained no GitHub. Sugestão mínima para leitura:</p>

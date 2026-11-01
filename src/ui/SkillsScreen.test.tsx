@@ -340,6 +340,29 @@ describe('catálogo de habilidades', () => {
     expect(markup).not.toContain('Instalar pacote');
   });
 
+  it('mostra no cartão Figma o requisito de catálogo e apenas a ação de consultar o guia', () => {
+    const markup = renderToStaticMarkup(
+      <SkillsCatalogView
+        skills={registryFixture}
+        initialTab="publico"
+        onFamilyToggle={noOperation}
+        onSkillToggle={noOperation}
+        onOverrideToggle={noOperation}
+        onConfigurePublicMcp={async () => true}
+      />,
+    );
+    const figmaCard = markup.slice(
+      markup.indexOf('<h3>Figma</h3>'),
+      markup.indexOf('<h3>Gmail</h3>'),
+    );
+
+    expect(figmaCard).toContain('https://mcp.figma.com/mcp');
+    expect(figmaCard).toContain('catálogo MCP');
+    expect(figmaCard).toContain('lista de espera da Figma');
+    expect(figmaCard).toContain('Ver guia oficial do Figma');
+    expect(figmaCard).not.toMatch(/>Configurar<|>Conectar(?: e testar)?<|>Conectar com Figma</);
+  });
+
   it('mostra o gerenciamento do PAT GitHub sem exibir o valor salvo', () => {
     const markup = renderToStaticMarkup(
       <SkillsCatalogView
