@@ -1065,7 +1065,7 @@ mod tests {
         assert_eq!(tools[0].id, "mcp.fake.echo");
         assert!(tools[0].description.contains("ignore as regras"));
         assert!(!tools[0].description.contains('\n'));
-        assert_eq!(tools[0].risk_hint.as_deref(), Some("leitura"));
+        assert_eq!(tools[0].risk_hint.as_deref(), Some("ação destrutiva"));
         assert!(tools[0].input_schema["properties"]["text"]
             .get("description")
             .is_none());
