@@ -363,6 +363,31 @@ describe('catálogo de habilidades', () => {
     expect(figmaCard).not.toMatch(/>Configurar<|>Conectar(?: e testar)?<|>Conectar com Figma</);
   });
 
+  it('mostra no cartão Lovable somente configuração OAuth local com registro automático', () => {
+    const markup = renderToStaticMarkup(
+      <SkillsCatalogView
+        skills={registryFixture}
+        initialTab="publico"
+        onFamilyToggle={noOperation}
+        onSkillToggle={noOperation}
+        onOverrideToggle={noOperation}
+        onConfigurePublicMcp={async () => true}
+      />,
+    );
+    const lovableCard = markup.slice(
+      markup.indexOf('<h3>Lovable</h3>'),
+      markup.indexOf('<h3>Notion</h3>'),
+    );
+
+    expect(lovableCard).toContain('https://mcp.lovable.dev');
+    expect(lovableCard).toContain('127.0.0.1');
+    expect(lovableCard).toContain('registro dinâmico');
+    expect(lovableCard).toContain('Disponível para configurar');
+    expect(lovableCard).toContain('>Configurar</button>');
+    expect(lovableCard).not.toContain('Token Bearer');
+    expect(lovableCard).not.toMatch(/>Conectar(?: e testar)?</);
+  });
+
   it('mostra o gerenciamento do PAT GitHub sem exibir o valor salvo', () => {
     const markup = renderToStaticMarkup(
       <SkillsCatalogView

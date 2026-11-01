@@ -106,9 +106,15 @@
     "sourceCodeUrl": "https://github.com/lovablelabs/mcp",
     "endpoint": "https://mcp.lovable.dev",
     "transport": "Streamable HTTP",
-    "authentication": "OAuth 2.1; clientes locais usam registro automático; clientes personalizados podem exigir client ID OAuth próprio",
+    "authentication": "OAuth; clientes locais com retorno localhost/127.0.0.1 podem usar registro automático",
     "authenticationMethods": ["oauth"],
-    "status": "not_available"
+    "setupSteps": [
+      "O endpoint oficial é https://mcp.lovable.dev.",
+      "A documentação da Lovable considera local o cliente que executa no computador e recebe o retorno OAuth em localhost ou 127.0.0.1; o OdeKrai usa 127.0.0.1.",
+      "Configure o endpoint e verifique as opções OAuth. Se o servidor anunciar registro dinâmico, conecte sem informar client ID ou segredo manual."
+    ],
+    "oauthRegistrationNote": "Clientes locais com callback em 127.0.0.1 podem se registrar automaticamente na Lovable. O OdeKrai confirma o registration_endpoint antes de habilitar a conexão.",
+    "status": "available_to_configure"
   },
   {
     "name": "Notion",

@@ -37,7 +37,7 @@ describe('catálogo público de servidores MCP', () => {
       .filter(({ status }) => status === 'not_available')
       .map(({ name }) => name);
 
-    expect(unavailable).toEqual(['Figma', 'Lovable']);
+    expect(unavailable).toEqual(['Figma']);
   });
 
   it('identifica o Developer Preview do Google e usa fontes oficiais da Lovable', () => {
@@ -64,6 +64,19 @@ describe('catálogo público de servidores MCP', () => {
     expect(figma.authentication).toContain('NÃO VERIFICADO');
     expect(figma.status).toBe('not_available');
     expect(figma.setupSteps?.join(' ')).toContain('lista de espera da Figma');
+  });
+
+  it('oferece Lovable somente via OAuth e confirma registro dinâmico sem client ID manual', () => {
+    const lovable = catalog.find(({ name }) => name === 'Lovable');
+    if (!lovable) throw new Error('Serviço Lovable ausente do catálogo.');
+
+    expect(lovable.endpoint).toBe('https://mcp.lovable.dev');
+    expect(lovable.authenticationMethods).toEqual(['oauth']);
+    expect(lovable.status).toBe('available_to_configure');
+    expect(lovable.setupSteps?.join(' ')).toContain('OdeKrai usa 127.0.0.1');
+    expect(lovable.oauthRegistrationNote).toContain('registration_endpoint');
+    expect(canConnectWithOAuth({ dynamicRegistration: true }, '')).toBe(true);
+    expect(canConnectWithOAuth({ dynamicRegistration: false }, '')).toBe(false);
   });
 
   it('documenta os passos e escopos mínimos independentes dos três serviços Google', () => {
