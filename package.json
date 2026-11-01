@@ -19,6 +19,7 @@
     "check:blocking-commands": "node scripts/check-blocking-commands.mjs",
     "check:window-api-acl": "node scripts/check-window-api-acl.mjs",
     "check:mcp-catalog": "node scripts/check-mcp-catalog.mjs",
+    "verify": "node scripts/verify.mjs",
     "test:release-artifact": "node scripts/test-release-artifact.mjs",
     "check:encoding": "node scripts/check-encoding.mjs",
     "check:design-tokens": "node scripts/check-design-tokens.mjs",
