@@ -11,7 +11,8 @@ A integração de credenciais depende do aplicativo nativo Windows. A prévia we
 ShardCloud oferece consultas de leitura e, pelo agente, ações de iniciar/parar VM e execução de
 comandos remotos mediante aprovação nativa obrigatória.
 Salvar o token não faz uma chamada de rede. Ele é enviado pelo cabeçalho `Authorization: Bearer` ao
-domínio fixo `shardcloud.app` quando o usuário pede uma consulta ou aprova uma ação de iniciar/parar.
+domínio fixo `shardcloud.app` quando o usuário pede uma consulta ou aprova uma ação de iniciar,
+parar ou executar comandos em uma VM.
 O token fica no Gerenciador de Credenciais do Windows, não é salvo no SQLite, não aparece novamente
 na interface e não entra em logs, auditoria, mensagens de erro ou contexto de conversa. Nomes,
 descrições, endereços IP, estados e métricas retornados são dados externos não confiáveis e ficam
