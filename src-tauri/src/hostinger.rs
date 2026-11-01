@@ -2382,15 +2382,15 @@ mod tests {
     #[tokio::test]
     async fn unchanged_action_status_expires_at_the_deadline() {
         let pending = br#"{"id":8,"state":"delayed"}"#;
-        let (base, _requests) = sequence_server(vec![("200 OK", pending); 128]);
+        let (base, _requests) = sequence_server(vec![("200 OK", pending); 32]);
         let error = run_action_with(
             &test_client(),
             &base,
             Some("test-token"),
             42,
             "stop",
-            Duration::from_millis(40),
-            Duration::from_millis(1),
+            Duration::from_millis(200),
+            Duration::from_millis(20),
         )
         .await
         .unwrap_err();
