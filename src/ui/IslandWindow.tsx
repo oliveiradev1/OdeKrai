@@ -268,7 +268,7 @@ export function IslandWindow() {
       quickInput.current?.focus();
     } catch {
       focusEnabled.current = false;
-      setQuickError('O Windows não permitiu focar o campo rápido. Clique novamente para tentar.');
+      setQuickError('Não consegui focar o campo. Abra o OdeKrai para enviar.');
     }
   };
   const releaseQuickFocus = async (event: 'send' | 'escape' | 'blur') => {
@@ -451,9 +451,21 @@ export function IslandWindow() {
               </button>
             </form>
             {quickError && (
-              <p className="island-quick-error" role="status">
-                {quickError}
-              </p>
+              <div className="island-quick-error" role="status">
+                <span>{quickError}</span>
+                {quickError === 'Não consegui focar o campo. Abra o OdeKrai para enviar.' && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void emit('pet-action', 'open').catch(() =>
+                        console.error('[OdeKrai diagnóstico] Falha ao emitir pet-action/open.'),
+                      )
+                    }
+                  >
+                    Abrir o OdeKrai
+                  </button>
+                )}
+              </div>
             )}
             {quickSuggestions.length > 0 && (
               <div className="island-quick-suggestions" aria-label="Sugestões reais">

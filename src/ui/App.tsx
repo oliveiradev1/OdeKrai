@@ -137,6 +137,7 @@ import { CommandPalette } from './CommandPalette';
 import {
   buildPaletteItems,
   dispatchPaletteAction,
+  handleCommandPaletteShortcut,
   updateRecentCommands,
   type PaletteItem,
 } from '../core/command-palette';
@@ -885,9 +886,7 @@ function MainApp() {
 
   useEffect(() => {
     const onShortcut = (event: KeyboardEvent) => {
-      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'k') return;
-      event.preventDefault();
-      setCommandPaletteOpen((open) => !open);
+      handleCommandPaletteShortcut(event, () => setCommandPaletteOpen((open) => !open));
     };
     window.addEventListener('keydown', onShortcut);
     return () => window.removeEventListener('keydown', onShortcut);

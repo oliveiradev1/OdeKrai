@@ -968,22 +968,51 @@ async fn set_pet_visible(
 }
 
 #[tauri::command]
-async fn set_pet_keyboard_focus(caller: tauri::WebviewWindow, focused: bool) -> Result<(), String> {
+async fn set_pet_keyboard_focus(
+    app: tauri::AppHandle,
+    caller: tauri::WebviewWindow,
+    focused: bool,
+) -> Result<(), String> {
     require_caller(&caller, &["pet"])?;
-    if focused {
-        caller
-            .set_focusable(true)
-            .map_err(|_| "Não foi possível atualizar o foco do pet.".to_string())?;
-        caller.set_focus().map_err(|_| {
-            let _ = caller.set_focusable(false);
-            "Não foi possível focar o campo rápido do pet.".to_string()
-        })?;
+    let started = Instant::now();
+    let (result, outcome) = if focused {
+        match caller.set_focusable(true) {
+            Err(_) => (
+                Err("Não foi possível atualizar o foco do pet.".to_string()),
+                "focusable_error",
+            ),
+            Ok(()) => match caller.set_focus() {
+                Ok(()) => (Ok(()), "focus_ok"),
+                Err(_) => {
+                    let _ = caller.set_focusable(false);
+                    (
+                        Err("Não foi possível focar o campo rápido do pet.".to_string()),
+                        "focus_error",
+                    )
+                }
+            },
+        }
     } else {
-        caller
-            .set_focusable(false)
-            .map_err(|_| "Não foi possível atualizar o foco do pet.".to_string())?;
-    }
-    Ok(())
+        match caller.set_focusable(false) {
+            Ok(()) => (Ok(()), "release_ok"),
+            Err(_) => (
+                Err("Não foi possível atualizar o foco do pet.".to_string()),
+                "release_error",
+            ),
+        }
+    };
+    diagnostics::log_event(
+        &app,
+        if focused {
+            "pet_keyboard_focus_requested"
+        } else {
+            "pet_keyboard_focus_released"
+        },
+        "set_pet_keyboard_focus",
+        outcome,
+        started.elapsed().as_millis().min(u64::MAX as u128) as u64,
+    );
+    result
 }
 
 #[tauri::command]
