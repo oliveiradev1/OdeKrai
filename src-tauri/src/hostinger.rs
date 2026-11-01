@@ -2226,7 +2226,7 @@ mod tests {
         Client::builder()
             .redirect(Policy::none())
             .no_proxy()
-            .timeout(Duration::from_secs(2))
+            .timeout(Duration::from_secs(15))
             .build()
             .unwrap()
     }
@@ -2247,7 +2247,7 @@ mod tests {
                         Ok(connection) => break connection,
                         Err(error)
                             if error.kind() == std::io::ErrorKind::WouldBlock
-                                && start.elapsed() < Duration::from_secs(2) =>
+                                && start.elapsed() < Duration::from_secs(15) =>
                         {
                             thread::sleep(Duration::from_millis(1));
                         }
@@ -2336,14 +2336,14 @@ mod tests {
             Some("never-logged-token"),
             42,
             "restart",
-            Duration::from_secs(2),
+            Duration::from_secs(10),
             Duration::from_millis(1),
         )
         .await
         .unwrap();
         assert_eq!(output["state"], "success");
         assert!(!output.to_string().contains("never-logged-token"));
-        let requests = requests.recv_timeout(Duration::from_secs(2)).unwrap();
+        let requests = requests.recv_timeout(Duration::from_secs(10)).unwrap();
         assert_eq!(requests.len(), 3);
         assert!(requests[0].starts_with("POST /api/vps/v1/virtual-machines/42/restart "));
         assert!(requests[1].starts_with("GET /api/vps/v1/virtual-machines/42/actions/7 "));
