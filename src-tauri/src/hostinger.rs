@@ -2632,7 +2632,7 @@ mod tests {
             &serde_json::json!({"vm_name":"web-vps", "vm_id":42}),
         )
         .unwrap();
-        assert!(recovery.contains("sistema normal não inicia"));
+        assert!(recovery.contains("sistema normal não sobe"));
     }
 
     #[test]
