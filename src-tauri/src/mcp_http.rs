@@ -470,8 +470,8 @@ mod tests {
     #[test]
     fn maps_401_and_403_to_the_same_safe_pat_message() {
         for status in [StatusCode::UNAUTHORIZED, StatusCode::FORBIDDEN] {
-            let error = parse_response(status, "application/json", b"private response body")
-                .unwrap_err();
+            let error =
+                parse_response(status, "application/json", b"private response body").unwrap_err();
             assert_eq!(
                 error,
                 "O token foi recusado. Confira se ele tem as permissões e se não expirou."

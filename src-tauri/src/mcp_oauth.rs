@@ -410,7 +410,9 @@ fn normalize_scopes(scopes: Option<&str>) -> Result<Option<String>, String> {
     if scopes.len() > 1024 || scopes.chars().any(char::is_control) {
         return Err("A lista de escopos OAuth é inválida ou excede o limite permitido.".into());
     }
-    Ok(Some(scopes.split_whitespace().collect::<Vec<_>>().join(" ")))
+    Ok(Some(
+        scopes.split_whitespace().collect::<Vec<_>>().join(" "),
+    ))
 }
 
 fn register_client(
@@ -420,9 +422,13 @@ fn register_client(
     supplied_client_id: Option<&str>,
     scopes: Option<&str>,
 ) -> Result<String, String> {
-    register_client_with(metadata, redirect_uri, supplied_client_id, scopes, |endpoint, body| {
-        post_json(client, endpoint, body)
-    })
+    register_client_with(
+        metadata,
+        redirect_uri,
+        supplied_client_id,
+        scopes,
+        |endpoint, body| post_json(client, endpoint, body),
+    )
 }
 
 fn register_client_with(
@@ -972,18 +978,17 @@ pub async fn mcp_oauth_authorize(
     let endpoint = server.endpoint.ok_or("Endereço MCP ausente.")?;
     let id = server_id.clone();
     let app_for_flow = app.clone();
-    let (_credential, access) =
-        tokio::task::spawn_blocking(move || {
-            run_authorization(
-                app_for_flow,
-                &endpoint,
-                &id,
-                client_id.as_deref(),
-                scopes.as_deref(),
-            )
-        })
-            .await
-            .map_err(|_| "A tarefa de autorização MCP foi interrompida.".to_string())??;
+    let (_credential, access) = tokio::task::spawn_blocking(move || {
+        run_authorization(
+            app_for_flow,
+            &endpoint,
+            &id,
+            client_id.as_deref(),
+            scopes.as_deref(),
+        )
+    })
+    .await
+    .map_err(|_| "A tarefa de autorização MCP foi interrompida.".to_string())??;
     Entry::new(SERVICE, &format!("{server_id}:http_bearer"))
         .and_then(|entry| match entry.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),

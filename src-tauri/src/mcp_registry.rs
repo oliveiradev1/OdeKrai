@@ -1335,10 +1335,7 @@ mod tests {
 
         set_http_token_with(&server, "github-pat-fixture", &mut vault).unwrap();
         assert_eq!(
-            vault
-                .0
-                .get("fake:http_bearer")
-                .map(String::as_str),
+            vault.0.get("fake:http_bearer").map(String::as_str),
             Some("github-pat-fixture")
         );
         assert!(!format!("{:?}", server).contains("github-pat-fixture"));
