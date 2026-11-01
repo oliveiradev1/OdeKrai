@@ -8,6 +8,15 @@ Ao conversar, o texto enviado pelo usuário é encaminhado ao provedor seleciona
 
 A integração de credenciais depende do aplicativo nativo Windows. A prévia web não encaminha chamadas de IA.
 
+Servidores MCP remotos podem usar token pessoal ou autorização OAuth. No OAuth, o OdeKrai consulta
+os metadados HTTPS do recurso MCP e do emissor anunciado, registra um cliente quando o servidor
+oferece DCR e abre a página de consentimento no navegador padrão depois de o usuário iniciar a
+conexão. O emissor recebe a solicitação de autorização, o identificador do recurso MCP, os escopos
+solicitados e o endereço IP da conexão; o servidor MCP recebe o access token Bearer nas chamadas
+autorizadas. Refresh tokens e metadados da autorização ficam no Gerenciador de Credenciais do
+Windows; access tokens ficam somente em memória. O callback local usa `127.0.0.1`, porta aleatória,
+state e PKCE e só é aceito uma vez. O usuário pode remover o servidor para apagar sua autorização.
+
 ShardCloud oferece consultas de leitura e, pelo agente, ações de iniciar/parar VM e execução de
 comandos remotos mediante aprovação nativa obrigatória.
 Salvar o token não faz uma chamada de rede. Ele é enviado pelo cabeçalho `Authorization: Bearer` ao

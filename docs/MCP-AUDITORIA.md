@@ -55,13 +55,34 @@ Na página oficial de Autorização, a revisão relaciona OAuth 2.1 draft, Prote
 que clientes HTTP MCP devem descobrir o servidor de autorização usando Protected Resource Metadata
 e suportar os mecanismos de descoberta indicados. [Especificação oficial — Autorização](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization).
 
-Esta etapa implementa token pessoal Bearer por escolha do produto; **não implementa OAuth** nem
-descoberta OAuth. A URL HTTPS é salva no cadastro pelo usuário, validada no Rust e nunca é um
-argumento de ferramenta do modelo. Redirects são desativados e a URL final precisa manter a origem
-cadastrada. O token é salvo no Credential Manager e removido ao excluir o servidor. Respostas são
-limitadas a 8 MiB no transporte e truncadas/sanitizadas pelo limite de resultado MCP antes de serem
-oferecidas ao agente. A validação Rust desta alteração ainda depende do CI, pois `cargo` não está
-disponível no ambiente que produziu este commit.
+O transporte HTTP também oferece autorização OAuth para servidores que publicam descoberta
+Protected Resource Metadata e suportam registro dinâmico de cliente (DCR). O fluxo está em
+`src-tauri/src/mcp_oauth.rs` (`discover_resource_metadata`, `discover_authorization_server`,
+`register_client`, `run_authorization`, `accept_callback`, `exchange_code` e `refresh_access`); a
+interface inicia `mcp_oauth_authorize` em `PrivacyConfigurations.tsx`. O cliente consulta o recurso
+protegido, valida a origem anunciada, verifica igualdade exata do emissor, associa emissor, recurso,
+state e PKCE ao fluxo, abre a autorização pelo comando Tauri validado e recebe um callback de uso
+único em `127.0.0.1` numa porta aleatória. Redirects HTTP são recusados. Refresh tokens e metadados
+de autorização ficam no Credential Manager; access tokens permanecem em memória. Um HTTP 401 tenta
+renovar o token uma vez; se a renovação falhar, a interface recebe instrução para conectar novamente.
+
+A conferência oficial foi feita em 1º de novembro de 2026 na revisão `2026-07-28`. A especificação
+diz: “MCP clients MUST use OAuth 2.0 Protected Resource Metadata for authorization server
+discovery.” Também exige `resource` nas solicitações de autorização e token e validação do `iss`
+antes da troca do código. [Autorização MCP](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization)
+e [descoberta do servidor de autorização](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization/authorization-server-discovery).
+
+**Limitação de registro:** esta implementação usa DCR quando o servidor o anuncia e retorna erro
+claro se o registro estiver indisponível. Ela ainda não suporta pre-registro/CIMD; se a metadata do
+servidor anunciar suporte a CIMD, o OdeKrai não tenta DCR fora da prioridade definida pela
+especificação. A especificação recomenda CIMD para clientes sem relação prévia, e classifica DCR
+como mecanismo legado de compatibilidade. [Registro de cliente MCP](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization/client-registration).
+
+A URL HTTPS continua fixa pelo cadastro do usuário e nunca é argumento de ferramenta do modelo.
+Tokens pessoais e OAuth são guardados no Credential Manager e removidos ao excluir ou substituir a
+autorização do servidor. Respostas são limitadas a 8 MiB no transporte e truncadas/sanitizadas antes
+de serem oferecidas ao agente. A validação Rust ainda depende do CI, pois `cargo` não está disponível
+no ambiente que produziu esta implementação.
 
 ## Limites e segurança
 

@@ -114,6 +114,24 @@ pub fn open_external_link(
         .map_err(|_| "Não foi possível abrir o navegador padrão.".to_string())
 }
 
+pub(crate) fn open_oauth_authorization_url(
+    app: &AppHandle,
+    value: &str,
+) -> Result<(), String> {
+    let validated = validate_external_url(value).map_err(str::to_string)?;
+    let parsed = Url::parse(&validated).map_err(|_| "O endereço de autorização é inválido.")?;
+    if parsed.scheme() != "https" || parsed.port_or_known_default() != Some(443) {
+        return Err("A autorização MCP precisa usar HTTPS padrão.".into());
+    }
+    let host = parsed.host_str().ok_or("O endereço de autorização é inválido.")?;
+    if !crate::security::external_domain_is_trusted(app, host)? {
+        return Err("Autorize este domínio em Links externos antes de conectar o servidor MCP.".into());
+    }
+    app.opener()
+        .open_url(validated, None::<&str>)
+        .map_err(|_| "Não foi possível abrir o navegador padrão.".to_string())
+}
+
 fn validate_cloud_link(value: &str) -> Result<String, String> {
     let validated = validate_external_url(value).map_err(str::to_string)?;
     let parsed = Url::parse(&validated).map_err(|_| "O endereço do link é inválido.")?;

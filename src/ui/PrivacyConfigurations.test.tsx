@@ -41,6 +41,7 @@ describe('configurações de privacidade', () => {
       'mcp_add_http_server',
       'mcp_set_secret',
       'mcp_set_http_token',
+      'mcp_oauth_authorize',
       'mcp_set_enabled',
       'mcp_test_connection',
       'mcp_remove_server',

@@ -8,7 +8,7 @@ use reqwest::{
     StatusCode,
 };
 use serde_json::{json, Value};
-use std::{io::Read, sync::atomic::Ordering, time::Duration};
+use std::{io::Read, sync::{atomic::Ordering, Mutex}, time::Duration};
 use url::Url;
 
 const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
@@ -38,9 +38,14 @@ pub fn validate_endpoint(raw: &str) -> Result<Url, String> {
 
 pub struct McpHttpClient {
     endpoint: Url,
-    token: String,
+    auth: AuthMode,
     transport: Box<dyn HttpTransport>,
     next_id: std::sync::atomic::AtomicU64,
+}
+
+enum AuthMode {
+    Personal(String),
+    OAuth { server_id: String, access: Mutex<Option<crate::mcp_oauth::OAuthAccessToken>> },
 }
 
 struct HttpReply {
@@ -123,7 +128,34 @@ impl McpHttpClient {
             .map_err(|_| "Não foi possível preparar a conexão segura MCP.".to_string())?;
         Ok(Self {
             endpoint,
-            token,
+            auth: AuthMode::Personal(token),
+            transport: Box::new(ReqwestTransport(client)),
+            next_id: std::sync::atomic::AtomicU64::new(1),
+        })
+    }
+
+    pub fn connect_oauth(
+        endpoint: &str,
+        server_id: &str,
+        initial_access: Option<crate::mcp_oauth::OAuthAccessToken>,
+    ) -> Result<Self, String> {
+        let endpoint = validate_endpoint(endpoint)?;
+        let stored = crate::mcp_oauth::load(server_id)?
+            .ok_or("Reconecte a autorização OAuth do servidor MCP.")?;
+        if stored.resource != endpoint.as_str() {
+            return Err("A autorização OAuth foi emitida para outro servidor MCP; conecte novamente.".into());
+        }
+        let client = Client::builder()
+            .redirect(Policy::none())
+            .timeout(REQUEST_TIMEOUT)
+            .build()
+            .map_err(|_| "Não foi possível preparar a conexão segura MCP.".to_string())?;
+        Ok(Self {
+            endpoint,
+            auth: AuthMode::OAuth {
+                server_id: server_id.to_owned(),
+                access: Mutex::new(initial_access),
+            },
             transport: Box::new(ReqwestTransport(client)),
             next_id: std::sync::atomic::AtomicU64::new(1),
         })
@@ -141,7 +173,7 @@ impl McpHttpClient {
     ) -> Self {
         Self {
             endpoint: validate_endpoint(endpoint).unwrap(),
-            token: token.to_owned(),
+            auth: AuthMode::Personal(token.to_owned()),
             transport,
             next_id: std::sync::atomic::AtomicU64::new(1),
         }
@@ -170,17 +202,29 @@ impl McpHttpClient {
             "method": method,
             "params": params
         });
-        let response = self.transport.post(
-            &self.endpoint,
-            &self.token,
-            method,
-            name.as_deref(),
-            body,
-        )?;
+        let token = self.bearer_token(false)?;
+        let mut response = self.transport.post(&self.endpoint, &token, method, name.as_deref(), body.clone())?;
+        if response.status == StatusCode::UNAUTHORIZED && matches!(&self.auth, AuthMode::OAuth { .. }) {
+            let renewed = self.bearer_token(true)?;
+            response = self.transport.post(&self.endpoint, &renewed, method, name.as_deref(), body)?;
+        }
         if !same_origin(&self.endpoint, &response.final_url) {
             return Err("O servidor MCP respondeu por um host diferente do cadastrado.".into());
         }
         parse_response(response.status, &response.content_type, &response.body)
+    }
+
+    fn bearer_token(&self, force_refresh: bool) -> Result<String, String> {
+        match &self.auth {
+            AuthMode::Personal(token) => Ok(token.clone()),
+            AuthMode::OAuth { server_id, access } => {
+                let mut access = access.lock().map_err(|_| "Estado OAuth MCP indisponível.".to_string())?;
+                if force_refresh || access.as_ref().map_or(true, |token| crate::mcp_oauth::should_refresh(token.expires_at, std::time::Instant::now())) {
+                    *access = Some(crate::mcp_oauth::refresh_access(server_id)?);
+                }
+                access.as_ref().map(|token| token.value.clone()).ok_or_else(|| "Reconecte a autorização OAuth do servidor MCP.".into())
+            }
+        }
     }
 }
 

@@ -93,7 +93,10 @@ pub struct McpToolView {
 }
 
 #[derive(Default)]
-pub struct McpRuntime(Mutex<HashMap<String, RuntimeStatus>>);
+pub struct McpRuntime(
+    Mutex<HashMap<String, RuntimeStatus>>,
+    pub(crate) Mutex<HashMap<String, crate::mcp_oauth::OAuthAccessToken>>,
+);
 
 impl McpRuntime {
     pub(crate) fn connected_tools(&self) -> Vec<McpTool> {
@@ -367,6 +370,7 @@ fn remove_with(
         vault.erase(&server.id, key)?;
     }
     vault.erase(&server.id, "http_bearer")?;
+    vault.erase(&server.id, "oauth")?;
     db.execute("DELETE FROM mcp_servers WHERE id=?1", [&server.id])
         .map_err(|_| "Não foi possível remover o servidor MCP.".to_string())?;
     Ok(())
@@ -379,18 +383,42 @@ fn find(db: &Connection, id: &str) -> Result<McpServer, String> {
         .ok_or_else(|| "Servidor MCP não cadastrado.".into())
 }
 
-fn inspect(server: &McpServer) -> Result<(Arc<McpClient>, serde_json::Value), String> {
+pub(crate) fn get_server(app: &tauri::AppHandle, id: &str) -> Result<McpServer, String> {
+    find(&crate::security::database(app)?, id)
+}
+
+pub(crate) fn set_enabled_internal(
+    app: &tauri::AppHandle,
+    id: &str,
+    enabled: bool,
+) -> Result<(), String> {
+    let changed = crate::security::database(app)?
+        .execute(
+            "UPDATE mcp_servers SET enabled=?2 WHERE id=?1",
+            params![id, enabled as i64],
+        )
+        .map_err(|_| "Não foi possível atualizar o servidor MCP.".to_string())?;
+    if changed != 1 {
+        return Err("Servidor MCP não cadastrado.".into());
+    }
+    Ok(())
+}
+
+fn inspect(server: &McpServer, runtime: &McpRuntime) -> Result<(Arc<McpClient>, serde_json::Value), String> {
     if !server.enabled {
         return Err("Ative o servidor antes de testar a conexão.".into());
     }
     if server.transport == "streamable_http" {
         let endpoint = server.endpoint.as_deref().ok_or("Endereço MCP ausente.")?;
-        let token = entry(&server.id, "http_bearer")?
-            .get_password()
-            .map_err(|_| "Cadastre o token Bearer para este servidor MCP.".to_string())?;
-        let client = Arc::new(McpClient::Http(crate::mcp_http::McpHttpClient::connect(
-            endpoint, token,
-        )?));
+        let pat = entry(&server.id, "http_bearer")?.get_password();
+        let client = if let Ok(token) = pat {
+            Arc::new(McpClient::Http(crate::mcp_http::McpHttpClient::connect(endpoint, token)?))
+        } else if crate::mcp_oauth::load(&server.id)?.is_some() {
+            let access = runtime.1.lock().map_err(|_| "Estado OAuth MCP indisponível.".to_string())?.remove(&server.id);
+            Arc::new(McpClient::Http(crate::mcp_http::McpHttpClient::connect_oauth(endpoint, &server.id, access)?))
+        } else {
+            return Err("Cadastre um token ou conecte o servidor por OAuth.".into());
+        };
         let result = client.tools_list()?;
         return Ok((client, result));
     }
@@ -730,6 +758,12 @@ pub fn mcp_set_http_token(
         .map_err(|_| {
             "Não foi possível salvar o token no Gerenciador de Credenciais do Windows.".to_string()
         })?;
+    crate::mcp_oauth::remove(&server_id)?;
+    runtime
+        .1
+        .lock()
+        .map_err(|_| "Estado OAuth MCP indisponível.".to_string())?
+        .remove(&server_id);
     runtime
         .0
         .lock()
@@ -782,6 +816,11 @@ pub fn mcp_set_enabled(
             .lock()
             .map_err(|_| "Estado MCP indisponível.".to_string())?
             .remove(&server_id);
+        runtime
+            .1
+            .lock()
+            .map_err(|_| "Estado OAuth MCP indisponível.".to_string())?
+            .remove(&server_id);
     }
     let _ = app.emit("skills-updated", ());
     Ok(())
@@ -805,7 +844,7 @@ pub fn mcp_test_connection(
         .lock()
         .map_err(|_| "Estado MCP indisponível.".to_string())?
         .insert(server_id.clone(), RuntimeStatus::Connecting);
-    match inspect(&server) {
+    match inspect(&server, &runtime) {
         Ok((client, response)) => {
             let tools = tool_catalog(&server, &response);
             let db = crate::security::database(&app)?;
@@ -856,6 +895,11 @@ pub fn mcp_remove_server(
         .0
         .lock()
         .map_err(|_| "Estado MCP indisponível.".to_string())?
+        .remove(&server_id);
+    runtime
+        .1
+        .lock()
+        .map_err(|_| "Estado OAuth MCP indisponível.".to_string())?
         .remove(&server_id);
     remove(&db, &server)
 }

@@ -286,10 +286,6 @@ export function PrivacyConfigurations({
   }
 
   async function addRemoteServer(): Promise<boolean> {
-    if (!remoteToken) {
-      setError('Informe um token de acesso pessoal.');
-      return false;
-    }
     setBusy(true);
     try {
       const server = await invoke<McpServer>('mcp_add_http_server', {
@@ -297,8 +293,10 @@ export function PrivacyConfigurations({
         endpoint: remoteEndpoint,
       });
       try {
-        await invoke('mcp_set_http_token', { serverId: server.id, value: remoteToken });
-        await invoke('mcp_set_enabled', { serverId: server.id, enabled: true });
+        if (remoteToken) {
+          await invoke('mcp_set_http_token', { serverId: server.id, value: remoteToken });
+          await invoke('mcp_set_enabled', { serverId: server.id, enabled: true });
+        }
       } catch (cause) {
         await invoke('mcp_remove_server', { serverId: server.id }).catch(() => undefined);
         throw cause;
@@ -332,6 +330,27 @@ export function PrivacyConfigurations({
     } catch (cause) {
       setError(String(cause));
       return false;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function connectRemoteOAuth(server: McpServer) {
+    setBusy(true);
+    setServerStates((states) => ({ ...states, [server.id]: { label: 'Aguardando autorização…' } }));
+    try {
+      await invoke('mcp_oauth_authorize', { serverId: server.id });
+      const tools = await invoke<McpToolView[]>('mcp_test_connection', {
+        serverId: server.id,
+        confirmed: true,
+      });
+      setServerStates((states) => ({ ...states, [server.id]: { label: 'Conectado', tools } }));
+      await refresh();
+    } catch (cause) {
+      setServerStates((states) => ({
+        ...states,
+        [server.id]: { label: 'Erro', error: String(cause) },
+      }));
     } finally {
       setBusy(false);
     }
@@ -587,7 +606,7 @@ export function PrivacyConfigurations({
               />
             </label>
             <label>
-              Token de acesso pessoal
+              Token pessoal (opcional; ou conecte por OAuth)
               <input
                 id="mcp-remote-token-new"
                 name="mcp-remote-token-new"
@@ -601,7 +620,7 @@ export function PrivacyConfigurations({
           <Button
             type="submit"
             variant="secondary"
-            disabled={busy || !isTauri() || !remoteName || !remoteEndpoint || !remoteToken}
+            disabled={busy || !isTauri() || !remoteName || !remoteEndpoint}
           >
             Adicionar servidor remoto
           </Button>
@@ -680,6 +699,15 @@ export function PrivacyConfigurations({
                       </Button>
                     </form>
                   ))}
+                  {server.transport === 'streamable_http' && (
+                    <Button
+                      variant="secondary"
+                      disabled={busy || !isTauri()}
+                      onClick={() => void connectRemoteOAuth(server)}
+                    >
+                      Conectar com OAuth
+                    </Button>
+                  )}
                   {server.transport === 'streamable_http' && (
                     <form
                       className="mcp-env-field"
