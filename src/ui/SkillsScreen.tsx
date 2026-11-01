@@ -29,13 +29,15 @@ import { submitSecretForm } from './secret-form';
 import { RiskBadge } from './RiskBadge';
 import { PrivacyConfigurationSummary } from './PrivacyConfigurations';
 import {
+  canConnectToPublicOAuth,
   canConnectWithOAuth,
   getPublicMcpStatus,
-  oauthClientIdHelp,
+  publicOAuthServiceKey,
   publicMcpCatalog,
   publicMcpStatusLabels,
   type PublicMcpCatalogEntry,
   type OAuthRegistrationOptions,
+  type PublicOAuthClientSettings,
   type PublicMcpServer,
 } from '../core/mcp-service-catalog';
 
@@ -406,10 +408,17 @@ function PublicMcpServiceCard({
   const [expanded, setExpanded] = useState(false);
   const [endpoint, setEndpoint] = useState(service.endpoint);
   const [authentication, setAuthentication] = useState<'oauth' | 'bearer'>(
-    (service.authenticationMethods[0] as 'oauth' | 'bearer' | undefined) ?? 'oauth',
+    (service.name === 'GitHub'
+      ? 'bearer'
+      : (service.authenticationMethods[0] as 'oauth' | 'bearer' | undefined)) ?? 'oauth',
   );
   const [token, setToken] = useState('');
   const [clientId, setClientId] = useState('');
+  const [oauthClientSettings, setOauthClientSettings] = useState<PublicOAuthClientSettings | null>(
+    null,
+  );
+  const [clientSecret, setClientSecret] = useState('');
+  const [clientSecretBusy, setClientSecretBusy] = useState(false);
   const [scopes, setScopes] = useState('');
   const [registrationOptions, setRegistrationOptions] = useState<OAuthRegistrationOptions | null>(
     null,
@@ -417,6 +426,65 @@ function PublicMcpServiceCard({
   const [checkingOAuth, setCheckingOAuth] = useState(false);
   const [oauthError, setOauthError] = useState('');
   const [linkError, setLinkError] = useState('');
+  const publicOAuthReady = canConnectToPublicOAuth(
+    oauthClientSettings,
+    registrationOptions,
+    busy || clientSecretBusy,
+  );
+
+  useEffect(() => {
+    if (!service.authenticationMethods.includes('oauth') || !isTauri()) return;
+    let current = true;
+    void invoke<PublicOAuthClientSettings>('mcp_oauth_public_client_settings', {
+      service: publicOAuthServiceKey(service),
+    })
+      .then((settings) => {
+        if (!current) return;
+        setOauthClientSettings(settings);
+        setClientId(settings.clientId);
+      })
+      .catch((cause) => {
+        if (current) setOauthError(String(cause));
+      });
+    return () => {
+      current = false;
+    };
+  }, [service]);
+
+  async function saveOAuthClientSecret() {
+    if (!oauthClientSettings || !clientSecret.trim() || !isTauri()) return;
+    setClientSecretBusy(true);
+    setOauthError('');
+    try {
+      await invoke('mcp_oauth_save_public_client_secret', {
+        service: oauthClientSettings.service,
+        secret: clientSecret,
+      });
+      setClientSecret('');
+      setOauthClientSettings({ ...oauthClientSettings, clientSecretSaved: true });
+    } catch (cause) {
+      setOauthError(String(cause));
+    } finally {
+      setClientSecretBusy(false);
+    }
+  }
+
+  async function removeOAuthClientSecret() {
+    if (!oauthClientSettings || !isTauri()) return;
+    setClientSecretBusy(true);
+    setOauthError('');
+    try {
+      await invoke('mcp_oauth_remove_public_client_secret', {
+        service: oauthClientSettings.service,
+      });
+      setOauthClientSettings({ ...oauthClientSettings, clientSecretSaved: false });
+      setClientSecret('');
+    } catch (cause) {
+      setOauthError(String(cause));
+    } finally {
+      setClientSecretBusy(false);
+    }
+  }
 
   async function openOfficialLink(url: string) {
     if (!isTauri()) return;
@@ -478,6 +546,92 @@ function PublicMcpServiceCard({
       {service.programStatus && (
         <p className="public-mcp-program-status">{service.programStatus}</p>
       )}
+      {service.authenticationMethods.includes('oauth') && !oauthClientSettings && oauthError && (
+        <p role="alert">{oauthError}</p>
+      )}
+      {service.authenticationMethods.includes('oauth') &&
+        oauthClientSettings &&
+        endpoint === service.endpoint && (
+          <div className="public-mcp-oauth-client-setup">
+            {!oauthClientSettings.clientId.trim() &&
+              (!oauthClientSettings.dynamicRegistration ||
+                registrationOptions?.dynamicRegistration === false) && (
+                <p role="status">
+                  Este serviço ainda não foi configurado para o OdeKrai. Veja o guia ({' '}
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    onClick={() => void openOfficialLink(oauthClientSettings.guideUrl)}
+                  >
+                    abrir documentação oficial
+                  </Button>
+                  ).
+                </p>
+              )}
+            {oauthClientSettings.clientSecretRequired &&
+              (oauthClientSettings.clientId.trim() || oauthClientSettings.clientSecretSaved) && (
+                <form
+                  className="public-mcp-oauth-secret-form"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void saveOAuthClientSecret();
+                  }}
+                >
+                  <label>
+                    Segredo do cliente OAuth
+                    <input
+                      id={`${formId}-oauth-client-secret`}
+                      name={`${formId}-oauth-client-secret`}
+                      type="password"
+                      autoComplete="off"
+                      value={clientSecret}
+                      disabled={!oauthClientSettings.clientId.trim()}
+                      onChange={(event) => setClientSecret(event.target.value)}
+                    />
+                    <small>
+                      O segredo fica no Gerenciador de Credenciais e não volta a ser exibido.
+                    </small>
+                  </label>
+                  {oauthClientSettings.clientSecretSaved ? (
+                    <>
+                      <span role="status">Segredo salvo</span>
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        disabled={clientSecretBusy}
+                        onClick={() => void removeOAuthClientSecret()}
+                      >
+                        Remover segredo
+                      </Button>
+                      {oauthClientSettings.clientId.trim() && clientSecret.trim() && (
+                        <Button type="submit" variant="secondary" disabled={clientSecretBusy}>
+                          Substituir segredo
+                        </Button>
+                      )}
+                    </>
+                  ) : (
+                    <Button
+                      type="submit"
+                      variant="secondary"
+                      disabled={
+                        clientSecretBusy ||
+                        !clientSecret.trim() ||
+                        !oauthClientSettings.clientId.trim()
+                      }
+                    >
+                      Salvar segredo
+                    </Button>
+                  )}
+                </form>
+              )}
+            {!oauthClientSettings.clientId.trim() && !oauthClientSettings.dynamicRegistration && (
+              <Button type="button" variant="secondary" disabled>
+                Conectar
+              </Button>
+            )}
+            {oauthError && <p role="alert">{oauthError}</p>}
+          </div>
+        )}
       <dl>
         <div>
           <dt>Endereço oficial</dt>
@@ -547,6 +701,7 @@ function PublicMcpServiceCard({
                   readOnly={service.name === 'GitHub'}
                   onChange={(event) => {
                     setEndpoint(event.target.value);
+                    setClientId('');
                     setRegistrationOptions(null);
                     setOauthError('');
                     setLinkError('');
@@ -597,18 +752,23 @@ function PublicMcpServiceCard({
                       )}
                     </div>
                   )}
-                  <label>
-                    Identificador do cliente OAuth
-                    <input
-                      type="text"
-                      name={`${formId}-oauth-client-id`}
-                      id={`${formId}-oauth-client-id`}
-                      autoComplete="off"
-                      value={clientId}
-                      onChange={(event) => setClientId(event.target.value)}
-                    />
-                    <small>Opcional quando o servidor oferece registro dinâmico.</small>
-                  </label>
+                  {endpoint !== service.endpoint && (
+                    <label>
+                      Identificador do cliente OAuth
+                      <input
+                        type="text"
+                        name={`${formId}-oauth-client-id`}
+                        id={`${formId}-oauth-client-id`}
+                        autoComplete="off"
+                        value={clientId}
+                        onChange={(event) => setClientId(event.target.value)}
+                      />
+                      <small>Opcional quando o servidor oferece registro dinâmico.</small>
+                    </label>
+                  )}
+                  {endpoint === service.endpoint && oauthClientSettings?.clientId.trim() && (
+                    <p role="status">Identificador público configurado para este serviço.</p>
+                  )}
                   <label>
                     Escopos OAuth (opcional)
                     <input
@@ -634,19 +794,6 @@ function PublicMcpServiceCard({
                       autorização.
                     </p>
                   )}
-                  {oauthClientIdHelp(service, registrationOptions) && (
-                    <p role="status">
-                      Este servidor exige um identificador de cliente. Veja a documentação do
-                      serviço para criá-lo.{' '}
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        onClick={() => void openOfficialLink(service.documentationUrl)}
-                      >
-                        Abrir documentação oficial
-                      </Button>
-                    </p>
-                  )}
                   {oauthError && <p role="alert">{oauthError}</p>}
                   {linkError && <p role="alert">{linkError}</p>}
                 </div>
@@ -657,7 +804,10 @@ function PublicMcpServiceCard({
                   !onConfigure ||
                   busy ||
                   (authentication === 'oauth' &&
-                    !canConnectWithOAuth(registrationOptions, clientId, busy))
+                    (!oauthClientSettings ||
+                      (endpoint === service.endpoint
+                        ? !publicOAuthReady
+                        : !canConnectWithOAuth(registrationOptions, clientId, busy))))
                 }
               >
                 {authentication === 'oauth' ? 'Conectar e testar' : 'Salvar e testar conexão'}

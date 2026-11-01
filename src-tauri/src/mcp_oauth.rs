@@ -19,6 +19,118 @@ use url::Url;
 const SERVICE: &str = "site.anceryx.odekrai.mcp";
 const CALLBACK_TIMEOUT: Duration = Duration::from_secs(180);
 const MAX_METADATA_BYTES: usize = 256 * 1024;
+const OAUTH_CLIENTS_JSON: &str = include_str!("../resources/oauth-clients.json");
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OAuthClientCatalog {
+    allowed_guide_domains: Vec<String>,
+    services: std::collections::HashMap<String, OAuthClientDefinition>,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OAuthClientDefinition {
+    client_id: String,
+    guide_url: String,
+    dynamic_registration: bool,
+    client_secret_required: bool,
+    endpoints: Vec<String>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PublicOAuthClientSettings {
+    pub service: String,
+    pub client_id: String,
+    pub guide_url: String,
+    pub dynamic_registration: bool,
+    pub client_secret_required: bool,
+    pub client_secret_saved: bool,
+}
+
+fn oauth_client_catalog() -> Result<OAuthClientCatalog, String> {
+    let catalog: OAuthClientCatalog = serde_json::from_str(OAUTH_CLIENTS_JSON)
+        .map_err(|_| "A configuração de clientes OAuth do aplicativo está inválida.".to_string())?;
+    for definition in catalog.services.values() {
+        validate_guide_url(&definition.guide_url, &catalog.allowed_guide_domains)?;
+        if !definition.client_id.is_empty()
+            && (definition.client_id.len() > 2048
+                || definition.client_id.chars().any(char::is_control))
+        {
+            return Err("Um identificador público de cliente OAuth é inválido.".into());
+        }
+        for endpoint in &definition.endpoints {
+            let parsed = Url::parse(endpoint)
+                .map_err(|_| "Um endpoint OAuth público está inválido.".to_string())?;
+            if parsed.scheme() != "https"
+                || parsed.host_str().is_none()
+                || !parsed.username().is_empty()
+                || parsed.password().is_some()
+            {
+                return Err("Os endpoints OAuth públicos precisam usar HTTPS.".into());
+            }
+        }
+    }
+    Ok(catalog)
+}
+
+fn validate_guide_url(url: &str, allowed_domains: &[String]) -> Result<(), String> {
+    let guide = Url::parse(url).map_err(|_| "A URL de um guia OAuth está inválida.".to_string())?;
+    if guide.scheme() != "https"
+        || !guide.host_str().is_some_and(|host| {
+            allowed_domains.iter().any(|allowed| allowed == host)
+        })
+    {
+        return Err("A URL de um guia OAuth precisa usar HTTPS em domínio permitido.".into());
+    }
+    Ok(())
+}
+
+fn oauth_service_for_endpoint(
+    endpoint: &str,
+) -> Result<Option<(String, OAuthClientDefinition)>, String> {
+    let catalog = oauth_client_catalog()?;
+    for (service, definition) in catalog.services {
+        if definition.endpoints.iter().any(|candidate| candidate == endpoint) {
+            return Ok(Some((service, definition)));
+        }
+    }
+    Ok(None)
+}
+
+fn public_client_secret_credential(service: &str) -> Result<Entry, String> {
+    Entry::new(SERVICE, &format!("public-oauth:{service}:client_secret"))
+        .map_err(|_| "Não foi possível acessar o Gerenciador de Credenciais do Windows.".into())
+}
+
+fn load_public_client_secret(service: &str) -> Result<Option<String>, String> {
+    if !oauth_client_catalog()?.services.contains_key(service) {
+        return Err("Serviço OAuth público desconhecido.".into());
+    }
+    match public_client_secret_credential(service)?.get_password() {
+        Ok(secret) => Ok(Some(secret)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(_) => Err(
+            "Não foi possível ler o segredo OAuth no Gerenciador de Credenciais.".into(),
+        ),
+    }
+}
+
+fn store_public_client_secret(service: &str, secret: &str) -> Result<(), String> {
+    public_client_secret_credential(service)?
+        .set_password(secret)
+        .map_err(|_| {
+            "Não foi possível salvar o segredo no Gerenciador de Credenciais do Windows.".into()
+        })
+}
+
+fn remove_public_client_secret(service: &str) -> Result<(), String> {
+    match public_client_secret_credential(service)?.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(_) => Err("Não foi possível remover o segredo do Gerenciador de Credenciais.".into()),
+    }
+}
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -26,6 +138,10 @@ pub(crate) struct StoredOAuth {
     pub issuer: String,
     pub resource: String,
     pub client_id: String,
+    #[serde(default)]
+    pub client_secret: Option<String>,
+    #[serde(default)]
+    pub service: Option<String>,
     pub token_endpoint: String,
     #[serde(default)]
     pub revocation_endpoint: Option<String>,
@@ -39,6 +155,10 @@ impl std::fmt::Debug for StoredOAuth {
             .field("issuer", &self.issuer)
             .field("resource", &self.resource)
             .field("client_id", &self.client_id)
+            .field(
+                "client_secret",
+                &self.client_secret.as_ref().map(|_| "[REDACTED]"),
+            )
             .field("token_endpoint", &self.token_endpoint)
             .field("revocation_endpoint", &self.revocation_endpoint)
             .field(
@@ -390,8 +510,11 @@ fn inspect_registration_options(endpoint: &str) -> Result<RegistrationOptions, S
         return Err("O recurso OAuth anunciado não corresponde ao endpoint MCP cadastrado.".into());
     }
     let (_, metadata) = discover_authorization_server(&client, &resource)?;
+    let dynamic_registration = oauth_service_for_endpoint(endpoint.as_str())?
+        .map(|(_, config)| config.dynamic_registration && metadata.registration_endpoint.is_some())
+        .unwrap_or_else(|| metadata.registration_endpoint.is_some());
     Ok(RegistrationOptions {
-        dynamic_registration: metadata.registration_endpoint.is_some(),
+        dynamic_registration,
     })
 }
 
@@ -421,7 +544,7 @@ fn register_client(
     redirect_uri: &str,
     supplied_client_id: Option<&str>,
     scopes: Option<&str>,
-) -> Result<String, String> {
+) -> Result<RegisteredOAuthClient, String> {
     register_client_with(
         metadata,
         redirect_uri,
@@ -431,13 +554,18 @@ fn register_client(
     )
 }
 
+struct RegisteredOAuthClient {
+    client_id: String,
+    client_secret: Option<String>,
+}
+
 fn register_client_with(
     metadata: &ServerMetadata,
     redirect_uri: &str,
     supplied_client_id: Option<&str>,
     scopes: Option<&str>,
     mut post: impl FnMut(&str, Value) -> Result<Value, String>,
-) -> Result<String, String> {
+) -> Result<RegisteredOAuthClient, String> {
     if let Some(endpoint) = metadata.registration_endpoint.as_deref() {
         let mut request = json!({
             "client_name":"OdeKrai",
@@ -451,15 +579,32 @@ fn register_client_with(
             request["scope"] = Value::String(scopes.to_owned());
         }
         let response = post(endpoint, request)?;
-        return response
+        let client_id = response
             .get("client_id")
             .and_then(Value::as_str)
             .filter(|id| !id.is_empty() && id.len() <= 2048 && !id.chars().any(char::is_control))
             .map(str::to_owned)
             .ok_or_else(|| "O registro OAuth não retornou um client_id válido.".into());
+        let client_id = client_id?;
+        let client_secret = response
+            .get("client_secret")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        if client_secret.as_ref().is_some_and(|secret| {
+            secret.is_empty() || secret.len() > 16_384 || secret.chars().any(char::is_control)
+        }) {
+            return Err("O registro OAuth retornou um segredo de cliente inválido.".into());
+        }
+        return Ok(RegisteredOAuthClient {
+            client_id,
+            client_secret,
+        });
     }
     if let Some(client_id) = supplied_client_id {
-        return validate_client_id(client_id);
+        return Ok(RegisteredOAuthClient {
+            client_id: validate_client_id(client_id)?,
+            client_secret: None,
+        });
     }
     if metadata.client_id_metadata_document_supported {
         return Err("Este servidor OAuth usa um formato de identificador de cliente ainda não suportado pelo OdeKrai.".into());
@@ -679,18 +824,23 @@ fn exchange_code(
     redirect_uri: &str,
     verifier: &str,
     resource: &str,
+    client_secret: Option<&str>,
 ) -> Result<(String, Option<String>, Instant), String> {
     let endpoint = validate_https(&metadata.token_endpoint)?;
+    let mut form = vec![
+        ("grant_type", "authorization_code"),
+        ("code", code),
+        ("redirect_uri", redirect_uri),
+        ("client_id", client_id),
+        ("code_verifier", verifier),
+        ("resource", resource),
+    ];
+    if let Some(secret) = client_secret {
+        form.push(("client_secret", secret));
+    }
     let response = client
         .post(endpoint.clone())
-        .form(&[
-            ("grant_type", "authorization_code"),
-            ("code", code),
-            ("redirect_uri", redirect_uri),
-            ("client_id", client_id),
-            ("code_verifier", verifier),
-            ("resource", resource),
-        ])
+        .form(&form)
         .send()
         .map_err(|_| "Falha de rede ao trocar o código OAuth.".to_string())?;
     reject_redirect(response.status())?;
@@ -742,14 +892,28 @@ pub(crate) fn refresh_access(server_id: &str) -> Result<OAuthAccessToken, String
         .ok_or("O servidor não forneceu refresh token. Conecte novamente pelo botão OAuth.")?;
     let endpoint = validate_https(&stored.token_endpoint)?;
     let client = safe_http()?;
+    let client_secret = if let Some(secret) = stored.client_secret.clone() {
+        Some(secret)
+    } else {
+        stored
+            .service
+            .as_deref()
+            .map(load_public_client_secret)
+            .transpose()?
+            .flatten()
+    };
+    let mut form = vec![
+        ("grant_type", "refresh_token"),
+        ("refresh_token", refresh_token.as_str()),
+        ("client_id", stored.client_id.as_str()),
+        ("resource", stored.resource.as_str()),
+    ];
+    if let Some(secret) = client_secret.as_deref() {
+        form.push(("client_secret", secret));
+    }
     let response = client
         .post(endpoint.clone())
-        .form(&[
-            ("grant_type", "refresh_token"),
-            ("refresh_token", refresh_token.as_str()),
-            ("client_id", stored.client_id.as_str()),
-            ("resource", stored.resource.as_str()),
-        ])
+        .form(&form)
         .send()
         .map_err(|_| {
             "Falha de rede ao renovar a autorização MCP. Conecte novamente.".to_string()
@@ -888,6 +1052,33 @@ fn run_authorization(
     requested_scopes: Option<&str>,
 ) -> Result<(StoredOAuth, OAuthAccessToken), String> {
     let endpoint = crate::mcp_http::validate_endpoint(endpoint)?;
+    let (service, service_config) = oauth_service_for_endpoint(endpoint.as_str())?
+        .map(|(service, config)| (Some(service), Some(config)))
+        .unwrap_or((None, None));
+    let (effective_client_id, client_secret) = if let (Some(service), Some(config)) =
+        (service.as_deref(), service_config.as_ref())
+    {
+        let configured_id = config.client_id.trim();
+        if configured_id.is_empty() && !config.dynamic_registration {
+            return Err(format!(
+                "Este serviço ainda não foi configurado para o OdeKrai. Consulte o guia oficial: {}.",
+                config.guide_url
+            ));
+        }
+        let secret = if config.client_secret_required && !configured_id.is_empty() {
+            Some(load_public_client_secret(service)?.ok_or(
+                "Cadastre o segredo OAuth deste serviço antes de conectar.",
+            )?)
+        } else {
+            None
+        };
+        (
+            (!configured_id.is_empty()).then(|| configured_id.to_owned()),
+            secret,
+        )
+    } else {
+        (supplied_client_id.map(str::to_owned), None)
+    };
     let client = safe_http()?;
     let (resource_metadata, challenge) = discover_resource_metadata(&client, &endpoint)?;
     let resource = resource_metadata
@@ -898,7 +1089,12 @@ fn run_authorization(
     if resource != endpoint.as_str() {
         return Err("O recurso OAuth anunciado não corresponde ao endpoint MCP cadastrado.".into());
     }
-    let (issuer, metadata) = discover_authorization_server(&client, &resource_metadata)?;
+    let (issuer, mut metadata) = discover_authorization_server(&client, &resource_metadata)?;
+    if service_config.as_ref().is_some_and(|config| {
+        !config.dynamic_registration || effective_client_id.is_some()
+    }) {
+        metadata.registration_endpoint = None;
+    }
     let listener = TcpListener::bind(("127.0.0.1", 0))
         .map_err(|_| "Não foi possível abrir a porta local de retorno OAuth.".to_string())?;
     let port = listener
@@ -907,11 +1103,11 @@ fn run_authorization(
         .port();
     let redirect_uri = format!("http://127.0.0.1:{port}/callback");
     let requested_scopes = normalize_scopes(requested_scopes)?;
-    let client_id = register_client(
+    let registered_client = register_client(
         &client,
         &metadata,
         &redirect_uri,
-        supplied_client_id,
+        effective_client_id.as_deref(),
         requested_scopes.as_deref(),
     )?;
     let discovered_scope = scope_from_challenge(&challenge, &resource_metadata);
@@ -920,7 +1116,7 @@ fn run_authorization(
     let state = random_token()?;
     let auth_url = build_authorization_url(
         &metadata,
-        &client_id,
+        &registered_client.client_id,
         &redirect_uri,
         &state,
         &pkce_challenge(&verifier),
@@ -934,19 +1130,26 @@ fn run_authorization(
         &issuer,
         metadata.issuer_parameter_supported,
     )?;
+    let effective_client_secret = registered_client
+        .client_secret
+        .as_deref()
+        .or(client_secret.as_deref());
     let (access_token, refresh_token, expires_at) = exchange_code(
         &client,
         &metadata,
-        &client_id,
+        &registered_client.client_id,
         &code,
         &redirect_uri,
         &verifier,
         &resource,
+        effective_client_secret,
     )?;
     let stored = StoredOAuth {
         issuer,
         resource,
-        client_id,
+        client_id: registered_client.client_id,
+        client_secret: registered_client.client_secret,
+        service,
         token_endpoint: metadata.token_endpoint,
         revocation_endpoint: metadata.revocation_endpoint,
         refresh_token,
@@ -1017,10 +1220,118 @@ pub async fn mcp_oauth_registration_options(
         .map_err(|_| "A verificação das opções OAuth foi interrompida.".to_string())?
 }
 
+#[tauri::command]
+pub fn mcp_oauth_public_client_settings(
+    caller: tauri::WebviewWindow,
+    service: String,
+) -> Result<PublicOAuthClientSettings, String> {
+    crate::require_main(&caller)?;
+    let catalog = oauth_client_catalog()?;
+    let definition = catalog
+        .services
+        .get(&service)
+        .ok_or("Serviço OAuth público desconhecido.")?;
+    Ok(PublicOAuthClientSettings {
+        service: service.clone(),
+        client_id: definition.client_id.clone(),
+        guide_url: definition.guide_url.clone(),
+        dynamic_registration: definition.dynamic_registration,
+        client_secret_required: definition.client_secret_required,
+        client_secret_saved: load_public_client_secret(&service)?.is_some(),
+    })
+}
+
+#[tauri::command]
+pub fn mcp_oauth_save_public_client_secret(
+    caller: tauri::WebviewWindow,
+    service: String,
+    secret: String,
+) -> Result<(), String> {
+    crate::require_main(&caller)?;
+    let catalog = oauth_client_catalog()?;
+    let definition = catalog
+        .services
+        .get(&service)
+        .ok_or("Serviço OAuth público desconhecido.")?;
+    if !definition.client_secret_required || definition.client_id.trim().is_empty() {
+        return Err("Este serviço ainda não aceita um segredo OAuth neste aplicativo.".into());
+    }
+    if secret.trim().is_empty() || secret.len() > 16_384 || secret.chars().any(char::is_control) {
+        return Err("Informe um segredo OAuth válido.".into());
+    }
+    store_public_client_secret(&service, &secret)
+}
+
+#[tauri::command]
+pub fn mcp_oauth_remove_public_client_secret(
+    caller: tauri::WebviewWindow,
+    service: String,
+) -> Result<(), String> {
+    crate::require_main(&caller)?;
+    let catalog = oauth_client_catalog()?;
+    if !catalog.services.contains_key(&service) {
+        return Err("Serviço OAuth público desconhecido.".into());
+    }
+    remove_public_client_secret(&service)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::VecDeque;
+
+    #[test]
+    fn embedded_public_oauth_clients_have_no_secrets_and_only_allowlisted_https_guides() {
+        let catalog = oauth_client_catalog().expect("catálogo OAuth válido");
+        assert_eq!(catalog.services.len(), 5);
+        for name in ["github", "figma", "lovable", "notion", "google"] {
+            assert!(catalog.services.contains_key(name), "serviço ausente: {name}");
+        }
+        for definition in catalog.services.values() {
+            assert!(definition.client_id.is_empty());
+            validate_guide_url(&definition.guide_url, &catalog.allowed_guide_domains).unwrap();
+        }
+        let raw: Value = serde_json::from_str(OAUTH_CLIENTS_JSON).unwrap();
+        for service in raw["services"].as_object().unwrap().values() {
+            assert!(service.get("clientSecret").is_none());
+            assert!(service.get("client_secret").is_none());
+        }
+        let public_view = serde_json::to_string(&PublicOAuthClientSettings {
+            service: "google".into(),
+            client_id: String::new(),
+            guide_url: concat!(
+                "https://developers.google.com/workspace/",
+                "guides/configure-mcp-servers"
+            )
+            .into(),
+            dynamic_registration: false,
+            client_secret_required: true,
+            client_secret_saved: true,
+        })
+        .unwrap();
+        assert!(!public_view.contains("client-secret-fixture"));
+    }
+
+    #[test]
+    fn oauth_guide_urls_reject_http_and_unlisted_hosts() {
+        let allowed = vec!["docs.example.test".to_string()];
+        assert!(validate_guide_url("http://docs.example.test/oauth", &allowed).is_err());
+        assert!(validate_guide_url("https://attacker.example/oauth", &allowed).is_err());
+        assert!(validate_guide_url("https://docs.example.test/oauth", &allowed).is_ok());
+    }
+
+    #[test]
+    fn oauth_public_service_mapping_uses_exact_catalog_endpoints() {
+        assert_eq!(
+            oauth_service_for_endpoint("https://sheetsmcp.googleapis.com/mcp/v1")
+                .unwrap()
+                .map(|(service, _)| service),
+            Some("google".to_string())
+        );
+        assert!(oauth_service_for_endpoint("https://evil.example/mcp")
+            .unwrap()
+            .is_none());
+    }
 
     struct SimulatedRevocationServer {
         statuses: std::collections::VecDeque<Result<StatusCode, ()>>,
@@ -1047,6 +1358,8 @@ mod tests {
             issuer: "https://auth.example".into(),
             resource: "https://mcp.example/mcp".into(),
             client_id: "public-client".into(),
+            client_secret: None,
+            service: None,
             token_endpoint: "https://auth.example/token".into(),
             revocation_endpoint: Some("https://auth.example/revoke".into()),
             refresh_token: Some("refresh-secret-fixture".into()),
@@ -1055,15 +1368,17 @@ mod tests {
 
     #[test]
     fn debug_redacts_refresh_and_access_tokens() {
-        let stored = stored_oauth();
+        let mut stored = stored_oauth();
+        stored.client_secret = Some("client-secret-fixture".into());
         let access = OAuthAccessToken {
             value: "access-secret-fixture".into(),
             expires_at: Instant::now(),
         };
         let debug = format!("{stored:?} {access:?}");
         assert!(!debug.contains("refresh-secret-fixture"));
+        assert!(!debug.contains("client-secret-fixture"));
         assert!(!debug.contains("access-secret-fixture"));
-        assert_eq!(debug.matches("[REDACTED]").count(), 2);
+        assert_eq!(debug.matches("[REDACTED]").count(), 3);
     }
 
     #[test]
@@ -1156,7 +1471,7 @@ mod tests {
     fn dynamic_registration_does_not_require_client_id_and_uses_returned_id() {
         let metadata = registration_metadata(Some("https://auth.example/register"));
         let mut posted = false;
-        let client_id = register_client_with(
+        let client = register_client_with(
             &metadata,
             "http://127.0.0.1:43210/callback",
             None,
@@ -1166,12 +1481,19 @@ mod tests {
                 assert_eq!(endpoint, "https://auth.example/register");
                 assert!(body.get("client_id").is_none());
                 assert_eq!(body["scope"], "pages:read");
-                Ok(json!({"client_id":"registered-client"}))
+                Ok(json!({
+                    "client_id":"registered-client",
+                    "client_secret":"registered-secret-fixture"
+                }))
             },
         )
         .unwrap();
         assert!(posted);
-        assert_eq!(client_id, "registered-client");
+        assert_eq!(client.client_id, "registered-client");
+        assert_eq!(
+            client.client_secret.as_deref(),
+            Some("registered-secret-fixture")
+        );
     }
 
     #[test]
@@ -1191,7 +1513,7 @@ mod tests {
     #[test]
     fn supplied_client_id_is_used_when_dynamic_registration_is_unavailable() {
         let metadata = registration_metadata(None);
-        let client_id = register_client_with(
+        let client = register_client_with(
             &metadata,
             "http://127.0.0.1:43210/callback",
             Some("manual-client"),
@@ -1199,7 +1521,8 @@ mod tests {
             |_, _| panic!("registro dinâmico não deve ser chamado"),
         )
         .unwrap();
-        assert_eq!(client_id, "manual-client");
+        assert_eq!(client.client_id, "manual-client");
+        assert!(client.client_secret.is_none());
     }
 
     #[test]

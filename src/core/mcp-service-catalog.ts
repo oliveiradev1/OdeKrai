@@ -3,6 +3,19 @@ import catalog from './mcp-service-catalog.json';
 export type PublicMcpCatalogEntry = (typeof catalog)[number];
 export type PublicMcpStatus = 'available' | 'configured' | 'connected' | 'not_available';
 export type OAuthRegistrationOptions = { dynamicRegistration: boolean };
+export type PublicOAuthClientSettings = {
+  service: string;
+  clientId: string;
+  guideUrl: string;
+  dynamicRegistration: boolean;
+  clientSecretRequired: boolean;
+  clientSecretSaved: boolean;
+};
+
+export function publicOAuthServiceKey(service: PublicMcpCatalogEntry): string {
+  if (service.supplier === 'Google Workspace') return 'google';
+  return service.name.toLocaleLowerCase('en-US');
+}
 
 export function canConnectWithOAuth(
   options: OAuthRegistrationOptions | null,
@@ -12,12 +25,24 @@ export function canConnectWithOAuth(
   return !busy && options !== null && (options.dynamicRegistration || Boolean(clientId.trim()));
 }
 
+export function canConnectToPublicOAuth(
+  settings: PublicOAuthClientSettings | null,
+  options: OAuthRegistrationOptions | null,
+  busy = false,
+): boolean {
+  if (busy || !settings || !options) return false;
+  if (!settings.clientId.trim()) {
+    return settings.dynamicRegistration && options.dynamicRegistration;
+  }
+  return !settings.clientSecretRequired || settings.clientSecretSaved;
+}
+
 export function oauthClientIdHelp(
   service: PublicMcpCatalogEntry,
   options: OAuthRegistrationOptions | null,
 ): string | null {
   if (!options || options.dynamicRegistration) return null;
-  return `Este servidor exige um identificador de cliente. Veja a documentação do serviço (${service.documentationUrl}) para criá-lo.`;
+  return `Este serviço ainda não foi configurado para o OdeKrai. Veja o guia (${service.documentationUrl}).`;
 }
 
 export type PublicMcpServer = {

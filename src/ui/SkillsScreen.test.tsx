@@ -380,13 +380,27 @@ describe('catálogo de habilidades', () => {
     expect(source).toContain('endpoint !== service.endpoint');
   });
 
-  it('liga as opções OAuth consultadas no Rust aos campos opcionais de client ID e escopos', () => {
+  it('lê o cliente OAuth público do Rust e guarda segredo apenas no Credential Manager', () => {
     const source = readFileSync(new URL('./SkillsScreen.tsx', import.meta.url), 'utf8');
     expect(source).toContain("invoke<OAuthRegistrationOptions>('mcp_oauth_registration_options'");
-    expect(source).toContain('Identificador do cliente OAuth');
+    expect(source).toContain(
+      "invoke<PublicOAuthClientSettings>('mcp_oauth_public_client_settings'",
+    );
+    expect(source).toContain("invoke('mcp_oauth_save_public_client_secret'");
+    expect(source).toContain("invoke('mcp_oauth_remove_public_client_secret'");
+    expect(source).toContain('Este serviço ainda não foi configurado para o OdeKrai. Veja o guia');
+    expect(source).toContain(
+      '!oauthClientSettings.clientId.trim() && !oauthClientSettings.dynamicRegistration',
+    );
+    expect(source).toMatch(
+      /<Button type="button" variant="secondary" disabled>\s*Conectar\s*<\/Button>/,
+    );
+    expect(source).toContain('Segredo do cliente OAuth');
+    expect(source).toContain('autoComplete="off"');
+    expect(source).toContain("setClientSecret('')");
     expect(source).toContain('Escopos OAuth (opcional)');
     expect(source).toContain('canConnectWithOAuth(registrationOptions, clientId, busy)');
-    expect(source).toContain('oauthClientIdHelp(service, registrationOptions)');
+    expect(source).not.toContain('clientSecretSaved && clientSecret');
   });
 
   it('não confunde servidor salvo com conexão MCP aprovada pelo teste', () => {

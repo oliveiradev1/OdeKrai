@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { canConnectWithOAuth, getPublicMcpStatus, oauthClientIdHelp } from './mcp-service-catalog';
+import { readFileSync } from 'node:fs';
+import {
+  canConnectToPublicOAuth,
+  canConnectWithOAuth,
+  getPublicMcpStatus,
+  oauthClientIdHelp,
+  publicOAuthServiceKey,
+} from './mcp-service-catalog';
 import catalog from './mcp-service-catalog.json';
 
 describe('catálogo público de servidores MCP', () => {
@@ -103,12 +110,88 @@ describe('catálogo público de servidores MCP', () => {
     expect(oauthClientIdHelp(notion, { dynamicRegistration: true })).toBeNull();
     expect(canConnectWithOAuth({ dynamicRegistration: false }, '')).toBe(false);
     expect(oauthClientIdHelp(notion, { dynamicRegistration: false })).toContain(
-      'Este servidor exige um identificador de cliente. Veja a documentação do serviço',
+      'Este serviço ainda não foi configurado para o OdeKrai. Veja o guia',
     );
     expect(oauthClientIdHelp(notion, { dynamicRegistration: false })).toContain(
       notion.documentationUrl,
     );
     expect(canConnectWithOAuth({ dynamicRegistration: false }, 'manual-client')).toBe(true);
+    expect(oauthClientIdHelp(notion, { dynamicRegistration: false })).toContain(
+      'Este serviço ainda não foi configurado para o OdeKrai. Veja o guia',
+    );
+  });
+
+  it('mapeia os serviços públicos para as chaves do recurso OAuth e bloqueia IDs vazios', () => {
+    const google = catalog.find(({ name }) => name === 'Google Calendar');
+    const github = catalog.find(({ name }) => name === 'GitHub');
+    const notion = catalog.find(({ name }) => name === 'Notion');
+    if (!google || !github || !notion) throw new Error('Serviço esperado ausente do catálogo.');
+
+    expect(publicOAuthServiceKey(google)).toBe('google');
+    expect(publicOAuthServiceKey(github)).toBe('github');
+    expect(publicOAuthServiceKey(notion)).toBe('notion');
+    expect(canConnectWithOAuth({ dynamicRegistration: false }, '')).toBe(false);
+    expect(canConnectWithOAuth({ dynamicRegistration: false }, 'public-client')).toBe(true);
+    expect(canConnectWithOAuth({ dynamicRegistration: true }, '')).toBe(true);
+    const blankStaticSettings = {
+      service: 'google',
+      clientId: '',
+      guideUrl: 'https://developers.google.com/workspace/guides/configure-mcp-servers',
+      dynamicRegistration: false,
+      clientSecretRequired: true,
+      clientSecretSaved: false,
+    };
+    expect(canConnectToPublicOAuth(blankStaticSettings, { dynamicRegistration: false })).toBe(
+      false,
+    );
+    expect(
+      canConnectToPublicOAuth(
+        { ...blankStaticSettings, clientId: 'public-client' },
+        { dynamicRegistration: false },
+      ),
+    ).toBe(false);
+    expect(
+      canConnectToPublicOAuth(
+        { ...blankStaticSettings, clientId: 'public-client', clientSecretSaved: true },
+        { dynamicRegistration: false },
+      ),
+    ).toBe(true);
+    expect(
+      canConnectToPublicOAuth(
+        { ...blankStaticSettings, dynamicRegistration: true, clientSecretRequired: false },
+        { dynamicRegistration: true },
+      ),
+    ).toBe(true);
+  });
+
+  it('mantém IDs vazios e guias HTTPS em domínios explicitamente permitidos no recurso Rust', () => {
+    const oauth = JSON.parse(
+      readFileSync(
+        new URL('../../src-tauri/resources/oauth-clients.json', import.meta.url),
+        'utf8',
+      ),
+    ) as {
+      allowedGuideDomains: string[];
+      services: Record<
+        string,
+        { clientId: string; guideUrl: string; clientSecret?: string; client_secret?: string }
+      >;
+    };
+    expect(Object.keys(oauth.services).sort()).toEqual([
+      'figma',
+      'github',
+      'google',
+      'lovable',
+      'notion',
+    ]);
+    for (const service of Object.values(oauth.services)) {
+      const guide = new URL(service.guideUrl);
+      expect(service.clientId).toBe('');
+      expect(guide.protocol).toBe('https:');
+      expect(oauth.allowedGuideDomains).toContain(guide.hostname);
+      expect(service).not.toHaveProperty('clientSecret');
+      expect(service).not.toHaveProperty('client_secret');
+    }
   });
 
   it('mantém Notion como configurado até o OAuth e o teste MCP concluírem', () => {
