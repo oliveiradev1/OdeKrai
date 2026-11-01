@@ -1962,7 +1962,7 @@ async fn execute_cloud_skill(
                             });
                         }
                     }
-                }
+                };
             }
             value
         }
