@@ -49,6 +49,9 @@ jobs:
       - name: Verificar consistência da versão
         run: npm run check:version
 
+      - name: Verificar fontes e domínios do catálogo MCP
+        run: npm run check:mcp-catalog
+
       - name: Executar testes
         run: npm test
 
