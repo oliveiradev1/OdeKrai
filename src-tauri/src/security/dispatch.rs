@@ -306,7 +306,6 @@ fn validate_required_confirmation(
     Ok(())
 }
 
-#[cfg(test)]
 fn validate_project_removal_confirmation(
     action: &SimulatedAction,
     supplied: Option<&str>,
