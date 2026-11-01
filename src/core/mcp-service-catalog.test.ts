@@ -93,12 +93,14 @@ describe('catálogo público de servidores MCP', () => {
     );
   });
 
-  it('documenta o registro OAuth dinâmico do Notion e orienta o fluxo', () => {
+  it('documenta somente OAuth com PKCE e registro dinâmico como ação do Notion', () => {
     const notion = catalog.find(({ name }) => name === 'Notion');
     expect(notion?.authentication).toContain('registro dinâmico de cliente');
+    expect(notion?.authenticationMethods).toEqual(['oauth']);
     expect(notion?.oauthRegistrationNote).toContain('identificador é recebido durante a conexão');
     expect(notion?.oauthSteps).toHaveLength(4);
-    expect(notion?.oauthSteps?.[1]).toContain('não confirma essa alternativa');
+    expect(notion?.oauthSteps?.[1]).toContain('registration_endpoint');
+    expect(notion?.oauthSteps?.[1]).toContain('não é necessário configurar client ID');
     expect(notion?.documentationUrl).toBe(
       'https://developers.notion.com/guides/mcp/build-mcp-client',
     );
@@ -268,5 +270,6 @@ describe('catálogo público de servidores MCP', () => {
       ]),
     ).toBe('connected');
     expect(notion.oauthRegistrationNote).toContain('o identificador é recebido durante a conexão');
+    expect(notion.authenticationMethods).toEqual(['oauth']);
   });
 });

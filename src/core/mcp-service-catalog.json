@@ -111,12 +111,12 @@
     "documentationUrl": "https://developers.notion.com/guides/mcp/build-mcp-client",
     "endpoint": "https://mcp.notion.com/mcp",
     "transport": "Streamable HTTP",
-    "authentication": "OAuth 2.0 com PKCE e registro dinâmico de cliente; token Bearer MCP também disponível em planos Business e Enterprise",
-    "authenticationMethods": ["oauth", "bearer"],
+    "authentication": "OAuth 2.0 com PKCE e registro dinâmico de cliente",
+    "authenticationMethods": ["oauth"],
     "oauthSteps": [
-      "Verifique as opções OAuth do endpoint oficial.",
-      "OAuth com client ID só é necessário se o servidor não anunciar registro dinâmico; a documentação consultada do Notion não confirma essa alternativa para o serviço.",
-      "Conecte e autorize o OdeKrai no navegador.",
+      "O OdeKrai verifica os metadados OAuth do endpoint oficial.",
+      "Se houver registration_endpoint, o OdeKrai registra o cliente automaticamente; não é necessário configurar client ID.",
+      "Autorize o OdeKrai no navegador usando OAuth 2.0 com PKCE.",
       "Volte ao OdeKrai para testar a conexão MCP."
     ],
     "oauthRegistrationNote": "A documentação oficial do Notion confirma o registro dinâmico de cliente; o identificador é recebido durante a conexão.",
