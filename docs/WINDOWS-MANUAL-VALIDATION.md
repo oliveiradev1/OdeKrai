@@ -37,6 +37,44 @@ Use o executável Tauri gerado para Windows, com o mesmo perfil, escala de tela,
 
 Execute os casos abaixo no executável Windows. Use uma credencial descartável de teste, sem permissões de escrita, e remova-a ao terminar. Não cole tokens em capturas, relatórios ou diagnósticos. OAuth do Notion usa uma conta de teste autorizada. Os testes automatizados correspondentes usam dados e servidores simulados; não fazem chamadas reais.
 
+### Fluxo OAuth iniciado por Conectar
+
+Este roteiro usa contas de teste. “Um clique” descreve o início do OAuth no serviço; preparação de client ID, segredo, inscrição em preview ou verificação de metadados ainda pode ser necessária. Os cartões só devem exibir **Conectado** depois que o teste MCP concluir.
+
+#### GitHub
+
+Pré-requisito: o build de teste contém o client ID OAuth do GitHub e o segredo do aplicativo foi salvo no Gerenciador de Credenciais. Neste checkout o client ID distribuído está vazio; sem a configuração do desenvolvedor, registre como bloqueio de pré-requisito, sem tentar autenticar.
+
+| Passo | Ação                                                                                                                     | Resultado esperado                                                                                                                                        |
+| ----- | ------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1     | Em **Habilidades > Públicas**, no cartão GitHub, clique **Conectar**.                                                    | O cartão anuncia **Conectando** e desativa o botão enquanto abre o navegador do sistema.                                                                  |
+| 2     | Na página oficial do GitHub, confira o aplicativo e o escopo solicitado (`read:user`), depois autorize a conta de teste. | O GitHub retorna ao OdeKrai; o token não aparece na interface. Se o consentimento for cancelado, o cartão não fica conectado e mostra uma mensagem curta. |
+| 3     | Aguarde o teste do servidor MCP.                                                                                         | Após handshake e listagem bem-sucedidos, o cartão mostra **Conectado** e a conta. Se falhar, mostra **Erro** e não o corpo bruto da resposta.             |
+
+Alternativa PAT: em **Ações > Usar token**, salve um PAT fine-grained descartável e clique **Conectar**. Resultado esperado: o token é limpo do campo e o estado só vira conectado depois do teste. Remova o token ao terminar.
+
+#### Notion
+
+Pré-requisito: conta de teste autorizada e acesso à página oficial de consentimento. O guia do Notion descreve OAuth 2.0 com PKCE e registro dinâmico de cliente.
+
+| Passo | Ação                                                                                       | Resultado esperado                                                                                                                                                                                   |
+| ----- | ------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1     | No cartão Notion, abra **Ações > Configurar serviço** e clique **Verificar opções OAuth**. | O cartão confirma registro dinâmico se os metadados do endpoint realmente anunciarem `registration_endpoint`; caso contrário, orienta a consultar o guia e não finge que a configuração está pronta. |
+| 2     | Clique **Conectar** e aprove o OdeKrai na página oficial do Notion.                        | O OdeKrai registra o cliente quando anunciado, valida `state` e recebe o retorno no loopback local de uso único. Não é solicitado client ID manual para registro dinâmico.                           |
+| 3     | Aguarde o teste MCP.                                                                       | **Conectado** aparece só depois do handshake e de `tools/list`; as ferramentas continuam desativadas até serem ativadas separadamente.                                                               |
+
+#### Google Calendar (Developer Preview)
+
+Pré-requisito: inscrição aprovada no Google Workspace Developer Preview, projeto e cliente OAuth Web criados pelo desenvolvedor, client ID embutido no build e segredo salvo no Gerenciador de Credenciais. Neste checkout o client ID está vazio; sem um build configurado, registre os passos seguintes como bloqueados pelo pré-requisito.
+
+| Passo | Ação                                                                                                                  | Resultado esperado                                                                                                                                                |
+| ----- | --------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1     | No cartão **Google Calendar**, abra **Ações > Configurar serviço**; confira o client ID e salve o segredo do cliente. | O campo do segredo limpa após salvar; o valor não volta a ser exibido. Sem client ID ou segredo, a conexão não começa.                                            |
+| 2     | Clique **Conectar** e, na página Google, aprove os escopos de leitura listados no cartão.                             | O navegador retorna ao app e a conexão prossegue usando o client ID do desenvolvedor; não há autorização incremental.                                             |
+| 3     | Aguarde o teste MCP.                                                                                                  | **Conectado** aparece após handshake e listagem de ferramentas. Se a inscrição Preview ou o OAuth forem recusados, o cartão mostra **Erro** sem declarar conexão. |
+
+Fontes oficiais e data da consulta: [GitHub MCP](https://docs.github.com/en/copilot/how-tos/copilot-in-your-ide/customize-copilot/extend-copilot-with-tools-and-context/set-up-the-github-mcp-server), [Notion MCP](https://developers.notion.com/guides/mcp/build-mcp-client), [Google Calendar MCP](https://developers.google.com/workspace/calendar/api/guides/configure-mcp-server) e [OAuth desktop do Google](https://developers.google.com/identity/protocols/oauth2/native-app) — consultadas em 1º de novembro de 2026. Os fluxos reais com contas e os passos visuais continuam pendentes de validação no Windows.
+
 | Caso                               | Procedimento                                                                                                                                                                                                                          | Resultado esperado                                                                                                                                                                            | Mensagem exibida                                                                                                                                                                                                             |
 | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | GitHub com PAT de teste            | Em Habilidades > Públicas, configure o cartão GitHub usando o endpoint fixo `https://api.githubcopilot.com/mcp/`, salve um PAT fine-grained descartável e teste a conexão. Depois reabra o cartão e confira o gerenciamento do token. | A conexão só aparece como conectada depois de listar ferramentas; o token não reaparece no campo nem no cartão. Ao final, use **Remover token** e confirme que o servidor fica desconectado.  | `Teste MCP concluído.` após sucesso. Em 401 ou 403: `O token foi recusado. Confira se ele tem as permissões e se não expirou.`                                                                                               |
