@@ -1689,11 +1689,9 @@ mod tests {
     fn github_account_rejects_redirect_and_invalid_login() {
         let mut redirected = mock_github_profile(StatusCode::FOUND, br#"{"login":"octocat"}"#);
         redirected.0.url = Url::parse("https://attacker.example/user").unwrap();
-        assert!(
-            github_account_with("access-token-fixture", &mut redirected)
-                .unwrap_err()
-                .contains("redirecionar")
-        );
+        assert!(github_account_with("access-token-fixture", &mut redirected)
+            .unwrap_err()
+            .contains("redirecionar"));
         let mut invalid = mock_github_profile(StatusCode::OK, br#"{"login":"octo cat"}"#);
         assert!(github_account_with("access-token-fixture", &mut invalid).is_err());
     }
