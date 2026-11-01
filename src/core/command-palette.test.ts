@@ -6,6 +6,8 @@ import {
   buildPaletteItems,
   COMMAND_PALETTE_ITEMS,
   dispatchPaletteAction,
+  handleCommandPaletteEscape,
+  handleCommandPaletteShortcut,
   isValidPaletteDestination,
   nextPaletteIndex,
   searchPaletteItems,
@@ -16,6 +18,7 @@ import paletteSource from '../ui/CommandPalette.tsx?raw';
 import aboutSource from '../ui/screens/AboutSettings.tsx?raw';
 import appSource from '../ui/App.tsx?raw';
 import permissionRustSource from '../../src-tauri/src/security/mod.rs?raw';
+import { restoreModalFocus } from '../ui/Modal';
 
 describe('paleta de comandos', () => {
   const items = buildPaletteItems({
@@ -97,6 +100,36 @@ describe('paleta de comandos', () => {
     expect(paletteSource).toContain('role="option"');
     expect(aboutSource).toContain('Ctrl+K');
     expect(appSource).toContain('setCommandPaletteOpen(false)');
+    expect(paletteSource).toContain('handleCommandPaletteEscape');
+  });
+
+  it('abre com Ctrl+K, fecha com Escape e restaura o foco anterior', () => {
+    let open = false;
+    const preventDefault = vi.fn();
+    const triggerFocus = vi.fn();
+    const previousFocus = {
+      isConnected: true,
+      focus: triggerFocus,
+    } as unknown as HTMLElement;
+    const toggled = handleCommandPaletteShortcut(
+      { key: 'k', ctrlKey: true, metaKey: false, preventDefault },
+      () => {
+        open = true;
+      },
+    );
+
+    expect(toggled).toBe(true);
+    expect(open).toBe(true);
+    expect(preventDefault).toHaveBeenCalledOnce();
+
+    const closed = handleCommandPaletteEscape('Escape', () => {
+      open = false;
+      restoreModalFocus(previousFocus);
+    });
+
+    expect(closed).toBe(true);
+    expect(open).toBe(false);
+    expect(triggerFocus).toHaveBeenCalledOnce();
   });
 
   it('navega com setas e envolve o início e o fim da lista', () => {

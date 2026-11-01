@@ -4,6 +4,30 @@ import { defaultProviderSettings, type AppSettings } from './settings';
 export type ProviderDirectoryTab = 'connected' | 'free' | 'all';
 export const providerCardHasManagement = (tab: ProviderDirectoryTab, connected: boolean): boolean =>
   tab === 'connected' && connected;
+
+export function localServiceStatus(
+  online: boolean,
+  modelCount: number,
+  checked: boolean,
+): { label: string; tone: 'connected' | 'warning' | 'disconnected' } {
+  if (!checked) return { label: 'Verificando servidor local…', tone: 'warning' };
+  if (!online) return { label: 'Servidor não encontrado', tone: 'disconnected' };
+  if (modelCount === 0) {
+    return { label: 'Servidor ativo, sem modelo carregado', tone: 'warning' };
+  }
+  return { label: 'Conectado', tone: 'connected' };
+}
+
+export function parseLocalProbePort(
+  value: string,
+): { valid: true; port: number | undefined } | { valid: false } {
+  const trimmed = value.trim();
+  if (!trimmed) return { valid: true, port: undefined };
+  if (!/^\d+$/.test(trimmed)) return { valid: false };
+  const port = Number(trimmed);
+  if (!Number.isSafeInteger(port) || port < 1024 || port > 65535) return { valid: false };
+  return { valid: true, port };
+}
 const PROVIDER_TAB_STORAGE_KEY = 'odekrai.provider-directory.tab';
 
 export function loadProviderDirectoryTab(storage?: Pick<Storage, 'getItem'>): ProviderDirectoryTab {

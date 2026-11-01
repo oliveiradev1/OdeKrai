@@ -1542,12 +1542,41 @@ select:focus-visible {
   background: #0e0f12;
   color: var(--color-text);
 }
-.cloud-shardcloud {
+.cloud-shardcloud,
+.cloud-hostinger,
+.cloud-pending-actions {
   margin: 18px 0;
   border: 1px solid var(--color-border-subtle);
   border-radius: 10px;
   padding: 14px;
   background: var(--color-surface-raised, #15171c);
+}
+.cloud-capability-summary {
+  display: grid;
+  gap: 6px;
+  margin: 12px 0;
+}
+.cloud-capability-summary h4,
+.cloud-capability-summary p {
+  margin: 0;
+}
+.cloud-capability-summary h4 {
+  color: var(--color-text);
+  font-size: 13px;
+}
+.cloud-capability-summary p {
+  color: var(--color-text-muted);
+  line-height: 1.5;
+}
+.cloud-pending-action pre {
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 8px;
+  padding: 10px;
+  background: #0e0f12;
 }
 .cloud-shardcloud-title,
 .cloud-readonly-heading,
@@ -1564,7 +1593,8 @@ select:focus-visible {
   color: var(--color-text);
 }
 .cloud-connected-label,
-.cloud-saved-label {
+.cloud-saved-label,
+.cloud-test-stage-label {
   flex: none;
   border: 1px solid var(--color-border-subtle);
   border-radius: 999px;
@@ -1572,9 +1602,21 @@ select:focus-visible {
   color: var(--color-text-muted);
   font-size: 11px;
 }
+.cloud-test-stage-label {
+  border-color: #754720;
+  color: #ffc18c;
+}
 .cloud-connected-label {
   border-color: #3b765c;
   color: #a8e2bd;
+}
+.cloud-error-label {
+  flex: none;
+  border: 1px solid #8a3c36;
+  border-radius: 999px;
+  padding: 3px 8px;
+  color: #ffb4ab;
+  font-size: 11px;
 }
 .cloud-token-entry {
   display: grid;
@@ -1657,6 +1699,14 @@ select:focus-visible {
 .cloud-vm-result dd {
   margin: 0;
   overflow-wrap: anywhere;
+}
+.cloud-vm-result pre {
+  max-height: 320px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--color-text-muted);
+  font-size: 12px;
 }
 .cloud-provider-list + .cloud-provider-list {
   margin-top: 20px;
@@ -1800,7 +1850,7 @@ select:focus-visible {
 }
 .skills-installed,
 .skills-public-empty,
-.skills-public-sections section,
+.public-mcp-card,
 .skills-family-card {
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-lg);
@@ -2167,22 +2217,200 @@ select:focus-visible {
   color: var(--color-text);
 }
 .skills-public-empty p,
-.skills-public-sections p {
+.public-mcp-card p {
   margin: 0;
   color: var(--color-text-muted);
   font-size: var(--font-size-12);
 }
-.skills-public-sections {
+.public-mcp-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
   gap: var(--space-3);
 }
-.skills-public-sections section {
+.public-mcp-card {
+  display: grid;
+  align-content: start;
+  gap: var(--space-3);
   padding: var(--space-4);
 }
-.skills-public-sections h3 {
-  margin: 0 0 var(--space-2);
+.public-mcp-card-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+.public-mcp-card-heading h3 {
+  margin: 0;
   font-size: var(--font-size-14);
+}
+.public-mcp-card-heading p,
+.public-mcp-connected {
+  margin: var(--space-1) 0 0;
+}
+.public-mcp-program-status {
+  width: fit-content;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-pill);
+  padding: 3px 8px;
+}
+.public-mcp-status {
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-pill);
+  padding: 4px 8px;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-11);
+  text-align: center;
+}
+.public-mcp-status--connected {
+  color: var(--color-success);
+  border-color: var(--color-border-strong);
+}
+.public-mcp-status--connecting {
+  color: var(--color-accent);
+}
+.public-mcp-status--error {
+  color: var(--color-danger);
+  border-color: var(--color-danger);
+}
+.public-mcp-card-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.public-mcp-actions-menu {
+  position: relative;
+}
+.public-mcp-actions-menu summary {
+  cursor: pointer;
+  color: var(--color-text-secondary);
+  padding: 8px 12px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  list-style: none;
+}
+.public-mcp-actions-menu summary::-webkit-details-marker {
+  display: none;
+}
+.public-mcp-actions-menu summary:focus-visible {
+  box-shadow: var(--shadow-focus);
+  outline-offset: 2px;
+}
+.public-mcp-actions-menu-items {
+  position: absolute;
+  z-index: 2;
+  top: calc(100% + 4px);
+  right: 0;
+  display: grid;
+  min-width: 190px;
+  gap: var(--space-1);
+  padding: var(--space-2);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-card);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-card);
+}
+.public-mcp-error {
+  color: var(--color-danger);
+}
+.public-mcp-status--configured {
+  color: var(--color-text-secondary);
+}
+.public-mcp-status--available {
+  color: var(--color-text-secondary);
+}
+.public-mcp-status--not_available {
+  color: var(--color-text-muted);
+}
+.public-mcp-card dl {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  font-size: var(--font-size-12);
+}
+.public-mcp-card dt {
+  color: var(--color-text-muted);
+}
+.public-mcp-card dd {
+  margin: 2px 0 0;
+  overflow-wrap: anywhere;
+}
+.public-mcp-unavailable {
+  border-left: 2px solid var(--color-border-strong);
+  padding-left: var(--space-2);
+}
+.public-mcp-form {
+  display: grid;
+  gap: var(--space-3);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--color-border-subtle);
+}
+.public-mcp-form label {
+  display: grid;
+  gap: var(--space-1);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-12);
+}
+.public-mcp-form input,
+.public-mcp-form select {
+  width: 100%;
+  min-height: 36px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 7px 9px;
+  background: var(--color-surface-raised);
+  color: var(--color-text);
+}
+.public-mcp-form small {
+  color: var(--color-text-muted);
+}
+.public-mcp-oauth-options,
+.public-mcp-oauth-guide,
+.public-mcp-github-oauth,
+.public-mcp-token-guide,
+.public-mcp-token-manager {
+  display: grid;
+  gap: var(--space-2);
+}
+.public-mcp-token-guide ul {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding-left: 1.25rem;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-12);
+}
+.public-mcp-token-manager {
+  border-top: 1px solid var(--color-border-subtle);
+  padding-top: var(--space-3);
+}
+.public-mcp-token-manager label {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-12);
+}
+.public-mcp-token-manager input {
+  width: 100%;
+  min-height: 36px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 7px 9px;
+  background: var(--color-surface-raised);
+  color: var(--color-text);
+}
+.public-mcp-token-manager small {
+  color: var(--color-text-muted);
+}
+.public-mcp-token-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.public-mcp-oauth-guide ol {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding-left: 1.25rem;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-12);
 }
 .skills-catalog-page :is(button, input):focus-visible,
 .skills-tab-panel:focus-visible {
@@ -4600,6 +4828,10 @@ html[data-performance='on'] .free-mode .island-shell {
   background: #ffffff0d;
   color: #aaa7af;
 }
+.provider-badges .provider-badge--warning {
+  background: #f59e0b20;
+  color: #fcd34d;
+}
 .provider-badges .provider-badge--credential,
 .provider-badges .provider-badge--primary,
 .provider-badges .provider-badge--free {
@@ -4645,6 +4877,20 @@ html[data-performance='on'] .free-mode .island-shell {
   color: #e5e7eb;
   cursor: pointer;
   font: 500 11px var(--font-sans);
+}
+.provider-local-free-card > small {
+  display: block;
+  margin: -6px 10px 8px;
+  color: #aaa7af;
+  font-size: 10px;
+  line-height: 1.4;
+}
+.provider-local-free-card .field-label {
+  margin: 0 10px 8px;
+  font-size: 11px;
+}
+.provider-local-free-card .field-label input {
+  height: 30px;
 }
 .provider-actions-menu {
   position: relative;
@@ -6639,6 +6885,20 @@ html[data-performance='on'] .ui-tooltip-content {
 .approval-preview pre {
   max-height: 280px;
   margin: 0;
+}
+.approval-project-confirmation {
+  display: grid;
+  gap: 8px;
+  color: #e6e2f2;
+}
+.approval-project-confirmation input {
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  color: inherit;
+  background: #17151f;
 }
 .approval-window footer {
   display: flex;

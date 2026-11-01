@@ -36,6 +36,38 @@ pub(super) struct FilesSearch;
 pub(super) struct SimulatedSend;
 pub(super) struct SimulatedPayment;
 pub(super) struct Productivity;
+pub(super) struct McpExternalTool;
+
+impl Tool for McpExternalTool {
+    fn name(&self) -> &'static str {
+        "mcp.tool_call"
+    }
+    fn risk(&self, _: &SimulatedAction) -> Risk {
+        Risk::ComunicacaoExterna
+    }
+    fn preview(&self, action: &SimulatedAction, _: &Path) -> Result<String, String> {
+        let SimulatedAction::McpToolCall {
+            server_name,
+            tool_name,
+            params,
+            ..
+        } = action
+        else {
+            return Err("Parâmetros incompatíveis com a chamada MCP.".into());
+        };
+        Ok(format!(
+            "Servidor MCP: {server_name}\nFerramenta: {tool_name}\nArgumentos completos enviados ao servidor após aprovação:\n{}",
+            serde_json::to_string(params)
+                .map_err(|_| "Não foi possível preparar a prévia da ferramenta MCP.".to_string())?
+        ))
+    }
+    fn execute(&self, _: &SimulatedAction, _: &Path) -> Result<String, String> {
+        Err("A execução MCP precisa passar pelo dispatcher de aprovações.".into())
+    }
+    fn timeout(&self) -> Duration {
+        Duration::from_secs(crate::mcp::REQUEST_TIMEOUT_SECONDS)
+    }
+}
 
 impl Tool for WorkspaceRead {
     fn name(&self) -> &'static str {
@@ -610,6 +642,68 @@ impl Tool for Productivity {
             {
                 Risk::EscritaReversivel
             }
+            SimulatedAction::Productivity { skill_id, .. }
+                if matches!(
+                    skill_id.as_str(),
+                    "hostinger.vps_start"
+                        | "hostinger.vps_stop"
+                        | "hostinger.vps_restart"
+                        | "hostinger.docker_start"
+                        | "hostinger.docker_stop"
+                        | "hostinger.docker_restart"
+                        | "hostinger.firewall_create"
+                        | "hostinger.firewall_rule_create"
+                        | "hostinger.firewall_activate"
+                        | "hostinger.firewall_deactivate"
+                        | "hostinger.recovery_start"
+                        | "hostinger.recovery_stop"
+                ) =>
+            {
+                Risk::EscritaReversivel
+            }
+            SimulatedAction::Productivity { skill_id, .. }
+                if skill_id == "hostinger.docker_list" =>
+            {
+                Risk::Leitura
+            }
+            SimulatedAction::Productivity { skill_id, .. }
+                if skill_id == "hostinger.docker_deploy" =>
+            {
+                Risk::ExecucaoDeCodigo
+            }
+            SimulatedAction::Productivity { skill_id, .. }
+                if skill_id == "hostinger.docker_remove" =>
+            {
+                Risk::DestrutivoFinanceiro
+            }
+            SimulatedAction::Productivity { skill_id, .. }
+                if matches!(
+                    skill_id.as_str(),
+                    "hostinger.firewall_list"
+                        | "hostinger.firewall_details"
+                        | "hostinger.ssh_keys_list"
+                ) =>
+            {
+                Risk::Leitura
+            }
+            SimulatedAction::Productivity { skill_id, .. }
+                if matches!(
+                    skill_id.as_str(),
+                    "hostinger.firewall_delete" | "hostinger.firewall_rule_delete"
+                ) =>
+            {
+                Risk::DestrutivoFinanceiro
+            }
+            SimulatedAction::Productivity { skill_id, .. }
+                if skill_id == "hostinger.backup_list" =>
+            {
+                Risk::Leitura
+            }
+            SimulatedAction::Productivity { skill_id, .. }
+                if skill_id == "hostinger.backup_restore" =>
+            {
+                Risk::DestrutivoFinanceiro
+            }
             SimulatedAction::Productivity { skill_id, .. } if skill_id == "shardcloud.vm_exec" => {
                 Risk::ExecucaoDeCodigo
             }
@@ -720,6 +814,9 @@ impl Tool for Productivity {
         if skill_id.starts_with("shardcloud.") {
             return crate::shardcloud::preview_skill(skill_id, params);
         }
+        if skill_id.starts_with("hostinger.") {
+            return crate::hostinger::preview_skill(skill_id, params);
+        }
         if skill_id == "web.fetch" {
             return crate::web_fetch::preview(
                 params["url"].as_str().ok_or("Informe uma URL HTTPS.")?,
@@ -782,6 +879,14 @@ impl Tool for Productivity {
             let cancel = cancel.clone();
             return Box::pin(async move {
                 crate::shardcloud::execute_skill(&app, &skill_id, &params, &cancel).await
+            });
+        }
+        if skill_id.starts_with("hostinger.") {
+            let skill_id = skill_id.clone();
+            let params = params.clone();
+            let app = app.clone();
+            return Box::pin(async move {
+                crate::hostinger::execute_skill(&app, &skill_id, &params).await
             });
         }
         if skill_id == "plan.propose" {
@@ -939,6 +1044,7 @@ impl Tool for Productivity {
 
 pub(super) fn tool_for(action: &SimulatedAction) -> &'static dyn Tool {
     match action {
+        SimulatedAction::McpToolCall { .. } => &McpExternalTool,
         SimulatedAction::FilesList { .. } => &FilesList,
         SimulatedAction::FilesSearch { .. } => &FilesSearch,
         SimulatedAction::FilesRead { .. } => &FilesRead,
@@ -1705,11 +1811,22 @@ pub(super) fn validate_action(action: &SimulatedAction) -> Result<(), String> {
                 return Err("Moeda inválida.".into());
             }
         }
+        SimulatedAction::McpToolCall { params, .. } => {
+            if !params.is_object()
+                || serde_json::to_vec(params).map_or(true, |value| {
+                    value.len() > crate::mcp::MAX_TOOL_ARGUMENT_BYTES
+                })
+            {
+                return Err("Os argumentos da ferramenta MCP excedem os limites locais.".into());
+            }
+        }
         SimulatedAction::Productivity { skill_id, params } => {
             if skill_id.starts_with("files.") {
                 validate_file_skill(skill_id, params)?;
             } else if skill_id.starts_with("shardcloud.") {
                 validate_shardcloud_skill(skill_id, params)?;
+            } else if skill_id.starts_with("hostinger.") {
+                validate_hostinger_skill(skill_id, params)?;
             } else if skill_id == "plan.propose" {
                 super::skills::validate_plan_proposal(params)?;
             } else if skill_id.starts_with("google.calendar.") {
@@ -1718,6 +1835,219 @@ pub(super) fn validate_action(action: &SimulatedAction) -> Result<(), String> {
                 crate::productivity::validate(skill_id, params)?;
             }
         }
+    }
+    Ok(())
+}
+
+fn validate_hostinger_skill(id: &str, params: &serde_json::Value) -> Result<(), String> {
+    let object = params.as_object().ok_or("Parâmetros inválidos.")?;
+    if matches!(
+        id,
+        "hostinger.backup_list" | "hostinger.recovery_start" | "hostinger.recovery_stop"
+    ) {
+        if object.len() != 2
+            || object
+                .keys()
+                .any(|key| !["vm_name", "vm_id"].contains(&key.as_str()))
+        {
+            return Err("Os parâmetros da ação Hostinger não correspondem à habilidade.".into());
+        }
+        let name = object
+            .get("vm_name")
+            .and_then(serde_json::Value::as_str)
+            .ok_or("Informe o nome da VPS.")?;
+        let vm_id = object
+            .get("vm_id")
+            .and_then(serde_json::Value::as_i64)
+            .ok_or("A VPS não foi confirmada pela lista consultada.")?;
+        if name.trim().is_empty() || name.chars().count() > 512 || vm_id <= 0 {
+            return Err("O nome ou identificador da VPS é inválido.".into());
+        }
+        return Ok(());
+    }
+    if id == "hostinger.backup_restore" {
+        if object.len() != 4
+            || object.keys().any(|key| {
+                !["vm_name", "vm_id", "backup_id", "backup_created_at"].contains(&key.as_str())
+            })
+        {
+            return Err("Os parâmetros da restauração não correspondem à habilidade.".into());
+        }
+        let name = object
+            .get("vm_name")
+            .and_then(serde_json::Value::as_str)
+            .ok_or("Informe o nome da VPS.")?;
+        let vm_id = object
+            .get("vm_id")
+            .and_then(serde_json::Value::as_i64)
+            .ok_or("A VPS não foi confirmada pela lista consultada.")?;
+        let backup_id = object
+            .get("backup_id")
+            .and_then(serde_json::Value::as_i64)
+            .ok_or("O backup não foi confirmado pela lista consultada.")?;
+        let created_at = object
+            .get("backup_created_at")
+            .and_then(serde_json::Value::as_str)
+            .ok_or("Informe a data do backup consultado.")?;
+        if name.trim().is_empty()
+            || name.chars().count() > 512
+            || vm_id <= 0
+            || backup_id <= 0
+            || created_at.trim().is_empty()
+            || created_at.len() > 64
+        {
+            return Err("Os dados do backup ou da VPS são inválidos.".into());
+        }
+        return Ok(());
+    }
+    if id == "hostinger.firewall_list" {
+        return if object.is_empty() {
+            Ok(())
+        } else {
+            Err("A lista de firewalls não recebe parâmetros.".into())
+        };
+    }
+    if id == "hostinger.firewall_create" {
+        if object.len() != 1 || !object.contains_key("firewall_name") {
+            return Err("Informe somente o nome do firewall.".into());
+        }
+        let name = object
+            .get("firewall_name")
+            .and_then(serde_json::Value::as_str)
+            .ok_or("Informe o nome do firewall.")?;
+        if name.trim().is_empty() || name.chars().count() > 128 {
+            return Err("O nome do firewall é inválido.".into());
+        }
+        return Ok(());
+    }
+    let firewall_allowed: &[&str] = match id {
+        "hostinger.firewall_details" | "hostinger.firewall_delete" => {
+            &["firewall_name", "firewall_id"]
+        }
+        "hostinger.firewall_rule_create" => &[
+            "firewall_name",
+            "firewall_id",
+            "protocol",
+            "port",
+            "source_cidr",
+        ],
+        "hostinger.firewall_rule_delete" => {
+            &["firewall_name", "firewall_id", "rule_name", "rule_id"]
+        }
+        "hostinger.firewall_activate" | "hostinger.firewall_deactivate" => {
+            &["vm_name", "vm_id", "firewall_name", "firewall_id"]
+        }
+        "hostinger.ssh_keys_list" => &["vm_name", "vm_id"],
+        _ => &[],
+    };
+    if !firewall_allowed.is_empty() {
+        if object.len() != firewall_allowed.len()
+            || object
+                .keys()
+                .any(|key| !firewall_allowed.contains(&key.as_str()))
+        {
+            return Err("Os parâmetros da ação Firewall não correspondem à habilidade.".into());
+        }
+        if let Some(name) = object
+            .get("firewall_name")
+            .and_then(serde_json::Value::as_str)
+        {
+            if name.trim().is_empty() || name.chars().count() > 128 {
+                return Err("O nome do firewall é inválido.".into());
+            }
+        }
+        for id_key in ["firewall_id", "vm_id", "rule_id"] {
+            if object.contains_key(id_key)
+                && object
+                    .get(id_key)
+                    .and_then(serde_json::Value::as_i64)
+                    .is_none_or(|id| id <= 0)
+            {
+                return Err("O identificador da ação Firewall é inválido.".into());
+            }
+        }
+        if let Some(name) = object.get("vm_name").and_then(serde_json::Value::as_str) {
+            if name.trim().is_empty() || name.chars().count() > 512 {
+                return Err("O nome da VPS é inválido.".into());
+            }
+        }
+        if id == "hostinger.firewall_rule_create" {
+            crate::hostinger::validate_skill_firewall_rule(
+                object
+                    .get("protocol")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default(),
+                object
+                    .get("port")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default(),
+                object
+                    .get("source_cidr")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default(),
+            )?;
+        }
+        if id == "hostinger.firewall_rule_delete"
+            && object
+                .get("rule_name")
+                .and_then(serde_json::Value::as_str)
+                .is_none_or(str::is_empty)
+        {
+            return Err("Informe o nome exato da regra consultada.".into());
+        }
+        return Ok(());
+    }
+    let allowed: &[&str] = match id {
+        "hostinger.vps_start"
+        | "hostinger.vps_stop"
+        | "hostinger.vps_restart"
+        | "hostinger.docker_list" => &["vm_name", "vm_id"],
+        "hostinger.docker_start"
+        | "hostinger.docker_stop"
+        | "hostinger.docker_restart"
+        | "hostinger.docker_remove" => &["vm_name", "vm_id", "project_name"],
+        "hostinger.docker_deploy" => &["vm_name", "vm_id", "project_name", "compose_yaml"],
+        _ => return Err("Os parâmetros da ação Hostinger não correspondem à habilidade.".into()),
+    };
+    if object.len() != allowed.len() || object.keys().any(|key| !allowed.contains(&key.as_str())) {
+        return Err("Os parâmetros da ação Hostinger não correspondem à habilidade.".into());
+    }
+    let name = object
+        .get("vm_name")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("Informe o nome da VPS.")?;
+    let vm_id = object
+        .get("vm_id")
+        .and_then(serde_json::Value::as_i64)
+        .ok_or("A VPS não foi confirmada pela lista consultada.")?;
+    if name.trim().is_empty() || name.chars().count() > 512 || vm_id <= 0 {
+        return Err("O nome ou identificador da VPS é inválido.".into());
+    }
+    if id.starts_with("hostinger.docker_") && id != "hostinger.docker_list" {
+        let project = object
+            .get("project_name")
+            .and_then(serde_json::Value::as_str)
+            .ok_or("Informe o nome do projeto Docker.")?;
+        if !(3..=64).contains(&project.len())
+            || !project
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
+        {
+            return Err("O nome do projeto Docker é inválido.".into());
+        }
+    }
+    if id == "hostinger.docker_deploy" {
+        let compose = object
+            .get("compose_yaml")
+            .and_then(serde_json::Value::as_str)
+            .ok_or("Informe o conteúdo do docker-compose.")?;
+        crate::hostinger::validate_skill_compose(
+            object
+                .get("project_name")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default(),
+            compose,
+        )?;
     }
     Ok(())
 }

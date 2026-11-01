@@ -18,11 +18,25 @@ type McpServer = {
   command: string;
   args: string[];
   envNames: string[];
+  transport: 'stdio' | 'streamable_http';
+  endpoint: string | null;
   enabled: boolean;
   status: string;
   error: string | null;
 };
-type McpState = { label: string; tools?: unknown; error?: string };
+type McpToolView = {
+  id: string;
+  serverId: string;
+  serverName: string;
+  name: string;
+  description: string;
+  inputSchema: unknown;
+  riskHint: string | null;
+  available: boolean;
+  reason: string | null;
+  enabled: boolean;
+};
+type McpState = { label: string; tools?: McpToolView[]; error?: string };
 
 export function PrivacyConfigurationSummary({ onOpen }: { onOpen?: () => void }) {
   return (
@@ -31,8 +45,8 @@ export function PrivacyConfigurationSummary({ onOpen }: { onOpen?: () => void })
         <div>
           <h2 id="privacy-summary">Acessos e integrações</h2>
           <p>
-            Pastas, aplicativos, links externos, destinos do Discord e servidores locais são
-            consultados e alterados em Privacidade e permissões.
+            Pastas, aplicativos, links externos, destinos do Discord e servidores MCP locais e
+            remotos são consultados e alterados em Privacidade e permissões.
           </p>
         </div>
         {onOpen && (
@@ -64,6 +78,9 @@ export function PrivacyConfigurations({
   const [serverEnvNames, setServerEnvNames] = useState('');
   const [serverSecrets, setServerSecrets] = useState<Record<string, string>>({});
   const [serverConfirmed, setServerConfirmed] = useState(false);
+  const [remoteName, setRemoteName] = useState('');
+  const [remoteEndpoint, setRemoteEndpoint] = useState('');
+  const [remoteToken, setRemoteToken] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -245,6 +262,7 @@ export function PrivacyConfigurations({
       .map((part) => `"${part.replaceAll('"', '\\"')}"`)
       .join(' ');
     if (
+      server.transport === 'stdio' &&
       !(await confirmAction({
         title: 'Executar programa local?',
         message: `Este programa será executado no seu computador com os privilégios da sua conta.\n\nComando completo:\n${command}\n\nDeseja continuar?`,
@@ -254,7 +272,7 @@ export function PrivacyConfigurations({
       return;
     setServerStates((states) => ({ ...states, [server.id]: { label: 'Conectando…' } }));
     try {
-      const tools = await invoke<unknown>('mcp_test_connection', {
+      const tools = await invoke<McpToolView[]>('mcp_test_connection', {
         serverId: server.id,
         confirmed: true,
       });
@@ -264,6 +282,77 @@ export function PrivacyConfigurations({
         ...states,
         [server.id]: { label: 'Erro', error: String(cause) },
       }));
+    }
+  }
+
+  async function addRemoteServer(): Promise<boolean> {
+    setBusy(true);
+    try {
+      const server = await invoke<McpServer>('mcp_add_http_server', {
+        name: remoteName,
+        endpoint: remoteEndpoint,
+      });
+      try {
+        if (remoteToken) {
+          await invoke('mcp_set_http_token', { serverId: server.id, value: remoteToken });
+          await invoke('mcp_set_enabled', { serverId: server.id, enabled: true });
+        }
+      } catch (cause) {
+        await invoke('mcp_remove_server', { serverId: server.id }).catch(() => undefined);
+        throw cause;
+      }
+      setRemoteName('');
+      setRemoteEndpoint('');
+      setRemoteToken('');
+      await refresh();
+      return true;
+    } catch (cause) {
+      setError(String(cause));
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveRemoteToken(server: McpServer): Promise<boolean> {
+    const token = serverSecrets[`${server.id}:http_bearer`];
+    if (!token) return false;
+    setBusy(true);
+    try {
+      await invoke('mcp_set_http_token', { serverId: server.id, value: token });
+      setServerSecrets((current) => {
+        const next = { ...current };
+        delete next[`${server.id}:http_bearer`];
+        return next;
+      });
+      await refresh();
+      return true;
+    } catch (cause) {
+      setError(String(cause));
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function connectRemoteOAuth(server: McpServer) {
+    setBusy(true);
+    setServerStates((states) => ({ ...states, [server.id]: { label: 'Aguardando autorização…' } }));
+    try {
+      await invoke('mcp_oauth_authorize', { serverId: server.id, clientId: null, scopes: null });
+      const tools = await invoke<McpToolView[]>('mcp_test_connection', {
+        serverId: server.id,
+        confirmed: true,
+      });
+      setServerStates((states) => ({ ...states, [server.id]: { label: 'Conectado', tools } }));
+      await refresh();
+    } catch (cause) {
+      setServerStates((states) => ({
+        ...states,
+        [server.id]: { label: 'Erro', error: String(cause) },
+      }));
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -295,6 +384,25 @@ export function PrivacyConfigurations({
       setError(String(cause));
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function setMcpToolEnabled(serverId: string, toolId: string, enabled: boolean) {
+    try {
+      await invoke('set_skill_enabled', { skillId: toolId, enabled });
+      setServerStates((states) => {
+        const current = states[serverId];
+        if (!current?.tools) return states;
+        return {
+          ...states,
+          [serverId]: {
+            ...current,
+            tools: current.tools.map((tool) => (tool.id === toolId ? { ...tool, enabled } : tool)),
+          },
+        };
+      });
+    } catch (cause) {
+      setError(String(cause));
     }
   }
 
@@ -379,11 +487,11 @@ export function PrivacyConfigurations({
         className="settings-panel settings-section allowed-folders-section"
         aria-labelledby="mcp-heading"
       >
-        <h3 id="mcp-heading">Servidores locais</h3>
+        <h3 id="mcp-heading">Servidores MCP</h3>
         <p>
-          Cadastre servidores locais para inspecionar ferramentas e formatos. Eles não ficam
-          disponíveis ao assistente. O programa cadastrado será executado no seu computador com os
-          privilégios da sua conta.
+          Cadastre servidores locais por stdio ou remotos por Streamable HTTP para inspecionar
+          ferramentas e formatos. Eles não ficam disponíveis ao assistente até serem ativados. O
+          programa local será executado no seu computador com os privilégios da sua conta.
         </p>
         <form
           className="mcp-server-form"
@@ -468,8 +576,57 @@ export function PrivacyConfigurations({
             Adicionar servidor local
           </Button>
         </form>
+        <form
+          className="mcp-server-form"
+          onSubmit={(event) => {
+            void submitSecretForm(event, addRemoteServer, () => setRemoteToken(''));
+          }}
+        >
+          <h4>Servidor remoto (Streamable HTTP)</h4>
+          <p>
+            Somente HTTPS. O endereço e o domínio ficam fixos neste cadastro; respostas do servidor
+            são dados externos não confiáveis.
+          </p>
+          <div className="mcp-settings-grid">
+            <label>
+              Nome
+              <input
+                value={remoteName}
+                onChange={(event) => setRemoteName(event.target.value)}
+                maxLength={80}
+              />
+            </label>
+            <label>
+              Endpoint HTTPS
+              <input
+                type="url"
+                value={remoteEndpoint}
+                onChange={(event) => setRemoteEndpoint(event.target.value)}
+                placeholder="https://servidor.example/mcp"
+              />
+            </label>
+            <label>
+              Token pessoal (opcional; ou conecte por OAuth)
+              <input
+                id="mcp-remote-token-new"
+                name="mcp-remote-token-new"
+                type="password"
+                autoComplete="off"
+                value={remoteToken}
+                onChange={(event) => setRemoteToken(event.target.value)}
+              />
+            </label>
+          </div>
+          <Button
+            type="submit"
+            variant="secondary"
+            disabled={busy || !isTauri() || !remoteName || !remoteEndpoint}
+          >
+            Adicionar servidor remoto
+          </Button>
+        </form>
         <ul className="allowed-folder-list">
-          {servers.length === 0 && <li>Parado · Nenhum servidor local cadastrado.</li>}
+          {servers.length === 0 && <li>Parado · Nenhum servidor MCP cadastrado.</li>}
           {servers.map((server) => {
             const state = serverStates[server.id] ?? {
               label: server.status,
@@ -484,9 +641,15 @@ export function PrivacyConfigurations({
               <li key={server.id}>
                 <div>
                   <strong>{server.name}</strong>
-                  <small className="mcp-server-command">
-                    Comando: <code>{[server.command, ...server.args].join(' ')}</code>
-                  </small>
+                  {server.transport === 'streamable_http' ? (
+                    <small>
+                      Endpoint HTTPS: <code>{server.endpoint}</code>
+                    </small>
+                  ) : (
+                    <small className="mcp-server-command">
+                      Comando: <code>{[server.command, ...server.args].join(' ')}</code>
+                    </small>
+                  )}
                   <small>
                     Estado: <span role="status">{label}</span> ·{' '}
                     {server.enabled ? 'Ativado' : 'Desativado'}
@@ -536,10 +699,101 @@ export function PrivacyConfigurations({
                       </Button>
                     </form>
                   ))}
+                  {server.transport === 'streamable_http' && (
+                    <Button
+                      variant="secondary"
+                      disabled={busy || !isTauri()}
+                      onClick={() => void connectRemoteOAuth(server)}
+                    >
+                      Conectar com OAuth
+                    </Button>
+                  )}
+                  {server.transport === 'streamable_http' && (
+                    <form
+                      className="mcp-env-field"
+                      onSubmit={(event) => {
+                        void submitSecretForm(
+                          event,
+                          () => saveRemoteToken(server),
+                          () =>
+                            setServerSecrets((current) => {
+                              const next = { ...current };
+                              delete next[`${server.id}:http_bearer`];
+                              return next;
+                            }),
+                        );
+                      }}
+                    >
+                      <label htmlFor={`mcp-http-token-${server.id}`}>
+                        Token Bearer · Gerenciador de Credenciais
+                      </label>
+                      <input
+                        id={`mcp-http-token-${server.id}`}
+                        name={`mcp-http-token-${server.id}`}
+                        type="password"
+                        autoComplete="off"
+                        value={serverSecrets[`${server.id}:http_bearer`] ?? ''}
+                        onChange={(event) =>
+                          setServerSecrets((current) => ({
+                            ...current,
+                            [`${server.id}:http_bearer`]: event.target.value,
+                          }))
+                        }
+                      />
+                      <small>Após salvar, o token não volta a ser exibido.</small>
+                      <Button
+                        type="submit"
+                        variant="secondary"
+                        disabled={busy || !serverSecrets[`${server.id}:http_bearer`]}
+                      >
+                        Salvar token
+                      </Button>
+                    </form>
+                  )}
                   {state.tools !== undefined && (
-                    <pre aria-label="Ferramentas e formatos não confiáveis">
-                      {String(JSON.stringify(state.tools, null, 2))}
-                    </pre>
+                    <section aria-label="Ferramentas MCP externas">
+                      <h4>Ferramentas encontradas</h4>
+                      {state.tools.length === 0 ? (
+                        <p>O servidor não anunciou ferramentas.</p>
+                      ) : (
+                        <ul>
+                          {state.tools.map((tool) => (
+                            <li key={tool.id}>
+                              <strong>{tool.name}</strong>
+                              <p>{tool.description || 'Sem descrição fornecida pelo servidor.'}</p>
+                              <small>Nome externo: {tool.id}</small>
+                              {tool.riskHint && (
+                                <p>
+                                  Sugestão do servidor: {tool.riskHint.toLowerCase()}. Esta sugestão
+                                  não altera o risco nem a aprovação obrigatória.
+                                </p>
+                              )}
+                              {tool.reason && <p role="status">Indisponível: {tool.reason}</p>}
+                              {tool.available && (
+                                <label className="skill-switch">
+                                  <input
+                                    type="checkbox"
+                                    checked={tool.enabled}
+                                    onChange={(event) =>
+                                      void setMcpToolEnabled(
+                                        server.id,
+                                        tool.id,
+                                        event.target.checked,
+                                      )
+                                    }
+                                  />{' '}
+                                  Ativar esta ferramenta MCP (desativada por padrão)
+                                </label>
+                              )}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                      <p className="cloud-untrusted-label">
+                        Nomes, descrições e schemas fornecidos pelo servidor são dados externos não
+                        confiáveis.
+                      </p>
+                    </section>
                   )}
                   <div className="skill-switch">
                     <label>
@@ -570,8 +824,13 @@ export function PrivacyConfigurations({
                             }))
                           )
                             return;
-                          await invoke('mcp_remove_server', { serverId: server.id })
-                            .then(refresh)
+                          await invoke<string | null>('mcp_remove_server', {
+                            serverId: server.id,
+                          })
+                            .then(async (warning) => {
+                              await refresh();
+                              setError(warning ?? '');
+                            })
                             .catch((cause) => setError(String(cause)));
                         })();
                       }}

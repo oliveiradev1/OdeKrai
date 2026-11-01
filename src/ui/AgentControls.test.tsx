@@ -138,6 +138,32 @@ describe('controles e cartões do agente', () => {
     expect(markup).toContain('1.3 s');
   });
 
+  it('renderiza o resultado MCP como cartão da conversa e o marca como não confiável', () => {
+    const markup = renderToStaticMarkup(
+      <AgentActionCard
+        action={action('Concluída', {
+          skillId: 'mcp.fake.lookup',
+          title: 'Servidor falso · lookup',
+          risk: 'comunicação externa',
+          resultSummary: 'resultado do servidor falso',
+          untrustedResult: true,
+          timeline: [
+            {
+              label: 'Chamada de ferramenta: Servidor falso · lookup',
+              status: 'concluída',
+              durationMs: 12,
+              at: 1,
+            },
+          ],
+        })}
+      />,
+    );
+    expect(markup).toContain('Servidor falso · lookup');
+    expect(markup).toContain('resultado do servidor falso');
+    expect(markup).toContain('dado não confiável');
+    expect(markup).toContain('Comunicação externa');
+  });
+
   it('exibe plano informativo numerado, estados reais e ações fora do plano como texto', () => {
     const markup = renderToStaticMarkup(
       <AgentActionCard

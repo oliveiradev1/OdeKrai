@@ -1,0 +1,136 @@
+[
+  {
+    "name": "GitHub",
+    "supplier": "GitHub",
+    "documentationUrl": "https://docs.github.com/en/copilot/how-tos/copilot-in-your-ide/customize-copilot/extend-copilot-with-tools-and-context/set-up-the-github-mcp-server",
+    "endpoint": "https://api.githubcopilot.com/mcp/",
+    "transport": "Streamable HTTP",
+    "authentication": "OAuth remoto como opção principal com GitHub App/OAuth App; PAT Bearer como opção avançada",
+    "authenticationMethods": ["oauth", "bearer"],
+    "tokenCreationUrl": "https://github.com/settings/personal-access-tokens/new",
+    "tokenPermissions": [
+      "Repositórios: selecione somente os repositórios necessários.",
+      "Metadata: Read (selecionada automaticamente pelo GitHub).",
+      "Contents: Read para ler arquivos e conteúdo dos repositórios.",
+      "Issues: Read para consultar issues.",
+      "Pull requests: Read para consultar pull requests.",
+      "Conceda permissões de escrita somente se quiser usar as ferramentas de escrita correspondentes; permissões adicionais dependem da ferramenta escolhida."
+    ],
+    "status": "available_to_configure"
+  },
+  {
+    "name": "Figma",
+    "supplier": "Figma",
+    "documentationUrl": "https://help.figma.com/hc/en-us/articles/39216419318551-Get-started-with-the-Figma-MCP-server",
+    "endpoint": "https://mcp.figma.com/mcp",
+    "transport": "HTTP remoto",
+    "authentication": "Login com conta Figma no navegador; protocolo OAuth específico NÃO VERIFICADO",
+    "authenticationMethods": ["oauth"],
+    "setupSteps": [
+      "O servidor remoto usa https://mcp.figma.com/mcp e pede login com uma conta Figma.",
+      "A Figma permite conexão somente de clientes listados no catálogo MCP.",
+      "Para adicionar o OdeKrai, o desenvolvedor precisa entrar na lista de espera da Figma; a conexão fica indisponível até essa inclusão."
+    ],
+    "status": "not_available"
+  },
+  {
+    "name": "Gmail",
+    "supplier": "Google Workspace",
+    "documentationUrl": "https://developers.google.com/workspace/gmail/api/guides/configure-mcp-server",
+    "endpoint": "https://gmailmcp.googleapis.com/mcp/v1",
+    "transport": "Streamable HTTP",
+    "authentication": "OAuth 2.0 com client ID e client secret do projeto Google Cloud",
+    "authenticationMethods": ["oauth"],
+    "programStatus": "Developer Preview",
+    "oauthScopeLabels": [
+      "Leitura de mensagens: https://www.googleapis.com/auth/gmail.readonly",
+      "Criar rascunhos: https://www.googleapis.com/auth/gmail.compose (o OdeKrai não oferece ferramenta de envio)"
+    ],
+    "oauthSetupSteps": [
+      "Inscreva-se no Google Workspace Developer Preview Program.",
+      "Crie um projeto no Google Cloud e ative Gmail API e Gmail MCP API.",
+      "Configure a tela de consentimento OAuth e inclua os escopos listados acima.",
+      "Crie um cliente OAuth Web, marque Use this client for an AI-powered agent e adicione o redirecionamento http://127.0.0.1:43117/callback.",
+      "Copie o identificador e o segredo. O identificador precisa estar configurado nesta versão do OdeKrai; o segredo é salvo no Gerenciador de Credenciais."
+    ],
+    "status": "available_to_configure"
+  },
+  {
+    "name": "Google Calendar",
+    "supplier": "Google Workspace",
+    "documentationUrl": "https://developers.google.com/workspace/calendar/api/guides/configure-mcp-server",
+    "endpoint": "https://calendarmcp.googleapis.com/mcp/v1",
+    "transport": "Streamable HTTP",
+    "authentication": "OAuth 2.0 com client ID e client secret do projeto Google Cloud",
+    "authenticationMethods": ["oauth"],
+    "programStatus": "Developer Preview",
+    "oauthScopeLabels": [
+      "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
+      "https://www.googleapis.com/auth/calendar.events.freebusy",
+      "https://www.googleapis.com/auth/calendar.events.readonly"
+    ],
+    "oauthSetupSteps": [
+      "Inscreva-se no Google Workspace Developer Preview Program.",
+      "Crie um projeto no Google Cloud e ative Google Calendar API e Google Calendar MCP API.",
+      "Configure a tela de consentimento OAuth e inclua os escopos de leitura listados acima.",
+      "Crie um cliente OAuth Web, marque Use this client for an AI-powered agent e adicione o redirecionamento http://127.0.0.1:43117/callback.",
+      "Copie o identificador e o segredo. O identificador precisa estar configurado nesta versão do OdeKrai; o segredo é salvo no Gerenciador de Credenciais."
+    ],
+    "status": "available_to_configure"
+  },
+  {
+    "name": "Google Sheets",
+    "supplier": "Google Workspace",
+    "documentationUrl": "https://developers.google.com/workspace/sheets/api/guides/configure-mcp-server",
+    "endpoint": "https://sheetsmcp.googleapis.com/mcp/v1",
+    "transport": "Streamable HTTP",
+    "authentication": "OAuth 2.0 com client ID e client secret do projeto Google Cloud",
+    "authenticationMethods": ["oauth"],
+    "programStatus": "Developer Preview",
+    "oauthScopeLabels": [
+      "Leitura de planilhas: https://www.googleapis.com/auth/spreadsheets.readonly"
+    ],
+    "oauthSetupSteps": [
+      "Inscreva-se no Google Workspace Developer Preview Program.",
+      "Crie um projeto no Google Cloud e ative Google Sheets API e Google Sheets MCP API.",
+      "Configure a tela de consentimento OAuth e inclua o escopo de leitura listado acima.",
+      "Crie um cliente OAuth Web, marque Use this client for an AI-powered agent e adicione o redirecionamento http://127.0.0.1:43117/callback.",
+      "Copie o identificador e o segredo. O identificador precisa estar configurado nesta versão do OdeKrai; o segredo é salvo no Gerenciador de Credenciais."
+    ],
+    "status": "available_to_configure"
+  },
+  {
+    "name": "Lovable",
+    "supplier": "Lovable",
+    "documentationUrl": "https://docs.lovable.dev/integrations/lovable-mcp-server",
+    "sourceCodeUrl": "https://github.com/lovablelabs/mcp",
+    "endpoint": "https://mcp.lovable.dev",
+    "transport": "Streamable HTTP",
+    "authentication": "OAuth; clientes locais com retorno localhost/127.0.0.1 podem usar registro automático",
+    "authenticationMethods": ["oauth"],
+    "setupSteps": [
+      "O endpoint oficial é https://mcp.lovable.dev.",
+      "A documentação da Lovable considera local o cliente que executa no computador e recebe o retorno OAuth em localhost ou 127.0.0.1; o OdeKrai usa 127.0.0.1.",
+      "Configure o endpoint e verifique as opções OAuth. Se o servidor anunciar registro dinâmico, conecte sem informar client ID ou segredo manual."
+    ],
+    "oauthRegistrationNote": "Clientes locais com callback em 127.0.0.1 podem se registrar automaticamente na Lovable. O OdeKrai confirma o registration_endpoint antes de habilitar a conexão.",
+    "status": "available_to_configure"
+  },
+  {
+    "name": "Notion",
+    "supplier": "Notion",
+    "documentationUrl": "https://developers.notion.com/guides/mcp/build-mcp-client",
+    "endpoint": "https://mcp.notion.com/mcp",
+    "transport": "Streamable HTTP",
+    "authentication": "OAuth 2.0 com PKCE e registro dinâmico de cliente",
+    "authenticationMethods": ["oauth"],
+    "oauthSteps": [
+      "O OdeKrai verifica os metadados OAuth do endpoint oficial.",
+      "Se houver registration_endpoint, o OdeKrai registra o cliente automaticamente; não é necessário configurar client ID.",
+      "Autorize o OdeKrai no navegador usando OAuth 2.0 com PKCE.",
+      "Volte ao OdeKrai para testar a conexão MCP."
+    ],
+    "oauthRegistrationNote": "A documentação oficial do Notion confirma o registro dinâmico de cliente; o identificador é recebido durante a conexão.",
+    "status": "available_to_configure"
+  }
+]

@@ -1,0 +1,64 @@
+{
+  "allowedGuideDomains": [
+    "docs.github.com",
+    "help.figma.com",
+    "docs.lovable.dev",
+    "developers.notion.com",
+    "developers.google.com"
+  ],
+  "services": {
+    "github": {
+      "clientId": "",
+      "guideUrl": "https://docs.github.com/en/copilot/how-tos/copilot-in-your-ide/customize-copilot/extend-copilot-with-tools-and-context/set-up-the-github-mcp-server",
+      "dynamicRegistration": false,
+      "clientSecretRequired": true,
+      "endpoints": ["https://api.githubcopilot.com/mcp/"]
+    },
+    "figma": {
+      "clientId": "",
+      "guideUrl": "https://help.figma.com/hc/en-us/articles/39216419318551-Get-started-with-the-Figma-MCP-server",
+      "dynamicRegistration": false,
+      "clientSecretRequired": false,
+      "endpoints": ["https://mcp.figma.com/mcp"]
+    },
+    "lovable": {
+      "clientId": "",
+      "guideUrl": "https://docs.lovable.dev/integrations/lovable-mcp-server",
+      "dynamicRegistration": true,
+      "clientSecretRequired": true,
+      "endpoints": ["https://mcp.lovable.dev"]
+    },
+    "notion": {
+      "clientId": "",
+      "guideUrl": "https://developers.notion.com/guides/mcp/build-mcp-client",
+      "dynamicRegistration": true,
+      "clientSecretRequired": false,
+      "endpoints": ["https://mcp.notion.com/mcp"]
+    },
+    "google": {
+      "clientId": "",
+      "guideUrl": "https://developers.google.com/workspace/guides/configure-mcp-servers",
+      "dynamicRegistration": false,
+      "clientSecretRequired": true,
+      "oauthScopesByEndpoint": {
+        "https://gmailmcp.googleapis.com/mcp/v1": [
+          "https://www.googleapis.com/auth/gmail.readonly",
+          "https://www.googleapis.com/auth/gmail.compose"
+        ],
+        "https://calendarmcp.googleapis.com/mcp/v1": [
+          "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
+          "https://www.googleapis.com/auth/calendar.events.freebusy",
+          "https://www.googleapis.com/auth/calendar.events.readonly"
+        ],
+        "https://sheetsmcp.googleapis.com/mcp/v1": [
+          "https://www.googleapis.com/auth/spreadsheets.readonly"
+        ]
+      },
+      "endpoints": [
+        "https://gmailmcp.googleapis.com/mcp/v1",
+        "https://calendarmcp.googleapis.com/mcp/v1",
+        "https://sheetsmcp.googleapis.com/mcp/v1"
+      ]
+    }
+  }
+}

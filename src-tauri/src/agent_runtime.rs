@@ -2,7 +2,7 @@ use crate::{
     agent::{self, AgentBackend, AgentEvent, AgentLimits, ToolExecution},
     policy::Origin,
     providers::{Block, Message, ProviderReply, ToolCall, ToolDef},
-    security::{self, skills::Skill, SecurityState},
+    security::{self, skills::OfferedSkill, SecurityState},
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -178,7 +178,7 @@ struct RuntimeBackend<'a> {
     security: &'a SecurityState,
     conversation_id: String,
     targets: Vec<crate::history::ConversationProviderTarget>,
-    active_skills: Vec<Skill>,
+    active_skills: Vec<OfferedSkill>,
     events: Channel<AgentEvent>,
     daily_token_limit: u64,
     plan_card: Option<crate::history::AgentActionCard>,
@@ -282,25 +282,30 @@ impl AgentBackend for RuntimeBackend<'_> {
             let skill = self
                 .active_skills
                 .iter()
-                .find(|skill| skill.id == call.name)
+                .find(|skill| skill.id() == call.name)
                 .cloned()
                 .ok_or_else(|| "A habilidade não está ativa; chamada recusada.".to_string())?;
             let conversation_id = self.conversation_id.clone();
-            let plan_step_index = if skill.id == "plan.propose" {
+            let skill_id = skill.id().to_owned();
+            let skill_name = skill.name();
+            let plan_step_index = if skill_id == "plan.propose" {
                 None
             } else {
-                self.begin_plan_action(skill.name)?
+                self.begin_plan_action(&skill_name)?
             };
             let args_hash = format!("{:x}", Sha256::digest(call.args.to_string().as_bytes()));
             crate::history::persist_agent_record(
                 &self.app,
                 &conversation_id,
                 "tool_call",
-                skill.id,
+                &skill_id,
                 None,
                 &format!("arguments_sha256={args_hash}"),
             )?;
-            let risk = skill.risk(&call.args)?;
+            let risk = match &skill {
+                OfferedSkill::Native(skill) => skill.risk(&call.args)?,
+                OfferedSkill::Mcp(_) => crate::policy::Risk::ComunicacaoExterna,
+            };
             let risk = match risk {
                 crate::policy::Risk::Leitura => "leitura",
                 crate::policy::Risk::EscritaReversivel => "escrita reversível",
@@ -310,13 +315,14 @@ impl AgentBackend for RuntimeBackend<'_> {
                 crate::policy::Risk::CapturaSensivel => "captura sensível",
             };
             let summary = action_card_summary(&skill, &call.args);
-            let untrusted_result = skill.id == "code.delegate"
-                || security::skills::result_is_untrusted(&self.app, skill.id, &call.args)?;
+            let untrusted_result = skill.is_external()
+                || skill_id == "code.delegate"
+                || security::skills::result_is_untrusted(&self.app, &skill_id, &call.args)?;
             let action_started = std::time::Instant::now();
             let mut card = crate::history::AgentActionCard {
                 id: call.id.clone(),
-                skill_id: skill.id.into(),
-                title: skill.name.into(),
+                skill_id: skill_id.clone(),
+                title: skill_name.clone(),
                 risk: risk.into(),
                 decision: "automática".into(),
                 status: "Planejada".into(),
@@ -350,7 +356,7 @@ impl AgentBackend for RuntimeBackend<'_> {
             });
             card.status = "Executando".into();
             card.timeline.push(crate::history::AgentTimelineEntry {
-                label: format!("Chamada de ferramenta: {}", skill.name),
+                label: format!("Chamada de ferramenta: {skill_name}"),
                 status: "executando".into(),
                 duration_ms: None,
                 at: std::time::SystemTime::now()
@@ -462,7 +468,7 @@ impl AgentBackend for RuntimeBackend<'_> {
                     card.duration_ms =
                         Some(action_started.elapsed().as_millis().min(i64::MAX as u128) as i64);
                     card.timeline.push(crate::history::AgentTimelineEntry {
-                        label: format!("Resultado da ferramenta: {} falhou", skill.name),
+                        label: format!("Resultado da ferramenta: {skill_name} falhou"),
                         status: "erro".into(),
                         duration_ms: card.duration_ms,
                         at: std::time::SystemTime::now()
@@ -481,7 +487,7 @@ impl AgentBackend for RuntimeBackend<'_> {
             };
             let status = result.status.clone();
             card.undo_descriptor = result.undo_descriptor.clone();
-            if skill.id == "plan.propose" && status == "completed" {
+            if skill_id == "plan.propose" && status == "completed" {
                 if let Some(plan) = result
                     .result
                     .as_deref()
@@ -496,7 +502,7 @@ impl AgentBackend for RuntimeBackend<'_> {
                 }
             }
             if status == "completed" {
-                let artifact_path = match skill.id {
+                let artifact_path = match skill_id.as_str() {
                     "files.write"
                     | "files.append"
                     | "doc.create_markdown"
@@ -520,13 +526,13 @@ impl AgentBackend for RuntimeBackend<'_> {
                 {
                     card.artifacts = vec![crate::history::AgentArtifact {
                         path: path.to_owned(),
-                        kind: if skill.id.starts_with("doc.") {
+                        kind: if skill_id.starts_with("doc.") {
                             "documento".into()
-                        } else if skill.id == "sheet.create_csv" {
+                        } else if skill_id == "sheet.create_csv" {
                             "planilha".into()
-                        } else if skill.id == "calendar.create_event" {
+                        } else if skill_id == "calendar.create_event" {
                             "evento de calendário".into()
-                        } else if skill.id == "screen.capture" {
+                        } else if skill_id == "screen.capture" {
                             "captura de tela".into()
                         } else {
                             "arquivo".into()
@@ -579,7 +585,7 @@ impl AgentBackend for RuntimeBackend<'_> {
                 "failed" => "A ação aprovada não pôde ser concluída.".into(),
                 _ => "A execução foi interrompida.".into(),
             };
-            if status == "completed" && skill.id == "calendar.create_event" {
+            if status == "completed" && skill_id == "calendar.create_event" {
                 let field = |name: &str| -> String {
                     call.args
                         .get(name)
@@ -604,7 +610,7 @@ impl AgentBackend for RuntimeBackend<'_> {
                     field("path")
                 );
             }
-            if status == "completed" && skill.id == "files.delete" {
+            if status == "completed" && skill_id == "files.delete" {
                 card.result_summary =
                     "Arquivo enviado à Lixeira do Windows; restaure pela Lixeira do Windows."
                         .into();
@@ -612,11 +618,11 @@ impl AgentBackend for RuntimeBackend<'_> {
             if let Some(index) = plan_step_index {
                 self.finish_plan_action(index, status == "completed")?;
             }
-            if skill.id == "plan.propose" && card.plan.is_some() {
+            if skill_id == "plan.propose" && card.plan.is_some() {
                 self.plan_card = Some(card.clone());
             }
             crate::history::save_agent_action_card(&self.app, &conversation_id, &card)?;
-            if skill.id == "code.delegate" && status == "completed" {
+            if skill_id == "code.delegate" && status == "completed" {
                 if let Some(result) = result.result.as_deref() {
                     if let Ok(value) = serde_json::from_str::<serde_json::Value>(result) {
                         if value.get("applied") == Some(&serde_json::Value::Bool(false)) {
@@ -639,7 +645,7 @@ impl AgentBackend for RuntimeBackend<'_> {
                 &self.app,
                 &conversation_id,
                 "tool_result",
-                skill.id,
+                &skill_id,
                 Some(&result.id),
                 &format!("status={status}; result_sha256={result_hash}"),
             )?;
@@ -647,14 +653,23 @@ impl AgentBackend for RuntimeBackend<'_> {
                 content: result.result.unwrap_or(result.message),
                 audit_id: Some(result.id),
                 denied: status == "denied" || status == "configuration_pending",
-                external_communication: skill.id == "simulated.send_message",
+                external_communication: skill.is_external() || skill_id == "simulated.send_message",
                 untrusted: untrusted_result || status != "completed",
             })
         })
     }
 }
 
-fn action_card_summary(skill: &Skill, params: &serde_json::Value) -> String {
+fn action_card_summary(skill: &OfferedSkill, params: &serde_json::Value) -> String {
+    let OfferedSkill::Native(skill) = skill else {
+        if let OfferedSkill::Mcp(tool) = skill {
+            return format!(
+                "Ferramenta MCP externa de {}. Revise os argumentos completos na aprovação. Descrição não confiável: {}",
+                tool.server_name, tool.description
+            );
+        }
+        return "Ferramenta externa.".into();
+    };
     let mut summary = skill.description.to_string();
     if skill.id == "code.delegate" {
         if let Some(project) = params.get("project").and_then(serde_json::Value::as_str) {
@@ -773,7 +788,7 @@ async fn agent_run_inner(context: AgentRunContext<'_>) -> Result<String, String>
             "Modo agente indisponível: ative uma habilidade disponível e conclua os requisitos da integração em Configurações → Habilidades.".into(),
         );
     }
-    let active_skills = skill_offer.offered_skills();
+    let active_skills = skill_offer.offered_agent_skills();
     if let Some(reason) =
         crate::providers::agent_provider_unavailable_reason(&app, &provider_id, &model)
     {

@@ -1,5 +1,10 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
-import { nextPaletteIndex, searchPaletteItems, type PaletteItem } from '../core/command-palette';
+import {
+  handleCommandPaletteEscape,
+  nextPaletteIndex,
+  searchPaletteItems,
+  type PaletteItem,
+} from '../core/command-palette';
 import { Kbd } from './DesignSystem';
 import { Modal } from './Modal';
 
@@ -21,6 +26,7 @@ export function CommandPalette({
   const [query, setQuery] = useState('');
   const [activeIndex, setActiveIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const closeRequested = useRef(false);
   const results = useMemo(
     () => searchPaletteItems(items, query, recentIds),
     [items, query, recentIds],
@@ -30,12 +36,23 @@ export function CommandPalette({
     if (!open) {
       setQuery('');
       setActiveIndex(0);
+    } else {
+      closeRequested.current = false;
     }
   }, [open]);
   useEffect(() => setActiveIndex(0), [query]);
 
+  function closePalette() {
+    if (closeRequested.current) return;
+    closeRequested.current = true;
+    onClose();
+  }
+
   function handleKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
-    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    if (handleCommandPaletteEscape(event.key, closePalette)) {
+      event.preventDefault();
+      event.stopPropagation();
+    } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault();
       const next = nextPaletteIndex(event.key, activeIndex, results.length);
       if (next !== null) setActiveIndex(next);
@@ -47,7 +64,7 @@ export function CommandPalette({
   }
 
   return (
-    <Modal open={open} title="Paleta de comandos" onClose={onClose}>
+    <Modal open={open} title="Paleta de comandos" onClose={closePalette}>
       <div className="command-palette">
         <label className="sr-only" htmlFor={inputId}>
           Buscar comandos

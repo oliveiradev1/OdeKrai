@@ -6,7 +6,7 @@
 
 O OdeKrai conversa com o provedor de IA que você configurar e pode executar habilidades no computador dentro das permissões definidas por você. A interface reúne conversas, configurações e um mascote que acompanha o uso do aplicativo.
 
-> Projeto em pré-lançamento (versão 0.15.0), para Windows.
+> Projeto em pré-lançamento (versão 0.17.0), para Windows.
 
 ## Destaques
 

@@ -359,32 +359,77 @@ pub async fn list_provider_models(
 #[tauri::command]
 pub async fn discover_local_models(
     caller: tauri::WebviewWindow,
+    app: tauri::AppHandle,
     state: State<'_, ProviderRequests>,
     security: State<'_, crate::security::SecurityState>,
+    port: Option<u32>,
 ) -> Result<LocalModelDiscovery, String> {
     super::require_main(&caller)?;
+    let endpoints = local_model_probe_endpoints(port)?;
     cancellable_request(&state, &security, async {
         let mut found = Vec::new();
         let mut online_endpoints = Vec::new();
         let mut invalid_response = false;
-        for base_url in ["http://127.0.0.1:11434/v1", "http://127.0.0.1:8080/v1"] {
-            match fetch_models_with_auth("local", base_url, false).await {
+        for (port, base_url) in endpoints {
+            match fetch_models_with_auth("local", &base_url, false).await {
                 Ok(models) => {
-                    online_endpoints.push(base_url.to_string());
+                    online_endpoints.push(base_url.clone());
+                    let result = if models.is_empty() {
+                        crate::diagnostics::LocalModelProbeResult::Empty
+                    } else {
+                        crate::diagnostics::LocalModelProbeResult::Found
+                    };
+                    crate::diagnostics::log_local_model_server_probe(
+                        &app,
+                        port,
+                        result,
+                        models.len(),
+                    );
                     found.extend(models.into_iter().map(|model| LocalModelOption {
-                        base_url: base_url.to_string(),
+                        base_url: base_url.clone(),
                         model,
                     }));
                 }
                 Err(message) if !message.contains("conectar") && !message.contains("demorou") => {
                     invalid_response = true;
+                    crate::diagnostics::log_local_model_server_probe(
+                        &app,
+                        port,
+                        crate::diagnostics::LocalModelProbeResult::InvalidResponse,
+                        0,
+                    );
                 }
-                Err(_) => {}
+                Err(_) => {
+                    crate::diagnostics::log_local_model_server_probe(
+                        &app,
+                        port,
+                        crate::diagnostics::LocalModelProbeResult::Unavailable,
+                        0,
+                    );
+                }
             }
         }
         finish_local_discovery(online_endpoints, found, invalid_response)
     })
     .await
+}
+
+fn local_model_probe_endpoints(port: Option<u32>) -> Result<Vec<(u16, String)>, String> {
+    let mut endpoints = vec![
+        (11434, "http://127.0.0.1:11434/v1".to_string()),
+        (8080, "http://127.0.0.1:8080/v1".to_string()),
+        (9931, "http://127.0.0.1:9931/v1".to_string()),
+    ];
+    if let Some(port) = port {
+        if !(1024..=65535).contains(&port) {
+            return Err("Informe uma porta entre 1024 e 65535.".into());
+        }
+        let endpoint = (port as u16, format!("http://127.0.0.1:{port}/v1"));
+        if !endpoints.contains(&endpoint) {
+            endpoints.push(endpoint);
+        }
+    }
+    Ok(endpoints)
 }
 
 fn finish_local_discovery(
@@ -399,7 +444,7 @@ fn finish_local_discovery(
         );
     }
     if online_endpoints.is_empty() {
-        return Err("Servidor local não encontrado nas portas padrão (11434 e 8080).".into());
+        return Err("Servidor local não encontrado nas portas verificadas.".into());
     }
     Ok(LocalModelDiscovery {
         online_endpoints,
@@ -1666,12 +1711,35 @@ mod tests {
         assert_eq!(empty.online_endpoints.len(), 1);
         assert!(empty.models.is_empty());
 
-        assert!(finish_local_discovery(Vec::new(), Vec::new(), false)
-            .unwrap_err()
-            .contains("não encontrado"));
+        assert_eq!(
+            finish_local_discovery(Vec::new(), Vec::new(), false).unwrap_err(),
+            "Servidor local não encontrado nas portas verificadas."
+        );
         assert!(finish_local_discovery(Vec::new(), Vec::new(), true)
             .unwrap_err()
             .contains("dados inválidos"));
+    }
+
+    #[test]
+    fn local_probe_port_is_optional_bounded_and_loopback_only() {
+        let defaults = local_model_probe_endpoints(None).unwrap();
+        assert_eq!(defaults.len(), 3);
+        assert!(defaults
+            .iter()
+            .all(|(_, url)| url.starts_with("http://127.0.0.1:")));
+        assert!(defaults.iter().any(|(port, _)| *port == 9931));
+
+        for port in [0, 1023, 65536] {
+            assert!(local_model_probe_endpoints(Some(port))
+                .unwrap_err()
+                .contains("1024 e 65535"));
+        }
+        assert!(local_model_probe_endpoints(Some(1024))
+            .unwrap()
+            .contains(&(1024, "http://127.0.0.1:1024/v1".to_string())));
+        assert!(local_model_probe_endpoints(Some(65535))
+            .unwrap()
+            .contains(&(65535, "http://127.0.0.1:65535/v1".to_string())));
     }
 
     #[tokio::test]

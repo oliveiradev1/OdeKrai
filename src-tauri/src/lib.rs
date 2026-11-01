@@ -55,14 +55,17 @@ struct BuildInfo {
 }
 
 #[tauri::command]
-fn get_build_info(caller: tauri::WebviewWindow) -> Result<BuildInfo, String> {
+async fn get_build_info(caller: tauri::WebviewWindow) -> Result<BuildInfo, String> {
     require_main(&caller)?;
+    let windows_version = tokio::task::spawn_blocking(windows_version)
+        .await
+        .map_err(|_| "Não foi possível consultar a versão do Windows.".to_string())?;
     Ok(BuildInfo {
         version: env!("CARGO_PKG_VERSION").to_string(),
         commit: option_env!("ODEKRAI_BUILD_COMMIT").unwrap_or("local"),
         build_date: option_env!("ODEKRAI_BUILD_DATE").unwrap_or("não definida"),
         webview_version: tauri::webview_version().map_err(|error| error.to_string())?,
-        windows_version: windows_version(),
+        windows_version,
     })
 }
 
@@ -102,7 +105,10 @@ fn open_build_commit(app: tauri::AppHandle, caller: tauri::WebviewWindow) -> Res
 }
 
 #[tauri::command]
-fn open_logs_folder(app: tauri::AppHandle, caller: tauri::WebviewWindow) -> Result<(), String> {
+async fn open_logs_folder(
+    app: tauri::AppHandle,
+    caller: tauri::WebviewWindow,
+) -> Result<(), String> {
     require_main(&caller)?;
     let logs = app
         .path()
@@ -112,11 +118,15 @@ fn open_logs_folder(app: tauri::AppHandle, caller: tauri::WebviewWindow) -> Resu
     if !logs.is_dir() {
         return Err("A pasta de logs ainda não foi criada.".into());
     }
-    std::process::Command::new("explorer.exe")
-        .arg(logs)
-        .spawn()
-        .map(|_| ())
-        .map_err(|_| "Não foi possível abrir a pasta de logs.".to_string())
+    tokio::task::spawn_blocking(move || {
+        std::process::Command::new("explorer.exe")
+            .arg(logs)
+            .spawn()
+            .map(|_| ())
+            .map_err(|_| "Não foi possível abrir a pasta de logs.".to_string())
+    })
+    .await
+    .map_err(|_| "A tarefa de abertura da pasta de logs foi interrompida.".to_string())?
 }
 
 pub mod agent;
@@ -131,8 +141,11 @@ mod google_calendar;
 pub mod google_oauth;
 mod hardware;
 mod history;
+mod hostinger;
 mod local_models;
 pub mod mcp;
+mod mcp_http;
+mod mcp_oauth;
 mod mcp_registry;
 mod memory_skills;
 mod pet_alerts;
@@ -409,7 +422,7 @@ async fn monitor_pet_hit_test(app: tauri::AppHandle) {
         if let (Some(rect), Some((x, y))) = (rect, cursor) {
             cursor_in_hit_area = pet_hit_test::contains(rect, x, y);
         }
-        let ignore = pet_hit_test::should_ignore_cursor_events(true, rect, cursor);
+        let ignore = pet_hit_test::should_ignore_cursor_events(visible, enabled, rect, cursor);
         if let Ok(mut previous) = state.last_ignore.lock() {
             if *previous != Some(ignore) && window.set_ignore_cursor_events(ignore).is_ok() {
                 *previous = Some(ignore);
@@ -968,22 +981,51 @@ async fn set_pet_visible(
 }
 
 #[tauri::command]
-async fn set_pet_keyboard_focus(caller: tauri::WebviewWindow, focused: bool) -> Result<(), String> {
+async fn set_pet_keyboard_focus(
+    app: tauri::AppHandle,
+    caller: tauri::WebviewWindow,
+    focused: bool,
+) -> Result<(), String> {
     require_caller(&caller, &["pet"])?;
-    if focused {
-        caller
-            .set_focusable(true)
-            .map_err(|_| "Não foi possível atualizar o foco do pet.".to_string())?;
-        caller.set_focus().map_err(|_| {
-            let _ = caller.set_focusable(false);
-            "Não foi possível focar o campo rápido do pet.".to_string()
-        })?;
+    let started = Instant::now();
+    let (result, outcome) = if focused {
+        match caller.set_focusable(true) {
+            Err(_) => (
+                Err("Não foi possível atualizar o foco do pet.".to_string()),
+                "focusable_error",
+            ),
+            Ok(()) => match caller.set_focus() {
+                Ok(()) => (Ok(()), "focus_ok"),
+                Err(_) => {
+                    let _ = caller.set_focusable(false);
+                    (
+                        Err("Não foi possível focar o campo rápido do pet.".to_string()),
+                        "focus_error",
+                    )
+                }
+            },
+        }
     } else {
-        caller
-            .set_focusable(false)
-            .map_err(|_| "Não foi possível atualizar o foco do pet.".to_string())?;
-    }
-    Ok(())
+        match caller.set_focusable(false) {
+            Ok(()) => (Ok(()), "release_ok"),
+            Err(_) => (
+                Err("Não foi possível atualizar o foco do pet.".to_string()),
+                "release_error",
+            ),
+        }
+    };
+    diagnostics::log_event(
+        &app,
+        if focused {
+            "pet_keyboard_focus_requested"
+        } else {
+            "pet_keyboard_focus_released"
+        },
+        "set_pet_keyboard_focus",
+        outcome,
+        started.elapsed().as_millis().min(u64::MAX as u128) as u64,
+    );
+    result
 }
 
 #[tauri::command]
@@ -1141,6 +1183,7 @@ pub fn run() -> Result<(), tauri::Error> {
         .manage(PetHitTestState::default())
         .manage(security::SecurityState::new(true))
         .manage(shardcloud::ShardCloudState::default())
+        .manage(hostinger::HostingerState::default())
         .manage(tray::CloseBehaviorState::default())
         .manage(tray::ShutdownState::default())
         .manage(reminders::ReminderScheduler::default())
@@ -1195,9 +1238,21 @@ pub fn run() -> Result<(), tauri::Error> {
             shardcloud::shardcloud_get_vm_details,
             shardcloud::shardcloud_get_vm_metrics,
             shardcloud::shardcloud_list_distros,
+            hostinger::save_hostinger_token,
+            hostinger::has_hostinger_token,
+            hostinger::remove_hostinger_token,
+            hostinger::hostinger_test_connection,
+            hostinger::hostinger_list_vms,
+            hostinger::hostinger_get_vm_details,
+            hostinger::hostinger_list_data_centers,
+            hostinger::hostinger_list_templates,
+            hostinger::hostinger_list_recent_actions,
+            hostinger::hostinger_list_backups,
             hardware::get_hardware_profile,
             local_models::download_local_model,
             local_models::cancel_local_model_download,
+            local_models::verify_local_model,
+            local_models::cancel_local_model_verification,
             local_models::delete_local_model,
             local_models::inspect_local_models,
             diagnostics::get_startup_state,
@@ -1228,10 +1283,20 @@ pub fn run() -> Result<(), tauri::Error> {
             providers::audio_transcription::transcribe_audio,
             mcp_registry::mcp_list_servers,
             mcp_registry::mcp_add_server,
+            mcp_registry::mcp_add_http_server,
             mcp_registry::mcp_set_secret,
+            mcp_registry::mcp_set_http_token,
+            mcp_registry::mcp_remove_http_token,
+            mcp_oauth::mcp_oauth_authorize,
+            mcp_oauth::mcp_oauth_registration_options,
+            mcp_oauth::mcp_oauth_public_client_settings,
+            mcp_oauth::mcp_oauth_github_account,
+            mcp_oauth::mcp_oauth_save_public_client_secret,
+            mcp_oauth::mcp_oauth_remove_public_client_secret,
             mcp_registry::mcp_set_enabled,
             mcp_registry::mcp_test_connection,
             mcp_registry::mcp_remove_server,
+            mcp_registry::mcp_oauth_disconnect_github,
             google_oauth::google_oauth_connect,
             google_oauth::google_oauth_status,
             google_oauth::google_oauth_disconnect,

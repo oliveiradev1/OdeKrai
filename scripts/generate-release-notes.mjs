@@ -25,6 +25,7 @@ function parseReleaseNote(filename, source) {
 
   const plainSectionNames = [
     'Importante antes de instalar',
+    'Aviso sobre o instalador não assinado',
     'Novidades',
     'Correções',
     'Limitações conhecidas',
@@ -155,7 +156,9 @@ export async function buildReleaseNotes(directory, currentVersion) {
     throw new Error(`Versão do app inválida: ${currentVersion}.`);
   }
   const entries = await readdir(directory, { withFileTypes: true });
-  const files = entries.filter((entry) => entry.isFile() && entry.name.endsWith('.md'));
+  const files = entries.filter(
+    (entry) => entry.isFile() && /^v\d+\.\d+\.\d+\.md$/.test(entry.name),
+  );
   if (files.length === 0) throw new Error(`Nenhuma nota Markdown encontrada em ${directory}.`);
 
   const releases = await Promise.all(

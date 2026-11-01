@@ -4,6 +4,22 @@ import { SETTINGS_INDEX, SETTINGS_MENU } from './settings-navigation';
 import { skillFamilyPresentation, type SkillFamily } from './skills-catalog';
 import { PETS } from './pets';
 
+export function handleCommandPaletteShortcut(
+  event: Pick<KeyboardEvent, 'key' | 'ctrlKey' | 'metaKey' | 'preventDefault'>,
+  toggle: () => void,
+): boolean {
+  if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'k') return false;
+  event.preventDefault();
+  toggle();
+  return true;
+}
+
+export function handleCommandPaletteEscape(key: string, close: () => void): boolean {
+  if (key !== 'Escape') return false;
+  close();
+  return true;
+}
+
 export type PermissionMode = 'sempre_perguntar' | 'aprovar_por_mim' | 'controle_total';
 export type PaletteAction =
   | { type: 'page'; page: Page }

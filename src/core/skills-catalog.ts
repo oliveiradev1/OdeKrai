@@ -13,6 +13,7 @@ export type SkillFamily =
   | 'arquivos'
   | 'abrir_aplicativos'
   | 'agenda_lembretes'
+  | 'google'
   | 'planilhas_documentos'
   | 'mensagens'
   | 'web'
@@ -71,7 +72,11 @@ export const skillFamilyPresentation: Record<
   },
   agenda_lembretes: {
     name: 'Agenda e lembretes',
-    description: 'Eventos e lembretes locais ou integrações de calendário disponíveis.',
+    description: 'Eventos e lembretes da agenda local do OdeKrai.',
+  },
+  google: {
+    name: 'Google',
+    description: 'Habilidades conectadas ao Google Calendar.',
   },
   planilhas_documentos: {
     name: 'Planilhas e documentos',

@@ -29,6 +29,15 @@ Após implementação, todos esses testes devem usar servidor/mock local e zero 
 Validação visual no Windows deverá cobrir estados do chat, aprovação, parada e integração com
 island/mascote.
 
+`skills.rs` verifica que `AgendaLembretes` contém apenas `calendar.*` e `reminder.*`, que as
+habilidades `google.calendar.*` são exibidas em Google e que ativar a agenda local não as inclui
+nem exige configuração Google.
+
+Na primeira inicialização do banco, apenas `files.list`, `files.read`, `files.search` e
+`system.info` são ativadas como habilidades padrão; os demais registros seguem desligados. A
+semente usa `INSERT OR IGNORE` para preservar escolhas já salvas. Data e hora locais não são uma
+habilidade separada: o runtime as inclui no contexto do agente para interpretar datas relativas.
+
 ## Regressões do adaptador OpenAI (Lote 6 — E3)
 
 Os testes Rust cobrem mapeamento reversível de nomes internos de habilidades, nomes em histórico de
@@ -67,6 +76,7 @@ detalhes sanitizados de stack ficam limitados ao painel local da interface.
 - `cargo check --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc`: compilação Rust para Windows.
 - `cargo test --manifest-path src-tauri/Cargo.toml --lib`: testes Rust de lógica e cabeçalhos de autenticação com servidor local simulado.
 - `cargo test --manifest-path src-tauri/Cargo.toml --test mock_window --features mock-window-tests`: teste de integração Tauri com `MockRuntime`; no Windows MSVC, o harness recebe um manifesto Common Controls v6 próprio.
+- `npm run check:blocking-commands`: falha se um comando Tauri síncrono contiver chamadas diretas a `reqwest::blocking`, `TcpListener`, `TcpStream`, `Command::new` ou `.spawn()`; exemplos de comando síncrono e assíncrono são verificados pelo próprio script.
 - `window_config_tests::main_window_uses_requested_default_and_minimum_size`: dimensões, mínimos e centralização da janela principal em `tauri.conf.json`.
 - Testes Rust da validação do endpoint, mapeamento de status, recusa de formatos de imagem e normalização de avatar; sem chamadas às APIs reais.
 - Testes Vitest da migração v1 e isolamento de endpoint/modelo entre provedores.
@@ -126,10 +136,11 @@ detalhes sanitizados de stack ficam limitados ao painel local da interface.
 
 - `src/core/pets.test.mjs`: rejeita catálogo ausente e nomes de arquivo inválidos, verifica mapeamento da FSM e do estado do agente, fallback para PNG ausente e preferência de movimento reduzido.
 - `src/core/pet-layout.test.ts`: verifica dimensões da janela compacta/expandida e escala do mascote no modo Livre; `pet_position.rs` verifica o ajuste do painel expandido à área útil.
-- `pet_hit_test.rs` testa coordenadas dentro do sprite, na margem e fora; no modo Livre recolhido, o Rust alterna `set_ignore_cursor_events` conforme a posição global do cursor.
+- `pet_hit_test.rs` testa cursor dentro do sprite, na margem e fora, além de pet oculto/desativado e retângulo ausente. `pet-hit-test.test.ts` cobre o payload produzido por `IslandWindow.tsx`: retângulo medido, modo expandido, modo Livre desativado, ausência inicial do retângulo e atualização por `ResizeObserver`.
+- No Windows, ainda é necessário validar com o executável que a janela passa cliques para outros aplicativos fora do sprite e da margem, captura cliques dentro deles, e mantém o comportamento ao ocultar/mostrar o pet, alternar os modos e redimensionar a janela. Coordenadas físicas/lógicas, DPI e múltiplos monitores também exigem validação nativa; os testes simulados não substituem essa observação.
 - A animação CSS do sprite pausa por visibilidade do documento e eventos Tauri de foco, minimização e visibilidade da janela do pet. O comportamento renderizado ainda precisa de observação no Windows.
 - `pet-motion.test.ts` cobre pausa por documento/janela oculta, minimização e foco perdido por 2,5 s, retomada ao focar, preferência de movimento reduzido e uso de `data-performance`. Testes de settings/Home/Agenda verificam persistência da opção de mascote estático e os respectivos estados vazios. A janela do pet observa a visibilidade própria e o foco da janela principal, pois é intencionalmente não focalizável.
-- A carga de CPU em idle não foi medida: este ambiente não executa o binário Windows. O hit-test consulta o cursor a cada 16 ms somente enquanto a janela do pet está visível e recolhida no modo Livre; com hit-test inativo, aguarda 200 ms entre verificações. As animações continuam pausadas pelos eventos Tauri/documento e CSS.
+- A carga de CPU em idle não foi medida: este ambiente não executa o binário Windows. O hit-test consulta o cursor a cada 16 ms quando está perto do sprite e a cada 60 ms quando está longe; com o pet oculto ou o hit-test desativado, aguarda uma notificação de mudança. As animações continuam pausadas pelos eventos Tauri/documento e CSS.
 - `history.rs`: `pet_catalog_rejects_missing_json_and_unsafe_paths` valida o manifesto e bloqueia caminhos inseguros; `selected_pet_defaults_and_persists_in_sqlite` confere o padrão e persistência local.
 - `npm run build`, `npm test`, `npm run format:check`, `cargo fmt --check`, `cargo test --offline --lib` e `git diff --check` devem ser executados para validar o código.
 - L11: `performance.test.ts` exercita Automático com perfis simulados, inclusive os limites de 8 GiB e 4 núcleos. `performance-mode.test.ts` confere a aplicação em ambas as janelas e as regras CSS. Build medido em 2026-10-30: JavaScript+CSS somam 881.681 bytes (861,0 KiB); Desempenho é uma preferência de runtime, portanto Ligado/Desligado têm delta de bundle igual a 0 bytes. CPU em idle e total de IPC em 60 s ainda dependem de medição do executável no Windows.

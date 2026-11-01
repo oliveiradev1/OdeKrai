@@ -4,6 +4,45 @@ Este arquivo segue o formato Keep a Changelog. Todas as versões listadas são p
 
 ## [Não lançado]
 
+## [v0.17.0]
+
+# v0.17.0 — Conectores MCP, Nuvem e IA local
+
+Esta versão amplia os conectores MCP e de hospedagem e melhora a configuração de modelos locais.
+
+Aviso sobre o instalador não assinado
+
+- O instalador não é assinado digitalmente. O Windows pode mostrar "O Windows protegeu o computador". Clique em "Mais informações" e depois em "Executar assim mesmo".
+
+Novidades
+
+- MCP remoto por HTTP com OAuth/PKCE ou token, catálogo de serviços públicos e ferramentas desativadas até ativação explícita; ações de ferramentas passam pelo fluxo de aprovação.
+- GitHub com OAuth de leitura ou token pessoal; Notion, Lovable e Google Workspace exibem os requisitos de configuração documentados. Figma não conecta enquanto o OdeKrai não estiver no catálogo do fornecedor.
+- Nuvem: consultas de VMs e recursos disponíveis em ShardCloud e Hostinger; ações remotas implementadas exigem aprovação. As operações disponíveis em cada provedor estão listadas em Configurações > Nuvem.
+- IA local: modelos baixados podem ser verificados sob demanda; Meu computador orienta a iniciar um servidor compatível e permite procurar o serviço numa porta local informada.
+- A interface identifica ShardCloud e Hostinger como integrações em teste.
+
+Correções
+
+- Chamadas de conexão e inspeção MCP que podem bloquear foram movidas para trabalho assíncrono.
+- Segredos OAuth não aparecem no Debug e as saídas de conectores continuam tratadas como dados externos.
+- Diagnóstico registra eventos da busca por modelos locais sem incluir caminhos completos.
+- Testes de prazo de ações Hostinger usam servidor simulado controlado.
+
+Limitações conhecidas
+
+- Nenhuma conta real de MCP, ShardCloud ou Hostinger foi validada nesta preparação; a conexão só muda para conectada após um teste bem-sucedido no aplicativo.
+- A integração local não inicia nem hospeda o servidor de inferência; é necessário configurar um servidor compatível separadamente.
+- ShardCloud não cria, compra, exclui ou reinstala VMs, não oferece firewalls, projetos Docker, backups ou pagamentos; o teto local não limita cobranças.
+- Hostinger não oferece criação/compra ou exclusão/reinstalação de VPS, pagamento, alteração de chaves SSH ou shell genérico pelo OdeKrai.
+- Google Workspace depende do programa Developer Preview e de configuração OAuth; Figma permanece bloqueado até a aceitação do cliente pelo fornecedor.
+- O instalador não assinado, SmartScreen, instalação real, validação visual e comportamento de janelas/DPI no Windows não foram validados.
+
+Verificação
+
+- Testes automatizados e CI da versão final: pendentes.
+- Teste com contas reais e validação visual no Windows: pendentes.
+
 ## [v0.16.1]
 
 # v0.16.1 — Google Calendar e controles do Windows
@@ -210,3 +249,4 @@ Verificação
 [v0.15.0]: https://github.com/Anceryx/OdeKrai/compare/v0.14.0...v0.15.0
 [v0.16.0]: https://github.com/Anceryx/OdeKrai/compare/v0.15.0...v0.16.0
 [v0.16.1]: https://github.com/Anceryx/OdeKrai/compare/v0.16.0...v0.16.1
+[v0.17.0]: https://github.com/Anceryx/OdeKrai/compare/v0.16.1...v0.17.0

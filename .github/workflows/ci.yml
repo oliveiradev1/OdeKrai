@@ -49,6 +49,9 @@ jobs:
       - name: Verificar consistência da versão
         run: npm run check:version
 
+      - name: Verificar fontes e domínios do catálogo MCP
+        run: npm run check:mcp-catalog
+
       - name: Executar testes
         run: npm test
 
@@ -60,6 +63,9 @@ jobs:
 
       - name: Verificar criação assíncrona de janelas Tauri
         run: npm run check:tauri-window-commands
+
+      - name: Verificar operações bloqueantes em comandos Tauri síncronos
+        run: npm run check:blocking-commands
 
       - name: Verificar ACL das APIs de janela no frontend
         run: npm run check:window-api-acl

@@ -34,6 +34,7 @@ const familyLabels: Record<SkillFamily, string> = {
   arquivos: 'Arquivos',
   abrir_aplicativos: 'Abertura e aplicativos',
   agenda_lembretes: 'Agenda e lembretes',
+  google: 'Google',
   planilhas_documentos: 'Planilhas e documentos',
   mensagens: 'Mensagens',
   web: 'Web',

@@ -137,6 +137,7 @@ import { CommandPalette } from './CommandPalette';
 import {
   buildPaletteItems,
   dispatchPaletteAction,
+  handleCommandPaletteShortcut,
   updateRecentCommands,
   type PaletteItem,
 } from '../core/command-palette';
@@ -885,9 +886,7 @@ function MainApp() {
 
   useEffect(() => {
     const onShortcut = (event: KeyboardEvent) => {
-      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'k') return;
-      event.preventDefault();
-      setCommandPaletteOpen((open) => !open);
+      handleCommandPaletteShortcut(event, () => setCommandPaletteOpen((open) => !open));
     };
     window.addEventListener('keydown', onShortcut);
     return () => window.removeEventListener('keydown', onShortcut);
@@ -1664,6 +1663,7 @@ function MainApp() {
             onSave={saveProviderSettings}
             onChat={beginChat}
             onCredentialRemoved={handleCredentialRemoved}
+            onOpenComputer={() => navigate('computer')}
             initialTab="free"
             onboardingMode
           />
@@ -2126,6 +2126,7 @@ function MainApp() {
                   onSave={saveProviderSettings}
                   onChat={beginChat}
                   onCredentialRemoved={handleCredentialRemoved}
+                  onOpenComputer={() => navigate('computer')}
                 />
               )}
               {section === 'computer' && <ComputerScreen />}
@@ -2142,6 +2143,9 @@ function MainApp() {
                   key={requestedSkillFamily?.requestId ?? 'all-families'}
                   initialFamily={requestedSkillFamily?.family}
                   onOpenPrivacy={() => navigate('permissions')}
+                  onRemovePublicMcp={async (server) =>
+                    await invoke<string | null>('mcp_remove_server', { serverId: server.id })
+                  }
                 />
               )}
               {section === 'companion' && (

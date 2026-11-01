@@ -3,6 +3,9 @@ use super::*;
 pub(super) fn action_metadata(
     action: &SimulatedAction,
 ) -> (&str, Risk, bool, Option<&'static str>) {
+    if matches!(action, SimulatedAction::McpToolCall { .. }) {
+        return ("mcp.tool_call", Risk::ComunicacaoExterna, false, None);
+    }
     let tool = tool_for(action);
     let workspace_action = match action {
         SimulatedAction::ReadFile { .. }
@@ -100,7 +103,29 @@ pub(super) fn action_metadata(
             | "shardcloud.vm_details"
             | "shardcloud.vm_start"
             | "shardcloud.vm_stop"
-            | "shardcloud.vm_exec" => skill_id,
+            | "shardcloud.vm_exec"
+            | "hostinger.vps_start"
+            | "hostinger.vps_stop"
+            | "hostinger.vps_restart"
+            | "hostinger.docker_list"
+            | "hostinger.docker_start"
+            | "hostinger.docker_stop"
+            | "hostinger.docker_restart"
+            | "hostinger.docker_deploy"
+            | "hostinger.docker_remove" => skill_id,
+            "hostinger.firewall_list"
+            | "hostinger.firewall_details"
+            | "hostinger.firewall_create"
+            | "hostinger.firewall_rule_create"
+            | "hostinger.firewall_activate"
+            | "hostinger.firewall_deactivate"
+            | "hostinger.firewall_delete"
+            | "hostinger.firewall_rule_delete"
+            | "hostinger.ssh_keys_list" => skill_id,
+            "hostinger.backup_list"
+            | "hostinger.backup_restore"
+            | "hostinger.recovery_start"
+            | "hostinger.recovery_stop" => skill_id,
             "code.delegate" => "code.delegate",
             "web.fetch" => "web.fetch",
             "system.open_url"
@@ -133,7 +158,7 @@ pub(super) fn action_metadata(
     };
     let policy_scope = workspace_action
         || matches!(action, SimulatedAction::Productivity { skill_id, .. }
-            if matches!(skill_id.as_str(), "shardcloud.vm_list" | "shardcloud.vm_details"));
+            if matches!(skill_id.as_str(), "shardcloud.vm_list" | "shardcloud.vm_details" | "hostinger.docker_list" | "hostinger.firewall_list" | "hostinger.firewall_details" | "hostinger.ssh_keys_list"));
     (tool_name, tool.risk(action), policy_scope, fixed)
 }
 
@@ -158,7 +183,18 @@ fn is_workspace_skill(skill_id: &str) -> bool {
 }
 
 fn require_batch_approval(action: &SimulatedAction, decision: Decision) -> Decision {
-    if matches!(action, SimulatedAction::Productivity { skill_id, .. } if matches!(skill_id.as_str(), "shardcloud.vm_start" | "shardcloud.vm_stop" | "shardcloud.vm_exec"))
+    if matches!(action, SimulatedAction::Productivity { skill_id, .. } if matches!(skill_id.as_str(), "hostinger.vps_start" | "hostinger.vps_stop" | "hostinger.vps_restart" | "hostinger.docker_list" | "hostinger.docker_start" | "hostinger.docker_stop" | "hostinger.docker_restart" | "hostinger.docker_deploy" | "hostinger.docker_remove" | "hostinger.firewall_create" | "hostinger.firewall_rule_create" | "hostinger.firewall_activate" | "hostinger.firewall_deactivate" | "hostinger.firewall_delete" | "hostinger.firewall_rule_delete" | "hostinger.backup_restore" | "hostinger.recovery_start" | "hostinger.recovery_stop"))
+        && matches!(decision, Decision::Allow(_))
+    {
+        Decision::AskUser(
+            if matches!(action, SimulatedAction::Productivity { skill_id, .. } if skill_id.starts_with("hostinger.docker_"))
+            {
+                "hostinger_docker_action_requires_approval"
+            } else {
+                "hostinger_vps_action_requires_approval"
+            },
+        )
+    } else if matches!(action, SimulatedAction::Productivity { skill_id, .. } if matches!(skill_id.as_str(), "shardcloud.vm_start" | "shardcloud.vm_stop" | "shardcloud.vm_exec"))
         && matches!(decision, Decision::Allow(_))
     {
         Decision::AskUser(
@@ -190,6 +226,99 @@ fn require_batch_approval(action: &SimulatedAction, decision: Decision) -> Decis
         Decision::AskUser("batch_requires_approval")
     } else {
         decision
+    }
+}
+
+fn required_confirmation(action: &SimulatedAction) -> Option<(String, &'static str)> {
+    let SimulatedAction::Productivity { skill_id, params } = action else {
+        return None;
+    };
+    match skill_id.as_str() {
+        "hostinger.docker_remove" => params
+            .get("project_name")
+            .and_then(serde_json::Value::as_str)
+            .map(|name| {
+                (
+                    name.to_owned(),
+                    "Para confirmar a remoção, digite exatamente",
+                )
+            }),
+        "hostinger.firewall_delete" => params
+            .get("firewall_name")
+            .and_then(serde_json::Value::as_str)
+            .map(|name| {
+                (
+                    name.to_owned(),
+                    "Para confirmar a remoção do firewall, digite exatamente",
+                )
+            }),
+        "hostinger.firewall_rule_delete" => params
+            .get("rule_name")
+            .and_then(serde_json::Value::as_str)
+            .map(|name| {
+                (
+                    name.to_owned(),
+                    "Para confirmar a remoção da regra, digite exatamente",
+                )
+            }),
+        "hostinger.backup_restore" => params
+            .get("vm_name")
+            .and_then(serde_json::Value::as_str)
+            .map(|name| {
+                (
+                    name.to_owned(),
+                    "Para confirmar a restauração, digite exatamente o nome da VPS",
+                )
+            }),
+        "hostinger.firewall_rule_create"
+            if params
+                .get("source_cidr")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(crate::hostinger::is_public_firewall_source) =>
+        {
+            Some((
+                params
+                    .get("source_cidr")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("0.0.0.0/0")
+                    .to_owned(),
+                "A origem libera acesso de qualquer endereço. Para confirmar, digite",
+            ))
+        }
+        _ => None,
+    }
+}
+
+fn validate_required_confirmation(
+    action: &SimulatedAction,
+    supplied: Option<&str>,
+) -> Result<(), String> {
+    if matches!(action, SimulatedAction::Productivity { skill_id, .. } if matches!(skill_id.as_str(), "hostinger.docker_remove" | "hostinger.firewall_delete" | "hostinger.firewall_rule_delete" | "hostinger.backup_restore"))
+        && required_confirmation(action).is_none()
+    {
+        return Err("O nome a confirmar está ausente nos parâmetros da ação.".into());
+    }
+    if let Some((expected, _)) = required_confirmation(action) {
+        if supplied != Some(expected.as_str()) {
+            return Err("Digite exatamente o texto indicado para confirmar esta ação.".into());
+        }
+    }
+    Ok(())
+}
+
+fn validate_project_removal_confirmation(
+    action: &SimulatedAction,
+    supplied: Option<&str>,
+) -> Result<(), String> {
+    validate_required_confirmation(action, supplied)
+}
+
+fn preview_for_approval(action: &SimulatedAction, preview: &str) -> String {
+    if matches!(action, SimulatedAction::Productivity { skill_id, .. } if skill_id == "hostinger.docker_deploy")
+    {
+        preview.to_owned()
+    } else {
+        clipped(preview, 4_000)
     }
 }
 
@@ -417,6 +546,31 @@ mod explicit_approval_tests {
     }
 
     #[test]
+    fn mcp_tool_call_always_requires_approval_even_with_permissive_override() {
+        let action = SimulatedAction::McpToolCall {
+            skill_id: "mcp.fake.lookup".into(),
+            server_id: "fake".into(),
+            server_name: "Servidor falso".into(),
+            tool_name: "lookup".into(),
+            schema_sha256: "schema-hash".into(),
+            params: json!({"query":"teste"}),
+        };
+        let (_, risk, inside, fixed) = action_metadata(&action);
+        assert_eq!(risk, Risk::ComunicacaoExterna);
+        for mode in [
+            Mode::SemprePerguntar,
+            Mode::AprovarPorMim,
+            Mode::ControleTotal,
+        ] {
+            let decision = policy::decide(mode, risk, &Origin::Model, inside, fixed, true);
+            assert!(
+                matches!(decision, Decision::AskUser(_)),
+                "{mode:?}: {decision:?}"
+            );
+        }
+    }
+
+    #[test]
     fn discord_message_from_untrusted_content_still_requires_user_approval() {
         let action = SimulatedAction::Productivity {
             skill_id: "discord.send".into(),
@@ -565,10 +719,71 @@ mod explicit_approval_tests {
             assert!(!audit.contains("token"));
         }
     }
+
+    #[test]
+    fn hostinger_vps_actions_always_require_approval_and_denial_never_runs_them() {
+        for skill_id in [
+            "hostinger.vps_start",
+            "hostinger.vps_stop",
+            "hostinger.vps_restart",
+        ] {
+            let action = SimulatedAction::Productivity {
+                skill_id: skill_id.into(),
+                params: json!({"vm_name":"VPS de produção", "vm_id":42}),
+            };
+            let (tool, risk, inside, fixed) = action_metadata(&action);
+            assert_eq!(risk, Risk::EscritaReversivel, "{skill_id}");
+            assert!(!inside, "{skill_id}");
+            let preview = summary(&action);
+            assert!(preview.contains("VPS de produção"));
+            assert!(preview.contains("42"));
+            assert!(preview.contains("indisponíveis"));
+            assert!(preview.contains(match skill_id {
+                "hostinger.vps_start" => "iniciar",
+                "hostinger.vps_stop" => "parar",
+                _ => "reiniciar",
+            }));
+            for mode in [
+                Mode::SemprePerguntar,
+                Mode::AprovarPorMim,
+                Mode::ControleTotal,
+            ] {
+                let decision = policy::decide(mode, risk, &Origin::User, inside, fixed, true);
+                assert!(
+                    matches!(
+                        require_batch_approval(&action, decision),
+                        Decision::AskUser(_)
+                    ),
+                    "{mode:?}, {tool}"
+                );
+            }
+            assert_eq!(
+                require_batch_approval(&action, Decision::Allow("mode_total")),
+                Decision::AskUser("hostinger_vps_action_requires_approval")
+            );
+            let mut network_calls = 0;
+            if approval_granted_and_running(
+                &ApprovalDecision::Negada("user_denied".into()),
+                false,
+                false,
+            ) {
+                network_calls += 1;
+            }
+            assert_eq!(network_calls, 0, "{skill_id}");
+        }
+    }
 }
 
 pub(super) fn summary(action: &SimulatedAction) -> String {
     match action {
+        SimulatedAction::McpToolCall {
+            server_name,
+            tool_name,
+            ..
+        } => format!(
+            "Chamar {tool_name} no servidor MCP {}",
+            clipped(server_name, 100)
+        ),
         SimulatedAction::ReadFile { path } | SimulatedAction::DeleteFile { path } => {
             format!("{}: {}", tool_for(action).name(), path)
         }
@@ -591,6 +806,53 @@ pub(super) fn summary(action: &SimulatedAction) -> String {
             amount_cents,
             currency,
         } => format!("Pagamento bloqueado: {currency} {amount_cents}"),
+        SimulatedAction::Productivity { skill_id, params }
+            if matches!(
+                skill_id.as_str(),
+                "hostinger.vps_start"
+                    | "hostinger.vps_stop"
+                    | "hostinger.vps_restart"
+                    | "hostinger.docker_list"
+                    | "hostinger.docker_start"
+                    | "hostinger.docker_stop"
+                    | "hostinger.docker_restart"
+                    | "hostinger.docker_remove"
+                    | "hostinger.firewall_list"
+                    | "hostinger.firewall_details"
+                    | "hostinger.firewall_create"
+                    | "hostinger.firewall_rule_create"
+                    | "hostinger.firewall_activate"
+                    | "hostinger.firewall_deactivate"
+                    | "hostinger.firewall_delete"
+                    | "hostinger.firewall_rule_delete"
+                    | "hostinger.ssh_keys_list"
+                    | "hostinger.backup_list"
+                    | "hostinger.backup_restore"
+                    | "hostinger.recovery_start"
+                    | "hostinger.recovery_stop"
+            ) =>
+        {
+            crate::hostinger::preview_skill(skill_id, params).unwrap_or_else(|_| skill_id.clone())
+        }
+        SimulatedAction::Productivity { skill_id, params }
+            if skill_id == "hostinger.docker_deploy" =>
+        {
+            format!(
+                "Criar ou atualizar o projeto Docker ‘{}’ na VPS ‘{}’ ({} bytes de compose)",
+                params
+                    .get("project_name")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("projeto"),
+                params
+                    .get("vm_name")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("VPS"),
+                params
+                    .get("compose_yaml")
+                    .and_then(serde_json::Value::as_str)
+                    .map_or(0, str::len)
+            )
+        }
         SimulatedAction::Productivity { skill_id, params }
             if matches!(
                 skill_id.as_str(),
@@ -623,6 +885,18 @@ pub(super) fn summary(action: &SimulatedAction) -> String {
 
 pub(super) fn audit_params(action: &SimulatedAction) -> String {
     match action {
+        SimulatedAction::McpToolCall {
+            server_id,
+            tool_name,
+            params,
+            ..
+        } => format!(
+            "mcp_server_id={}; mcp_tool={}; params_sha256={}; bytes={}",
+            clipped(server_id, 100),
+            clipped(tool_name, 100),
+            digest(params.to_string().as_bytes()),
+            params.to_string().len()
+        ),
         SimulatedAction::ReadFile { path } | SimulatedAction::DeleteFile { path } => {
             format!("path={path}")
         }
@@ -673,6 +947,9 @@ pub(super) fn preview_for(
     app: &tauri::AppHandle,
     action: &SimulatedAction,
 ) -> Result<String, String> {
+    if matches!(action, SimulatedAction::McpToolCall { .. }) {
+        return tool_for(action).preview(action, Path::new(""));
+    }
     if let SimulatedAction::Productivity { skill_id, params } = action {
         if skill_id.starts_with("calendar.") {
             return crate::calendar::preview_skill(app, skill_id, params);
@@ -909,6 +1186,38 @@ async fn execute_action_with_timeout(
     operation_id: &str,
     on_output: &mut (dyn FnMut(String) + Send),
 ) -> Result<String, String> {
+    if let SimulatedAction::McpToolCall {
+        skill_id,
+        server_id,
+        tool_name,
+        schema_sha256,
+        params,
+        ..
+    } = action
+    {
+        let app = app.clone();
+        let skill_id = skill_id.clone();
+        let server_id = server_id.clone();
+        let tool_name = tool_name.clone();
+        let schema_sha256 = schema_sha256.clone();
+        let params = params.clone();
+        return tokio::time::timeout(
+            timeout,
+            tokio::task::spawn_blocking(move || {
+                crate::mcp_registry::execute_tool_action(
+                    &app,
+                    &skill_id,
+                    &server_id,
+                    &tool_name,
+                    &schema_sha256,
+                    &params,
+                )
+            }),
+        )
+        .await
+        .map_err(|_| "A ferramenta MCP excedeu o tempo limite.".to_string())?
+        .map_err(|_| "Não foi possível concluir a chamada MCP.".to_string())?;
+    }
     let workspace_action = match action {
         SimulatedAction::ReadFile { .. }
         | SimulatedAction::WriteFile { .. }
@@ -1038,6 +1347,25 @@ pub(super) async fn submit_agent_action(
     let params = audit_params(&action);
     let (preview, preview_image) = match validate_action(&action)
         .and_then(|_| crate::shardcloud::validate_action_against_catalog(app, &action))
+        .and_then(|_| crate::hostinger::validate_action_against_catalog(app, &action))
+        .and_then(|_| match &action {
+            SimulatedAction::McpToolCall {
+                skill_id,
+                server_id,
+                tool_name,
+                schema_sha256,
+                params,
+                ..
+            } => crate::mcp_registry::validate_tool_action(
+                app,
+                skill_id,
+                server_id,
+                tool_name,
+                schema_sha256,
+                params,
+            ),
+            _ => Ok(()),
+        })
         .and_then(|_| preview_for_with_image(app, &action))
     {
         Ok(preview) => preview,
@@ -1597,10 +1925,12 @@ pub(super) async fn get_pending_approval_inner(
         },
         summary: item.summary.clone(),
         full_preview: item.preview.chars().count() > 4_000,
-        preview: clipped(&item.preview, 4_000),
+        preview: preview_for_approval(&item.action, &item.preview),
         preview_image: item.preview_image.clone(),
         expires_at: item.expires_at,
         display_hash: item.digest.clone(),
+        required_confirmation: required_confirmation(&item.action).map(|value| value.0),
+        confirmation_prompt: required_confirmation(&item.action).map(|value| value.1.to_owned()),
     }))
 }
 
@@ -1645,6 +1975,7 @@ pub(super) async fn approval_respond_inner(
     id: String,
     display_hash: String,
     approve: bool,
+    project_confirmation: Option<String>,
 ) -> Result<ActionResult, String> {
     if state.approval_broker.contains(&id).await {
         let item = {
@@ -1654,6 +1985,12 @@ pub(super) async fn approval_respond_inner(
             };
             if item.id != id || !display_hash_matches(&item.action, &item.digest, &display_hash) {
                 return Err("Os parâmetros exibidos mudaram; a ação foi recusada.".into());
+            }
+            if approve {
+                validate_project_removal_confirmation(
+                    &item.action,
+                    project_confirmation.as_deref(),
+                )?;
             }
             take_pending_approval(&mut pending, &id, &display_hash)
                 .map_err(|_| "A aprovação não corresponde à ação pendente.".to_string())?
@@ -1699,6 +2036,237 @@ pub(super) fn close_approval_if_empty(app: &tauri::AppHandle, state: &SecuritySt
 #[cfg(test)]
 mod batch_approval_tests {
     use super::*;
+
+    #[test]
+    fn hostinger_docker_writes_always_ask_and_denial_does_not_dispatch() {
+        for skill_id in [
+            "hostinger.docker_list",
+            "hostinger.docker_start",
+            "hostinger.docker_stop",
+            "hostinger.docker_restart",
+            "hostinger.docker_deploy",
+            "hostinger.docker_remove",
+        ] {
+            let action = SimulatedAction::Productivity {
+                skill_id: skill_id.into(),
+                params: serde_json::json!({"vm_name":"VPS", "vm_id":42, "project_name":"demo", "compose_yaml":"services:\n  app:\n    image: nginx\n"}),
+            };
+            for mode in [
+                Mode::SemprePerguntar,
+                Mode::AprovarPorMim,
+                Mode::ControleTotal,
+            ] {
+                let risk = match skill_id {
+                    "hostinger.docker_list" => Risk::Leitura,
+                    "hostinger.docker_remove" => Risk::DestrutivoFinanceiro,
+                    "hostinger.docker_deploy" => Risk::ExecucaoDeCodigo,
+                    _ => Risk::EscritaReversivel,
+                };
+                let decision = policy::decide(
+                    mode,
+                    risk,
+                    &Origin::User,
+                    skill_id == "hostinger.docker_list",
+                    None,
+                    true,
+                );
+                assert!(
+                    matches!(
+                        require_batch_approval(&action, decision),
+                        Decision::AskUser(_)
+                    ),
+                    "{mode:?} {skill_id}"
+                );
+            }
+            assert!(!approval_granted_and_running(
+                &ApprovalDecision::Negada("user_denied".into()),
+                false,
+                false
+            ));
+        }
+    }
+
+    #[test]
+    fn docker_remove_requires_exact_project_name_confirmation() {
+        let action = SimulatedAction::Productivity {
+            skill_id: "hostinger.docker_remove".into(),
+            params: serde_json::json!({"project_name":"demo"}),
+        };
+        assert!(validate_project_removal_confirmation(&action, None).is_err());
+        assert!(validate_project_removal_confirmation(&action, Some("other")).is_err());
+        assert!(validate_project_removal_confirmation(&action, Some("demo")).is_ok());
+        let read = SimulatedAction::Productivity {
+            skill_id: "hostinger.docker_list".into(),
+            params: serde_json::json!({}),
+        };
+        assert!(validate_project_removal_confirmation(&read, None).is_ok());
+    }
+
+    #[test]
+    fn firewall_open_rule_requires_extra_confirmation_and_removals_require_exact_name() {
+        let open_rule = SimulatedAction::Productivity {
+            skill_id: "hostinger.firewall_rule_create".into(),
+            params: serde_json::json!({"firewall_name":"web","protocol":"TCP","port":"443","source_cidr":"0.0.0.0/0"}),
+        };
+        let (_tool, risk, inside, fixed) = action_metadata(&open_rule);
+        assert_eq!(risk, Risk::EscritaReversivel);
+        assert!(!inside);
+        assert!(summary(&open_rule).contains("qualquer endereço"));
+        for mode in [
+            Mode::SemprePerguntar,
+            Mode::AprovarPorMim,
+            Mode::ControleTotal,
+        ] {
+            let decision = policy::decide(mode, risk, &Origin::User, inside, fixed, true);
+            assert!(matches!(
+                require_batch_approval(&open_rule, decision),
+                Decision::AskUser(_)
+            ));
+        }
+        assert!(validate_required_confirmation(&open_rule, None).is_err());
+        assert!(validate_required_confirmation(&open_rule, Some("::/0")).is_err());
+        assert!(validate_required_confirmation(&open_rule, Some("0.0.0.0/0")).is_ok());
+
+        for (skill_id, params, expected) in [
+            (
+                "hostinger.firewall_delete",
+                serde_json::json!({"firewall_name":"web"}),
+                "web",
+            ),
+            (
+                "hostinger.firewall_rule_delete",
+                serde_json::json!({"rule_name":"accept TCP 443 de any"}),
+                "accept TCP 443 de any",
+            ),
+        ] {
+            let action = SimulatedAction::Productivity {
+                skill_id: skill_id.into(),
+                params,
+            };
+            assert!(validate_required_confirmation(&action, None).is_err());
+            assert!(validate_required_confirmation(&action, Some("outro")).is_err());
+            assert!(validate_required_confirmation(&action, Some(expected)).is_ok());
+        }
+        let missing_name = SimulatedAction::Productivity {
+            skill_id: "hostinger.firewall_delete".into(),
+            params: serde_json::json!({}),
+        };
+        assert!(validate_required_confirmation(&missing_name, Some("anything")).is_err());
+    }
+
+    #[test]
+    fn hostinger_firewall_writes_always_ask_in_every_permission_mode() {
+        let cases = [
+            (
+                "hostinger.firewall_create",
+                serde_json::json!({"firewall_name":"web"}),
+            ),
+            (
+                "hostinger.firewall_rule_create",
+                serde_json::json!({"firewall_name":"web","protocol":"TCP","port":"443","source_cidr":"192.0.2.1"}),
+            ),
+            (
+                "hostinger.firewall_activate",
+                serde_json::json!({"firewall_name":"web","firewall_id":5,"vm_name":"vps","vm_id":42}),
+            ),
+            (
+                "hostinger.firewall_deactivate",
+                serde_json::json!({"firewall_name":"web","firewall_id":5,"vm_name":"vps","vm_id":42}),
+            ),
+        ];
+        for (skill_id, params) in cases {
+            let action = SimulatedAction::Productivity {
+                skill_id: skill_id.into(),
+                params,
+            };
+            for mode in [
+                Mode::SemprePerguntar,
+                Mode::AprovarPorMim,
+                Mode::ControleTotal,
+            ] {
+                let decision = policy::decide(
+                    mode,
+                    Risk::EscritaReversivel,
+                    &Origin::User,
+                    false,
+                    None,
+                    true,
+                );
+                assert!(
+                    matches!(
+                        require_batch_approval(&action, decision),
+                        Decision::AskUser(_)
+                    ),
+                    "{skill_id} {mode:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn backup_restore_requires_machine_name_and_recovery_mode_always_asks() {
+        let restore = SimulatedAction::Productivity {
+            skill_id: "hostinger.backup_restore".into(),
+            params: serde_json::json!({"vm_name":"prod-vps","vm_id":42,"backup_id":325,"backup_created_at":"2025-02-27T11:54:22Z"}),
+        };
+        assert!(validate_required_confirmation(&restore, None).is_err());
+        assert!(validate_required_confirmation(&restore, Some("other-vps")).is_err());
+        assert!(validate_required_confirmation(&restore, Some("prod-vps")).is_ok());
+        assert!(summary(&restore).contains("Todos os dados atuais serão substituídos"));
+        assert!(summary(&restore).contains("não tem desfazer"));
+
+        for skill_id in ["hostinger.recovery_start", "hostinger.recovery_stop"] {
+            let action = SimulatedAction::Productivity {
+                skill_id: skill_id.into(),
+                params: serde_json::json!({"vm_name":"prod-vps","vm_id":42}),
+            };
+            assert_eq!(action_metadata(&action).1, Risk::EscritaReversivel);
+            assert!(summary(&action).contains("sistema normal não sobe"));
+            for mode in [
+                Mode::SemprePerguntar,
+                Mode::AprovarPorMim,
+                Mode::ControleTotal,
+            ] {
+                let decision = policy::decide(
+                    mode,
+                    Risk::EscritaReversivel,
+                    &Origin::User,
+                    false,
+                    None,
+                    true,
+                );
+                assert!(
+                    matches!(
+                        require_batch_approval(&action, decision),
+                        Decision::AskUser(_)
+                    ),
+                    "{skill_id} {mode:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn docker_compose_approval_keeps_the_full_file_in_the_preview() {
+        let action = SimulatedAction::Productivity {
+            skill_id: "hostinger.docker_deploy".into(),
+            params: serde_json::json!({}),
+        };
+        let full = "services:\n".to_owned() + &" ".repeat(4_100);
+        assert_eq!(preview_for_approval(&action, &full), full);
+    }
+
+    #[test]
+    fn docker_compose_audit_records_only_a_hash_and_size() {
+        let secret_text = "compose-content-fixture";
+        let action = SimulatedAction::Productivity {
+            skill_id: "hostinger.docker_deploy".into(),
+            params: serde_json::json!({"project_name":"demo", "compose_yaml":secret_text}),
+        };
+        let audit = audit_params(&action);
+        assert!(!audit.contains(secret_text));
+        assert!(audit.contains("params_sha256="));
+    }
 
     #[test]
     fn apply_plan_always_requires_one_explicit_batch_approval() {

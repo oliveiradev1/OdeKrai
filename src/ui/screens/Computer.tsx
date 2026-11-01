@@ -16,6 +16,7 @@ import {
   type LocalModelInventory,
 } from '../../core/local-models';
 import { Badge, Button, Card, PageHeader } from '../DesignSystem';
+import { DownloadedModelNotice } from '../DownloadedModelNotice';
 import { Icon } from '../Icon';
 
 const gib = (bytes: number) => `${(bytes / 1_073_741_824).toFixed(1)} GB`;
@@ -24,6 +25,19 @@ const groups = [
   { profile: 'medio', title: 'Médio', accepts: ['medio'] },
   { profile: 'pesado', title: 'Pesado', accepts: ['pesado'] },
 ];
+
+type VerificationProgress = {
+  modelId: string;
+  processedBytes: number;
+  totalBytes: number;
+  status: 'verificando' | 'concluido' | 'cancelado' | 'erro';
+};
+
+type VerificationResult = {
+  modelId: string;
+  verified: boolean;
+  sizeBytes: number;
+};
 
 function reportComputerError(command: string, error: unknown) {
   const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
@@ -79,6 +93,11 @@ export function ComputerScreen({ embedded = false }: { embedded?: boolean }) {
     totalBytes: number;
   } | null>(null);
   const [downloadError, setDownloadError] = useState('');
+  const [verificationProgress, setVerificationProgress] = useState<VerificationProgress | null>(
+    null,
+  );
+  const [verificationResult, setVerificationResult] = useState<VerificationResult | null>(null);
+  const [verificationError, setVerificationError] = useState('');
   const [inventory, setInventory] = useState<LocalModelInventory[]>([]);
   const [inventoryLoading, setInventoryLoading] = useState(false);
   const [inventoryError, setInventoryError] = useState('');
@@ -132,6 +151,32 @@ export function ComputerScreen({ embedded = false }: { embedded?: boolean }) {
         if (!active) return;
         setDownloadError('Não foi possível acompanhar o progresso do download.');
         reportComputerError('listen_local_model_download_progress', error);
+      });
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+  }, []);
+  useEffect(() => {
+    if (!isTauri()) return;
+    let active = true;
+    let unlisten: (() => void) | undefined;
+    void listen<VerificationProgress>('local-model-verification-progress', (event) => {
+      if (!active) return;
+      if (event.payload.status === 'verificando') {
+        setVerificationProgress(event.payload);
+      } else {
+        setVerificationProgress(null);
+      }
+    })
+      .then((dispose) => {
+        if (active) unlisten = dispose;
+        else dispose();
+      })
+      .catch((error: unknown) => {
+        if (!active) return;
+        setVerificationError('Não foi possível acompanhar o progresso da verificação.');
+        reportComputerError('listen_local_model_verification_progress', error);
       });
     return () => {
       active = false;
@@ -216,6 +261,45 @@ export function ComputerScreen({ embedded = false }: { embedded?: boolean }) {
       reportComputerError('download_local_model', error);
       setDownload(null);
       await refreshInventory();
+    }
+  }
+  async function verifyModel(modelId: string) {
+    if (!modelFolder) {
+      setVerificationError('Escolha a pasta dos modelos antes de verificar.');
+      return;
+    }
+    setVerificationError('');
+    setVerificationResult(null);
+    setVerificationProgress({
+      modelId,
+      processedBytes: 0,
+      totalBytes: 0,
+      status: 'verificando',
+    });
+    try {
+      const result = await invoke<VerificationResult>('verify_local_model', {
+        modelId,
+        destination: modelFolder,
+      });
+      setVerificationResult(result);
+    } catch (error) {
+      if (String(error).toLocaleLowerCase().includes('cancelada')) {
+        setVerificationError('Verificação cancelada.');
+      } else {
+        setVerificationError('Não foi possível concluir a verificação do modelo.');
+        reportComputerError('verify_local_model', error);
+      }
+    } finally {
+      setVerificationProgress(null);
+      await refreshInventory();
+    }
+  }
+  async function cancelVerification(modelId: string) {
+    try {
+      await invoke('cancel_local_model_verification', { modelId });
+    } catch (error) {
+      setVerificationError('Não foi possível cancelar a verificação.');
+      reportComputerError('cancel_local_model_verification', error);
     }
   }
   async function deleteModel(model: (typeof LOCAL_MODELS)[number]) {
@@ -349,6 +433,34 @@ export function ComputerScreen({ embedded = false }: { embedded?: boolean }) {
             Cancelar download
           </Button>
         )}
+        {verificationProgress && (
+          <>
+            <p role="status">
+              Verificando arquivo:{' '}
+              {verificationProgress.totalBytes > 0
+                ? `${((verificationProgress.processedBytes / verificationProgress.totalBytes) * 100).toFixed(1)}%`
+                : 'preparando'}
+            </p>
+            <Button
+              variant="secondary"
+              onClick={() => void cancelVerification(verificationProgress.modelId)}
+            >
+              Cancelar verificação
+            </Button>
+          </>
+        )}
+        {verificationResult && (
+          <p role="status">
+            {verificationResult.verified
+              ? `Arquivo ${verificationResult.modelId} verificado por SHA-256 e cabeçalho GGUF.`
+              : `O arquivo ${verificationResult.modelId} não corresponde ao catálogo.`}
+          </p>
+        )}
+        {verificationError && (
+          <div className="ui-banner ui-banner--warning" role="alert">
+            {verificationError}
+          </div>
+        )}
         {downloadError && (
           <div className="ui-banner ui-banner--warning" role="alert">
             {downloadError}
@@ -372,72 +484,79 @@ export function ComputerScreen({ embedded = false }: { embedded?: boolean }) {
                   <h3>{group.title}</h3>
                   {recommended && <Badge tone="success">Recomendado para o seu computador</Badge>}
                 </div>
-                {entries.map((model) => (
-                  <div className="local-model-option" key={model.id}>
-                    <strong>{model.name}</strong>
-                    <span>Tamanho: {formatBytes(model.sizeBytes)}</span>
-                    {inventory.find((entry) => entry.modelId === model.id) && (
-                      <>
-                        <span>
-                          Estado:{' '}
-                          {
-                            {
-                              NAO_BAIXADO: 'Não baixado',
-                              BAIXANDO: 'Baixando',
-                              PARCIAL: 'Download parcial, disponível para retomada',
-                              BAIXADO: 'Baixado, ainda não verificado',
-                              VERIFICADO: 'Verificado por tamanho, SHA-256 e cabeçalho GGUF',
-                              ERRO: 'Erro: arquivo não corresponde ao catálogo',
-                            }[inventory.find((entry) => entry.modelId === model.id)!.status]
-                          }
-                        </span>
-                        <span>Executor: GGUF sem executor integrado</span>
-                        <span>RAM/VRAM estimada: não verificada</span>
-                        <details>
-                          <summary>Detalhes do arquivo</summary>
-                          <span>
-                            Nome: {inventory.find((entry) => entry.modelId === model.id)!.name}
-                          </span>
-                          <span>
-                            Caminho: {inventory.find((entry) => entry.modelId === model.id)!.path}
-                          </span>
-                          <span>
-                            Tamanho encontrado:{' '}
-                            {formatBytes(
-                              inventory.find((entry) => entry.modelId === model.id)!.sizeBytes,
-                            )}
-                          </span>
-                        </details>
-                      </>
-                    )}
-                    <span>Requisitos mínimos: não verificados</span>
-                    <span>
-                      Licença declarada do modelo base: {model.license ?? 'não verificada'}; licença
-                      do repositório GGUF: não verificada.
-                    </span>
-                    <span>Thinking: {model.thinkingNotes}</span>
-                    <Button
-                      variant={selected === model.id ? 'primary' : 'secondary'}
-                      onClick={() => setSelected(model.id)}
-                    >
-                      {selected === model.id ? 'Selecionado' : 'Escolher este modelo'}
-                    </Button>
-                    <Button
-                      variant="secondary"
-                      onClick={() => void downloadModel(model)}
-                      disabled={!isTauri() || !model.sizeBytes || !model.sha256 || !model.license}
-                    >
-                      Baixar modelo
-                    </Button>
-                    <Button
-                      variant="secondary"
-                      onClick={() => void deleteModel(model)}
-                      disabled={!isTauri() || !modelFolder}
-                    >
-                      Apagar modelo
-                    </Button>
-                  </div>
-                ))}
+                {entries.map((model) => {
+                  const file = inventory.find((entry) => entry.modelId === model.id);
+                  return (
+                    <div className="local-model-option" key={model.id}>
+                      <strong>{model.name}</strong>
+                      <span>Tamanho: {formatBytes(model.sizeBytes)}</span>
+                      {file && (
+                        <>
+                          {file.status === 'BAIXADO' ? (
+                            <DownloadedModelNotice />
+                          ) : (
+                            <span>
+                              Estado:{' '}
+                              {
+                                {
+                                  NAO_BAIXADO: 'Não baixado',
+                                  BAIXANDO: 'Baixando',
+                                  PARCIAL: 'Download parcial, disponível para retomada',
+                                  BAIXADO: 'Baixado. Ainda não é usado pelo OdeKrai.',
+                                  ERRO: 'Erro: arquivo não corresponde ao catálogo',
+                                }[file.status]
+                              }
+                            </span>
+                          )}
+                          <details>
+                            <summary>Detalhes do arquivo</summary>
+                            <span>
+                              Nome: {file.name} ({file.fileName})
+                            </span>
+                            <span>Tamanho encontrado: {formatBytes(file.sizeBytes)}</span>
+                          </details>
+                        </>
+                      )}
+                      {file && (file.status === 'BAIXADO' || file.status === 'ERRO') && (
+                        <Button
+                          variant="secondary"
+                          onClick={() => void verifyModel(model.id)}
+                          disabled={verificationProgress?.modelId === model.id}
+                        >
+                          Verificar integridade
+                        </Button>
+                      )}
+                      <span>Executor: GGUF sem executor integrado</span>
+                      <span>RAM/VRAM estimada: não verificada</span>
+                      <span>Requisitos mínimos: não verificados</span>
+                      <span>
+                        Licença declarada do modelo base: {model.license ?? 'não verificada'};
+                        licença do repositório GGUF: não verificada.
+                      </span>
+                      <span>Thinking: {model.thinkingNotes}</span>
+                      <Button
+                        variant={selected === model.id ? 'primary' : 'secondary'}
+                        onClick={() => setSelected(model.id)}
+                      >
+                        {selected === model.id ? 'Selecionado' : 'Escolher este modelo'}
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        onClick={() => void downloadModel(model)}
+                        disabled={!isTauri() || !model.sizeBytes || !model.sha256 || !model.license}
+                      >
+                        Baixar modelo
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        onClick={() => void deleteModel(model)}
+                        disabled={!isTauri() || !modelFolder}
+                      >
+                        Apagar modelo
+                      </Button>
+                    </div>
+                  );
+                })}
               </Card>
             );
           })}

@@ -22,6 +22,7 @@ import { DEFAULT_PET_ID, PETS, petAnimationForIslandState, petGreeting } from '.
 import { PetSprite } from './PetSprite';
 import { Icon } from './Icon';
 import { petWindowLayout } from '../core/pet-layout';
+import { petHitTestPayload } from '../core/pet-hit-test';
 import {
   createIslandQuickRequest,
   canSubmitIslandQuickCommand,
@@ -268,7 +269,7 @@ export function IslandWindow() {
       quickInput.current?.focus();
     } catch {
       focusEnabled.current = false;
-      setQuickError('O Windows não permitiu focar o campo rápido. Clique novamente para tentar.');
+      setQuickError('Não consegui focar o campo. Abra o OdeKrai para enviar.');
     }
   };
   const releaseQuickFocus = async (event: 'send' | 'escape' | 'blur') => {
@@ -339,11 +340,7 @@ export function IslandWindow() {
       if (disposed) return;
       const rect = sprite?.getBoundingClientRect();
       void invoke('set_pet_hit_test', {
-        enabled: petHitTestEnabled && Boolean(rect),
-        x: rect?.left ?? 0,
-        y: rect?.top ?? 0,
-        width: rect?.width ?? 0,
-        height: rect?.height ?? 0,
+        ...petHitTestPayload(settings.companion.freeMode, state === 'expanded', rect),
       }).catch(() => {
         console.warn('[OdeKrai diagnóstico] Não foi possível atualizar a área de clique do pet.');
       });
@@ -451,9 +448,21 @@ export function IslandWindow() {
               </button>
             </form>
             {quickError && (
-              <p className="island-quick-error" role="status">
-                {quickError}
-              </p>
+              <div className="island-quick-error" role="status">
+                <span>{quickError}</span>
+                {quickError === 'Não consegui focar o campo. Abra o OdeKrai para enviar.' && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void emit('pet-action', 'open').catch(() =>
+                        console.error('[OdeKrai diagnóstico] Falha ao emitir pet-action/open.'),
+                      )
+                    }
+                  >
+                    Abrir o OdeKrai
+                  </button>
+                )}
+              </div>
             )}
             {quickSuggestions.length > 0 && (
               <div className="island-quick-suggestions" aria-label="Sugestões reais">

@@ -25,12 +25,13 @@ pub(crate) fn contains(rect: SpriteRect, x: f64, y: f64) -> bool {
 
 /// No retângulo ou coordenada disponível, a janela continua aceitando cliques.
 pub(crate) fn should_ignore_cursor_events(
+    visible: bool,
     enabled: bool,
     rect: Option<SpriteRect>,
     cursor: Option<(f64, f64)>,
 ) -> bool {
-    match (enabled, rect, cursor) {
-        (true, Some(rect), Some((x, y))) => !contains(rect, x, y),
+    match (visible, enabled, rect, cursor) {
+        (true, true, Some(rect), Some((x, y))) => !contains(rect, x, y),
         _ => false,
     }
 }
@@ -68,6 +69,25 @@ mod tests {
         assert!(!contains(sprite, 13.99, 30.0));
         assert!(!contains(sprite, 93.0, 50.0));
         assert!(!contains(sprite, 40.0, 103.0));
+
+        assert!(!should_ignore_cursor_events(
+            true,
+            true,
+            Some(sprite),
+            Some((40.0, 50.0))
+        ));
+        assert!(!should_ignore_cursor_events(
+            true,
+            true,
+            Some(sprite),
+            Some((14.0, 30.0))
+        ));
+        assert!(should_ignore_cursor_events(
+            true,
+            true,
+            Some(sprite),
+            Some((13.99, 30.0))
+        ));
     }
 
     #[test]
@@ -85,10 +105,46 @@ mod tests {
     }
 
     #[test]
-    fn hit_test_sem_retangulo_inicial_aceita_cliques() {
-        assert!(!should_ignore_cursor_events(true, None, Some((10.0, 10.0))));
-        assert!(!should_ignore_cursor_events(true, None, None));
+    fn pet_desativado_ou_oculto_nao_bloqueia_cliques_nem_fica_consultando() {
+        let sprite = SpriteRect {
+            x: 20.0,
+            y: 30.0,
+            width: 66.0,
+            height: 66.0,
+        };
         assert!(!should_ignore_cursor_events(
+            true,
+            false,
+            Some(sprite),
+            Some((200.0, 200.0))
+        ));
+        assert!(!should_ignore_cursor_events(
+            false,
+            true,
+            Some(sprite),
+            Some((200.0, 200.0))
+        ));
+        assert_eq!(poll_interval(false, true, false), None);
+        assert_eq!(poll_interval(true, false, false), None);
+    }
+
+    #[test]
+    fn hit_test_sem_retangulo_inicial_aceita_cliques() {
+        assert!(!should_ignore_cursor_events(
+            true,
+            true,
+            None,
+            Some((10.0, 10.0))
+        ));
+        assert!(!should_ignore_cursor_events(
+            true,
+            true,
+            None,
+            Some((10_000.0, 10_000.0))
+        ));
+        assert!(!should_ignore_cursor_events(true, true, None, None));
+        assert!(!should_ignore_cursor_events(
+            true,
             false,
             None,
             Some((10.0, 10.0))

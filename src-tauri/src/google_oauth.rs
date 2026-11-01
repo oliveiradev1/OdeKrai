@@ -21,13 +21,28 @@ const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const REVOKE_URL: &str = "https://oauth2.googleapis.com/revoke";
 const CALLBACK_TIMEOUT: Duration = Duration::from_secs(180);
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct StoredConnection {
     client_id: String,
     client_secret: Option<String>,
     refresh_token: String,
     scopes: Vec<String>,
+}
+
+impl std::fmt::Debug for StoredConnection {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("StoredConnection")
+            .field("client_id", &self.client_id)
+            .field(
+                "client_secret",
+                &self.client_secret.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("refresh_token", &"[REDACTED]")
+            .field("scopes", &self.scopes)
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -50,6 +65,24 @@ struct TokenResponse {
     refresh_token: Option<String>,
     expires_in: Option<u64>,
     error: Option<String>,
+}
+
+impl std::fmt::Debug for TokenResponse {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("TokenResponse")
+            .field(
+                "access_token",
+                &self.access_token.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field(
+                "refresh_token",
+                &self.refresh_token.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("expires_in", &self.expires_in)
+            .field("error", &self.error.as_ref().map(|_| "[OMITTED]"))
+            .finish()
+    }
 }
 
 #[derive(Deserialize)]
@@ -87,7 +120,7 @@ fn erase() -> Result<(), String> {
         ),
     }
 }
-fn random_url_token() -> Result<String, String> {
+pub(crate) fn random_url_token() -> Result<String, String> {
     let mut bytes = [0u8; 32];
     #[cfg(windows)]
     // SAFETY: `bytes` is a valid writable 32-byte buffer and BCrypt uses the system RNG without a caller-owned handle.
@@ -391,6 +424,58 @@ pub async fn google_oauth_disconnect(
 mod tests {
     use super::*;
     use tokio::{io::AsyncWriteExt, net::TcpStream};
+
+    #[test]
+    fn oauth_debug_redacts_stored_and_received_secrets() {
+        let stored = StoredConnection {
+            client_id: "public-client-fixture".into(),
+            client_secret: Some("client-secret-fixture".into()),
+            refresh_token: "refresh-token-fixture".into(),
+            scopes: vec!["scope.fixture".into()],
+        };
+        let response = TokenResponse {
+            access_token: Some("access-token-fixture".into()),
+            refresh_token: Some("rotated-refresh-token-fixture".into()),
+            expires_in: Some(3600),
+            error: None,
+        };
+        let debug = format!("{stored:?} {response:?}");
+
+        for secret in [
+            "client-secret-fixture",
+            "refresh-token-fixture",
+            "access-token-fixture",
+            "rotated-refresh-token-fixture",
+        ] {
+            assert!(
+                !debug.contains(secret),
+                "segredo exposto no Debug: {secret}"
+            );
+        }
+        assert_eq!(debug.matches("[REDACTED]").count(), 4);
+    }
+
+    #[test]
+    fn oauth_status_serialization_contains_no_token_values_or_fields() {
+        let status = ConnectionStatus {
+            connected: true,
+            client_id: Some("public-client-fixture".into()),
+            scopes: vec!["scope.fixture".into()],
+            reauthorize: false,
+        };
+        let serialized = serde_json::to_string(&status).unwrap();
+
+        for forbidden in [
+            "access_token",
+            "refresh_token",
+            "client_secret",
+            "token-fixture",
+        ] {
+            assert!(!serialized.contains(forbidden));
+        }
+        assert!(serialized.contains("\"connected\":true"));
+    }
+
     #[test]
     fn pkce_uses_s256_base64url_without_padding() {
         let value = pkce_challenge("verifier");

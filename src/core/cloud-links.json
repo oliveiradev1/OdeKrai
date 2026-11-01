@@ -6,7 +6,9 @@
     "cloud.google.com",
     "azure.microsoft.com",
     "www.oracle.com",
-    "shardcloud.app"
+    "shardcloud.app",
+    "docs.shardcloud.app",
+    "developers.hostinger.com"
   ],
   "categories": [
     {

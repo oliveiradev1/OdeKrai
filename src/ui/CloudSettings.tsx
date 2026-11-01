@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { invoke, isTauri } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { CLOUD_LINK_CATEGORIES, openCloudLink } from '../core/cloud-links';
 import { submitSecretForm } from './secret-form';
 
@@ -36,6 +37,25 @@ type ShardVmMetrics = {
 };
 
 type ShardDistro = { distro: string; version: string; value: string };
+type HostingerStatus = 'Não conectado' | 'Conectado' | 'Erro';
+type HostingerResult = { title: string; data: unknown };
+type PendingCloudAction = {
+  id: string;
+  tool: string;
+  origin: string;
+  summary: string;
+  preview: string;
+  fullPreview: boolean;
+};
+
+export function hostingerStatusAfterRequest(
+  current: HostingerStatus,
+  connectionTest: boolean,
+  succeeded: boolean,
+): HostingerStatus {
+  if (!succeeded) return 'Erro';
+  return connectionTest ? 'Conectado' : current;
+}
 
 export function parseBudgetCents(input: string): number | null {
   const normalized = input.trim().replace(',', '.');
@@ -54,15 +74,28 @@ export function CloudSettings({
   initialTokenSaved = false,
   initialConnected = false,
   initialBudgetCents = null,
+  initialHostingerTokenSaved = false,
+  initialHostingerStatus = 'Não conectado',
+  initialHostingerVms = [],
+  initialShardcloudStatus,
+  initialPendingCloudAction = null,
 }: {
   initialTokenSaved?: boolean;
   initialConnected?: boolean;
   initialBudgetCents?: number | null;
+  initialHostingerTokenSaved?: boolean;
+  initialHostingerStatus?: HostingerStatus;
+  initialHostingerVms?: unknown[];
+  initialShardcloudStatus?: HostingerStatus;
+  initialPendingCloudAction?: PendingCloudAction | null;
 } = {}) {
   const [token, setToken] = useState('');
   const [tokenSaved, setTokenSaved] = useState(initialTokenSaved);
   const [credentialLoaded, setCredentialLoaded] = useState(() => !isTauri());
   const [connected, setConnected] = useState(initialConnected);
+  const [shardcloudStatus, setShardcloudStatus] = useState<HostingerStatus>(
+    initialShardcloudStatus ?? (initialConnected ? 'Conectado' : 'Não conectado'),
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [vms, setVms] = useState<ShardVm[]>([]);
@@ -70,14 +103,27 @@ export function CloudSettings({
   const [details, setDetails] = useState<ShardVmDetails | null>(null);
   const [metrics, setMetrics] = useState<ShardVmMetrics | null>(null);
   const [distros, setDistros] = useState<ShardDistro[] | null>(null);
+  const [hostingerToken, setHostingerToken] = useState('');
+  const [hostingerTokenSaved, setHostingerTokenSaved] = useState(initialHostingerTokenSaved);
+  const [hostingerCredentialLoaded, setHostingerCredentialLoaded] = useState(() => !isTauri());
+  const [hostingerStatus, setHostingerStatus] = useState<HostingerStatus>(initialHostingerStatus);
+  const [hostingerBusy, setHostingerBusy] = useState(false);
+  const [hostingerError, setHostingerError] = useState<string | null>(null);
+  const [hostingerVms, setHostingerVms] = useState<unknown[]>(initialHostingerVms);
+  const [hostingerResult, setHostingerResult] = useState<HostingerResult | null>(null);
   const [budgetCents, setBudgetCents] = useState<number | null>(initialBudgetCents);
   const [budgetInput, setBudgetInput] = useState(formatBudget(initialBudgetCents));
+  const [pendingCloudAction, setPendingCloudAction] = useState<PendingCloudAction | null>(
+    initialPendingCloudAction,
+  );
+  const [pendingCloudLoaded, setPendingCloudLoaded] = useState(() => !isTauri());
+  const [pendingCloudError, setPendingCloudError] = useState<string | null>(null);
 
-  function openCloudProvider(url: string) {
+  function openCloudProvider(url: string, reportError: (message: string) => void = setError) {
     void openCloudLink(url, (validatedUrl) =>
       invoke<void>('open_cloud_link', { url: validatedUrl }),
     ).catch((reason: unknown) => {
-      setError(reason instanceof Error ? reason.message : safeUiError(reason));
+      reportError(reason instanceof Error ? reason.message : safeUiError(reason));
     });
   }
 
@@ -106,6 +152,71 @@ export function CloudSettings({
       })
       .catch(() => {
         if (active) setError('Não foi possível carregar o teto mensal da ShardCloud.');
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isTauri()) {
+      setPendingCloudLoaded(true);
+      return;
+    }
+    let active = true;
+    const refreshPending = async () => {
+      try {
+        const pending = await invoke<PendingCloudAction | null>('get_pending_approval');
+        if (active) {
+          setPendingCloudAction(
+            pending && /^(shardcloud|hostinger)\./.test(pending.tool) ? pending : null,
+          );
+          setPendingCloudError(null);
+        }
+      } catch {
+        if (active) setPendingCloudError('Não foi possível consultar as ações pendentes.');
+      } finally {
+        if (active) setPendingCloudLoaded(true);
+      }
+    };
+    void refreshPending();
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    void listen('approval-updated', () => void refreshPending())
+      .then((off) => {
+        if (disposed) off();
+        else unlisten = off;
+      })
+      .catch(() => {
+        if (active) setPendingCloudError('Não foi possível acompanhar as ações pendentes.');
+      });
+    return () => {
+      active = false;
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isTauri()) {
+      setHostingerCredentialLoaded(true);
+      return;
+    }
+    let active = true;
+    void invoke<boolean>('has_hostinger_token')
+      .then((saved) => {
+        if (active) setHostingerTokenSaved(saved);
+      })
+      .catch(() => {
+        if (active) {
+          setHostingerError(
+            'Não foi possível consultar o Gerenciador de Credenciais do Windows para a Hostinger.',
+          );
+          setHostingerStatus('Erro');
+        }
+      })
+      .finally(() => {
+        if (active) setHostingerCredentialLoaded(true);
       });
     return () => {
       active = false;
@@ -141,6 +252,7 @@ export function CloudSettings({
       await invoke('save_shardcloud_token', { token });
       setTokenSaved(true);
       setConnected(false);
+      setShardcloudStatus('Não conectado');
       setVms([]);
       setDetails(null);
       setMetrics(null);
@@ -162,10 +274,12 @@ export function CloudSettings({
       const result = await invoke<ExternalData<ShardVm[]>>('shardcloud_test_connection');
       setVms(result.data);
       setConnected(true);
+      setShardcloudStatus('Conectado');
       setDetails(null);
       setMetrics(null);
     } catch (reason) {
       setConnected(false);
+      setShardcloudStatus('Erro');
       setError(safeUiError(reason));
     } finally {
       setBusy(false);
@@ -244,6 +358,7 @@ export function CloudSettings({
       await invoke('remove_shardcloud_token');
       setTokenSaved(false);
       setConnected(false);
+      setShardcloudStatus('Não conectado');
       setVms([]);
       setDetails(null);
       setMetrics(null);
@@ -256,12 +371,78 @@ export function CloudSettings({
     }
   }
 
+  async function saveHostingerToken(): Promise<boolean> {
+    if (!isTauri()) return false;
+    setHostingerBusy(true);
+    setHostingerError(null);
+    try {
+      await invoke('save_hostinger_token', { token: hostingerToken });
+      setHostingerTokenSaved(true);
+      setHostingerStatus('Não conectado');
+      setHostingerVms([]);
+      setHostingerResult(null);
+      return true;
+    } catch (reason) {
+      setHostingerStatus('Erro');
+      setHostingerError(safeHostingerError(reason));
+      return false;
+    } finally {
+      setHostingerBusy(false);
+    }
+  }
+
+  async function removeHostingerToken() {
+    if (!isTauri()) return;
+    setHostingerBusy(true);
+    setHostingerError(null);
+    try {
+      await invoke('remove_hostinger_token');
+      setHostingerTokenSaved(false);
+      setHostingerStatus('Não conectado');
+      setHostingerVms([]);
+      setHostingerResult(null);
+    } catch (reason) {
+      setHostingerStatus('Erro');
+      setHostingerError(safeHostingerError(reason));
+    } finally {
+      setHostingerBusy(false);
+    }
+  }
+
+  async function runHostingerRead(
+    command: string,
+    title: string,
+    args: Record<string, unknown> = {},
+    connectionTest = false,
+  ) {
+    if (!isTauri() || !hostingerTokenSaved) return;
+    setHostingerBusy(true);
+    setHostingerError(null);
+    try {
+      const result = await invoke<ExternalData<unknown>>(command, args);
+      const data = result.data;
+      setHostingerStatus(hostingerStatusAfterRequest(hostingerStatus, connectionTest, true));
+      if (connectionTest) {
+        setHostingerVms(Array.isArray(data) ? data : []);
+      }
+      if (command === 'hostinger_list_vms') {
+        setHostingerVms(Array.isArray(data) ? data : []);
+      }
+      setHostingerResult({ title, data });
+    } catch (reason) {
+      setHostingerStatus(hostingerStatusAfterRequest(hostingerStatus, connectionTest, false));
+      setHostingerError(safeHostingerError(reason));
+    } finally {
+      setHostingerBusy(false);
+    }
+  }
+
   return (
     <div className="settings-panel settings-section cloud-settings">
       <h2 id="cloud-settings-heading">Nuvem</h2>
       <p>
-        A integração permite consultar suas VMs. O agente também pode iniciar ou parar uma VM da
-        lista consultada, sempre depois da aprovação na janela nativa.
+        As capacidades variam por provedor e estão descritas nos cartões abaixo. Ações remotas
+        seguem os requisitos de aprovação indicados para cada provedor.
       </p>
       <p className="cloud-settings-notice">
         Nenhuma consulta de rede ocorre ao salvar o token. Ele fica no Gerenciador de Credenciais do
@@ -304,25 +485,59 @@ export function CloudSettings({
         </form>
         <p id="shardcloud-budget-note" className="cloud-settings-notice">
           {budgetCents === null
-            ? 'Sem teto salvo, a criação de VMs deve permanecer bloqueada.'
-            : `Teto salvo: R$ ${formatBudget(budgetCents)} por mês.`}
+            ? 'Nenhum teto mensal salvo. Criar ou comprar VPS não está disponível pelo OdeKrai.'
+            : `Teto informativo salvo: R$ ${formatBudget(budgetCents)} por mês. Compras não estão disponíveis pelo OdeKrai.`}
         </p>
         <p className="cloud-settings-notice">
-          O preço real por VM não foi conferido. Este valor é uma referência local; a ShardCloud não
-          recebe nem aplica esse teto. Custos podem variar conforme o plano e os recursos.
+          O preço real por VM não foi conferido. Este valor é apenas uma referência local; a
+          ShardCloud não recebe nem aplica esse teto. O OdeKrai não cria VPS nem efetua pagamentos.
         </p>
       </section>
 
       <section className="cloud-shardcloud" aria-labelledby="cloud-shardcloud-heading">
         <div className="cloud-shardcloud-title">
           <h3 id="cloud-shardcloud-heading">ShardCloud</h3>
-          {connected ? (
-            <span className="cloud-connected-label">Conectado</span>
-          ) : tokenSaved ? (
-            <span className="cloud-saved-label">Token salvo</span>
-          ) : (
-            <span className="cloud-planned-label">Configuração necessária</span>
-          )}
+          <span className="cloud-test-stage-label">Em teste</span>
+          <span
+            className={
+              shardcloudStatus === 'Conectado'
+                ? 'cloud-connected-label'
+                : shardcloudStatus === 'Erro'
+                  ? 'cloud-error-label'
+                  : 'cloud-saved-label'
+            }
+            role="status"
+          >
+            {shardcloudStatus}
+          </span>
+        </div>
+        <p>
+          Token guardado no Gerenciador de Credenciais do Windows.{' '}
+          <a
+            href="https://docs.shardcloud.app/api-reference/introduction.md"
+            onClick={(event) => {
+              event.preventDefault();
+              openCloudProvider('https://docs.shardcloud.app/api-reference/introduction.md');
+            }}
+          >
+            Documentação oficial da ShardCloud
+          </a>
+        </p>
+        <div className="cloud-capability-summary">
+          <h4>Disponível pelo OdeKrai</h4>
+          <p>
+            <strong>Leitura:</strong> listar VMs, consultar detalhes e métricas e listar
+            distribuições.
+          </p>
+          <p>
+            <strong>Sempre com aprovação nativa, em qualquer modo:</strong> iniciar ou parar uma VM
+            e executar de 1 a 10 comandos remotos. O conteúdo dos comandos só é enviado após a
+            aprovação.
+          </p>
+          <p>
+            <strong>Não disponível:</strong> projetos Docker, firewalls, backups, criar/comprar,
+            excluir ou reinstalar VMs e pagamentos.
+          </p>
         </div>
 
         {!credentialLoaded ? (
@@ -335,7 +550,7 @@ export function CloudSettings({
                 {busy ? 'Consultando…' : 'Testar conexão'}
               </button>
               <button type="button" disabled={busy} onClick={() => void removeToken()}>
-                Remover
+                Remover token
               </button>
             </div>
           </div>
@@ -358,7 +573,7 @@ export function CloudSettings({
               spellCheck={false}
             />
             <button type="submit" disabled={busy || !token.trim()}>
-              {busy ? 'Salvando…' : 'Salvar token'}
+              {busy ? 'Conectando…' : 'Conectar'}
             </button>
           </form>
         )}
@@ -486,9 +701,265 @@ export function CloudSettings({
         )}
       </section>
 
+      <section className="cloud-hostinger" aria-labelledby="cloud-hostinger-heading">
+        <div className="cloud-shardcloud-title">
+          <h3 id="cloud-hostinger-heading">Hostinger</h3>
+          <span className="cloud-test-stage-label">Em teste</span>
+          <span
+            className={
+              hostingerStatus === 'Conectado'
+                ? 'cloud-connected-label'
+                : hostingerStatus === 'Erro'
+                  ? 'cloud-error-label'
+                  : 'cloud-saved-label'
+            }
+            role="status"
+          >
+            {hostingerStatus}
+          </span>
+        </div>
+        <p>
+          A integração consulta VPS, detalhes, data centers, templates de sistema, ações recentes e
+          backups. As ações de iniciar, parar ou reiniciar pelo agente sempre pedem sua aprovação. O
+          token fica no Gerenciador de Credenciais do Windows e não é exibido novamente.
+        </p>
+        <p className="cloud-settings-notice">
+          Crie o token em <strong>Informações da conta → API → Novo token</strong>. Ele concede
+          acesso à conta inteira, inclusive ao faturamento; escolha uma expiração curta.{' '}
+          <a
+            href="https://developers.hostinger.com/"
+            onClick={(event) => {
+              event.preventDefault();
+              openCloudProvider('https://developers.hostinger.com/', setHostingerError);
+            }}
+          >
+            Documentação oficial da Hostinger
+          </a>
+        </p>
+        <div className="cloud-capability-summary">
+          <h4>Disponível pelo OdeKrai</h4>
+          <p>
+            <strong>Leitura:</strong> VMs, detalhes, data centers, templates, ações recentes e
+            backups; projetos Docker; firewalls e regras; chaves SSH públicas anexadas.
+          </p>
+          <p>
+            <strong>Sempre com aprovação nativa, em qualquer modo:</strong> iniciar, parar ou
+            reiniciar VPS; iniciar, parar, reiniciar, criar ou atualizar projetos Docker; criar
+            firewalls e regras e ativar ou desativar firewalls; iniciar ou parar o modo de
+            recuperação. Restaurar backup, remover projeto ou apagar firewall/regra também exige
+            confirmação digitando o nome solicitado.
+          </p>
+          <p>
+            <strong>Não disponível:</strong> criar/comprar VPS, pagamentos, excluir ou reinstalar
+            VPS, restaurar snapshots, alterar chaves SSH ou executar comandos genéricos no shell da
+            VPS. O Compose é específico ao Docker e executado no servidor após aprovação.
+          </p>
+        </div>
+        {!hostingerCredentialLoaded ? (
+          <p role="status">Consultando credencial salva…</p>
+        ) : hostingerTokenSaved ? (
+          <div className="cloud-token-saved">
+            <p>Token salvo</p>
+            <div className="cloud-actions">
+              <button
+                type="button"
+                disabled={hostingerBusy}
+                onClick={() =>
+                  void runHostingerRead('hostinger_test_connection', 'Máquinas virtuais', {}, true)
+                }
+              >
+                {hostingerBusy ? 'Consultando…' : 'Testar conexão'}
+              </button>
+              <button
+                type="button"
+                disabled={hostingerBusy}
+                onClick={() => void removeHostingerToken()}
+              >
+                Remover token
+              </button>
+            </div>
+          </div>
+        ) : (
+          <form
+            className="cloud-token-entry"
+            onSubmit={(event) => {
+              void submitSecretForm(event, saveHostingerToken, () => setHostingerToken(''));
+            }}
+          >
+            <label htmlFor="hostinger-token">Token da Hostinger</label>
+            <input
+              id="hostinger-token"
+              name="hostinger-token"
+              type="password"
+              autoComplete="off"
+              value={hostingerToken}
+              onChange={(event) => setHostingerToken(event.target.value)}
+              placeholder="Cole o token da Hostinger"
+              spellCheck={false}
+            />
+            <button type="submit" disabled={hostingerBusy || !hostingerToken.trim()}>
+              {hostingerBusy ? 'Conectando…' : 'Conectar'}
+            </button>
+          </form>
+        )}
+        {hostingerError && (
+          <p className="cloud-error" role="alert">
+            {hostingerError}
+          </p>
+        )}
+        {hostingerTokenSaved && hostingerStatus === 'Conectado' && (
+          <div className="cloud-readonly-data">
+            <div className="cloud-readonly-heading">
+              <h4>Máquinas virtuais</h4>
+              <button
+                type="button"
+                disabled={hostingerBusy}
+                onClick={() => void runHostingerRead('hostinger_list_vms', 'Máquinas virtuais')}
+              >
+                Atualizar máquinas
+              </button>
+            </div>
+            <p className="cloud-untrusted-label">Dados externos da Hostinger — não confiáveis</p>
+            {hostingerVms.length === 0 ? (
+              <p>Nenhuma máquina virtual foi retornada.</p>
+            ) : (
+              <ul className="cloud-vm-list">
+                {hostingerVms.map((value, index) => {
+                  const vm = asRecord(value);
+                  const vmId = typeof vm?.id === 'number' ? vm.id : null;
+                  return (
+                    <li key={vmId ?? index}>
+                      <div>
+                        <strong>{readExternalText(vm?.hostname) || 'VPS sem nome'}</strong>
+                        {vmId !== null && <small>Identificador: {vmId}</small>}
+                        <span>{readExternalText(vm?.state) || 'Estado não informado'}</span>
+                        <small>{readExternalText(vm?.plan) || 'Plano não informado'}</small>
+                      </div>
+                      {vmId !== null && (
+                        <div className="cloud-actions">
+                          <button
+                            type="button"
+                            disabled={hostingerBusy}
+                            onClick={() =>
+                              void runHostingerRead('hostinger_get_vm_details', 'Detalhes da VPS', {
+                                vmId,
+                              })
+                            }
+                          >
+                            Detalhes
+                          </button>
+                          <button
+                            type="button"
+                            disabled={hostingerBusy}
+                            onClick={() =>
+                              void runHostingerRead(
+                                'hostinger_list_recent_actions',
+                                'Ações recentes',
+                                { vmId },
+                              )
+                            }
+                          >
+                            Ações recentes
+                          </button>
+                          <button
+                            type="button"
+                            disabled={hostingerBusy}
+                            onClick={() =>
+                              void runHostingerRead('hostinger_list_backups', 'Backups', { vmId })
+                            }
+                          >
+                            Backups
+                          </button>
+                        </div>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+            <div className="cloud-actions">
+              <button
+                type="button"
+                disabled={hostingerBusy}
+                onClick={() => void runHostingerRead('hostinger_list_data_centers', 'Data centers')}
+              >
+                Data centers
+              </button>
+              <button
+                type="button"
+                disabled={hostingerBusy}
+                onClick={() =>
+                  void runHostingerRead('hostinger_list_templates', 'Templates de sistema')
+                }
+              >
+                Templates de sistema
+              </button>
+            </div>
+            {hostingerResult && (
+              <section className="cloud-vm-result" aria-label={hostingerResult.title}>
+                <h4>{hostingerResult.title}</h4>
+                <p className="cloud-untrusted-label">
+                  Dados externos da Hostinger — não confiáveis
+                </p>
+                <pre>{JSON.stringify(hostingerResult.data, null, 2)}</pre>
+              </section>
+            )}
+          </div>
+        )}
+      </section>
+
+      <section className="cloud-pending-actions" aria-labelledby="cloud-pending-actions-heading">
+        <div className="cloud-readonly-heading">
+          <h3 id="cloud-pending-actions-heading">Ações pendentes</h3>
+          {pendingCloudAction && (
+            <button
+              type="button"
+              onClick={() =>
+                void invoke('show_pending_approval_window').catch(() =>
+                  setPendingCloudError('Não foi possível abrir a janela nativa de aprovação.'),
+                )
+              }
+            >
+              Revisar na janela de aprovação
+            </button>
+          )}
+        </div>
+        {pendingCloudError && (
+          <p className="cloud-error" role="alert">
+            {pendingCloudError}
+          </p>
+        )}
+        {!pendingCloudLoaded ? (
+          <p role="status">Consultando ações pendentes…</p>
+        ) : pendingCloudAction ? (
+          <article className="cloud-pending-action">
+            <p>
+              <strong>Solicitada por:</strong> {pendingCloudAction.origin}
+            </p>
+            <p>
+              <strong>Ação pedida:</strong> {pendingCloudAction.summary}
+            </p>
+            <p>
+              <strong>Prévia:</strong>
+            </p>
+            <pre>{pendingCloudAction.preview}</pre>
+            {pendingCloudAction.fullPreview && (
+              <p>A prévia completa fica disponível na janela nativa de aprovação.</p>
+            )}
+            <p className="cloud-settings-notice">
+              Esta ação aguarda sua decisão na janela nativa. Este painel não aprova nem recusa
+              ações.
+            </p>
+          </article>
+        ) : (
+          <p className="empty-state">Nenhuma ação de nuvem aguarda aprovação.</p>
+        )}
+      </section>
+
       <p className="cloud-settings-notice">
-        Iniciar ou parar uma VM exige aprovação em qualquer modo. A prévia mostra o nome e o ID
-        conferidos da VM; parar pode interromper serviços em execução.
+        As respostas dos provedores são dados externos não confiáveis. Ações remotas podem
+        interromper serviços, alterar regras de rede ou substituir dados; confira a prévia completa
+        na janela nativa de aprovação antes de continuar.
       </p>
       {CLOUD_LINK_CATEGORIES.map((category) => (
         <CloudProviderList
@@ -505,6 +976,22 @@ export function CloudSettings({
 function safeUiError(reason: unknown): string {
   if (typeof reason !== 'string') return 'Não foi possível concluir a solicitação à ShardCloud.';
   return reason.slice(0, 400);
+}
+
+function safeHostingerError(reason: unknown): string {
+  return typeof reason === 'string'
+    ? reason.slice(0, 400)
+    : 'Não foi possível concluir a solicitação à Hostinger.';
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function readExternalText(value: unknown): string {
+  return typeof value === 'string' ? value : '';
 }
 
 function CloudProviderList({

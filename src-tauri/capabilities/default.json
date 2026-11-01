@@ -54,7 +54,9 @@
         { "url": "https://cloud.google.com/**" },
         { "url": "https://azure.microsoft.com/**" },
         { "url": "https://www.oracle.com/**" },
-        { "url": "https://shardcloud.app/**" }
+        { "url": "https://shardcloud.app/**" },
+        { "url": "https://docs.shardcloud.app/**" },
+        { "url": "https://developers.hostinger.com/**" }
       ]
     }
   ]

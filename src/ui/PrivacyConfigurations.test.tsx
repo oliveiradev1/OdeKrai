@@ -18,7 +18,7 @@ describe('configurações de privacidade', () => {
     );
     expect(settingsMarkup).toContain('Pastas permitidas');
     expect(settingsMarkup).toContain('Aplicativos permitidos');
-    expect(settingsMarkup).toContain('Servidores locais');
+    expect(settingsMarkup).toContain('Servidores MCP');
     expect(summaryMarkup).toContain('Abrir Privacidade e permissões');
     expect(summaryMarkup).not.toContain('Escolher aplicativo');
     expect(summaryMarkup).not.toContain('Adicionar Documentos');
@@ -38,7 +38,10 @@ describe('configurações de privacidade', () => {
       'remove_allowed_app',
       'mcp_list_servers',
       'mcp_add_server',
+      'mcp_add_http_server',
       'mcp_set_secret',
+      'mcp_set_http_token',
+      'mcp_oauth_authorize',
       'mcp_set_enabled',
       'mcp_test_connection',
       'mcp_remove_server',
@@ -46,9 +49,21 @@ describe('configurações de privacidade', () => {
       'trust_external_domain',
       'forget_external_domain',
     ];
+    const publicCatalogCommands = new Set([
+      'mcp_list_servers',
+      'mcp_add_http_server',
+      'mcp_set_http_token',
+      'mcp_oauth_authorize',
+      'mcp_set_enabled',
+      'mcp_test_connection',
+    ]);
     for (const command of commands) {
       expect(ui, `interface: ${command}`).toContain(command);
-      expect(skillsUi, `sem duplicação em Habilidades: ${command}`).not.toContain(command);
+      if (publicCatalogCommands.has(command)) {
+        expect(skillsUi, `catálogo público reutiliza o fluxo MCP: ${command}`).toContain(command);
+      } else {
+        expect(skillsUi, `sem duplicação em Habilidades: ${command}`).not.toContain(command);
+      }
       expect(rustCommands, `registro Rust: ${command}`).toContain(command);
     }
     for (const readCommand of ['get_allowed_folders', 'get_allowed_apps']) {
@@ -81,7 +96,28 @@ describe('configurações de privacidade', () => {
     expect(ui).toContain('name={`mcp-new-secret-${key}`}');
     expect(ui).toContain('id={`mcp-secret-${server.id}-${key}`}');
     expect(ui).toContain('name={`mcp-secret-${server.id}-${key}`}');
-    expect(ui.match(/autoComplete="off"/g)).toHaveLength(2);
+    expect(ui).toContain('mcp-remote-token-new');
+    expect(ui).toContain('mcp-http-token-${server.id}');
+    expect(ui).toContain('saveRemoteToken(server)');
+    expect(ui).toContain('token não volta a ser exibido');
+    expect(ui.match(/autoComplete="off"/g)).toHaveLength(4);
+  });
+
+  it('apresenta ferramentas MCP separadas por disponibilidade e trata anotações como sugestão', () => {
+    const ui = readFileSync(new URL('./PrivacyConfigurations.tsx', import.meta.url), 'utf8');
+    expect(ui).toContain('Ferramentas encontradas');
+    expect(ui).toContain('Ativar esta ferramenta MCP (desativada por padrão)');
+    expect(ui).toContain('Indisponível: {tool.reason}');
+    expect(ui).toContain('Sugestão do servidor:');
+    expect(ui).toContain('não altera o risco nem a aprovação obrigatória');
+    expect(ui).toContain('dados externos não');
+    expect(ui).toContain('confiáveis.');
+  });
+
+  it('exibe o aviso de revogação sem desfazer a remoção local do servidor', () => {
+    const ui = readFileSync(new URL('./PrivacyConfigurations.tsx', import.meta.url), 'utf8');
+    expect(ui).toContain("invoke<string | null>('mcp_remove_server'");
+    expect(ui).toContain("setError(warning ?? '')");
   });
 
   it('submete a URL do Discord pelo formulário de gravação e testa sem recarregar', () => {

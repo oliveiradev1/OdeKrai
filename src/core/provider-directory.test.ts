@@ -16,6 +16,8 @@ import {
   confirmProviderCredentialRemoval,
   providerCardHasManagement,
   isProviderConnected,
+  localServiceStatus,
+  parseLocalProbePort,
 } from './provider-directory';
 
 describe('diretório de provedores', () => {
@@ -74,6 +76,35 @@ describe('diretório de provedores', () => {
   it('classifica serviço local online independentemente da credencial opcional', () => {
     expect(isProviderConnected('local', false, undefined, true)).toBe(true);
     expect(isProviderConnected('local', false, undefined, false)).toBe(false);
+  });
+
+  it('resume os estados do serviço local no catálogo de provedores', () => {
+    expect(localServiceStatus(false, 0, false)).toEqual({
+      label: 'Verificando servidor local…',
+      tone: 'warning',
+    });
+    expect(localServiceStatus(false, 0, true)).toEqual({
+      label: 'Servidor não encontrado',
+      tone: 'disconnected',
+    });
+    expect(localServiceStatus(true, 0, true)).toEqual({
+      label: 'Servidor ativo, sem modelo carregado',
+      tone: 'warning',
+    });
+    expect(localServiceStatus(true, 1, true)).toEqual({
+      label: 'Conectado',
+      tone: 'connected',
+    });
+  });
+
+  it('valida porta opcional como inteiro no intervalo permitido', () => {
+    expect(parseLocalProbePort('')).toEqual({ valid: true, port: undefined });
+    expect(parseLocalProbePort('9931')).toEqual({ valid: true, port: 9931 });
+    expect(parseLocalProbePort('1024')).toEqual({ valid: true, port: 1024 });
+    expect(parseLocalProbePort('65535')).toEqual({ valid: true, port: 65535 });
+    for (const value of ['abc', '1023', '65536', '1024.5', '-1']) {
+      expect(parseLocalProbePort(value)).toEqual({ valid: false });
+    }
   });
 
   it('não anuncia Cerebras como plano gratuito por causa de crédito promocional', () => {
