@@ -272,6 +272,11 @@ fn sanitize_log_details(input: &str, user_profile: Option<&str>) -> String {
         "pplx-",
         "api_key=",
         "api-key=",
+        "access_token=",
+        "refresh_token=",
+        "code_verifier=",
+        "authorization_code=",
+        "code=",
         "token=",
         "client_secret=",
         "password=",
@@ -706,7 +711,7 @@ mod tests {
     #[test]
     fn diagnostic_log_redacts_credentials_emails_and_profile_paths() {
         let details = sanitize_log_details(
-            "Bearer bearer-secret sk-api-secret pplx-api-secret api_key=key-secret token=token-secret client_secret=oauth-secret password=private-password ana@example.com C:\\Users\\Daniel\\AppData\\Local\\OdeKrai",
+            "Bearer bearer-secret sk-api-secret pplx-api-secret api_key=key-secret token=token-secret client_secret=oauth-secret password=private-password ana@example.com C:\\Users\\Daniel\\AppData\\Local\\OdeKrai https://auth.example/callback?access_token=url-access-secret&state=safe",
             Some(r"C:\Users\Daniel"),
         );
 
@@ -718,6 +723,7 @@ mod tests {
             "token-secret",
             "oauth-secret",
             "private-password",
+            "url-access-secret",
             "ana@example.com",
             "C:\\Users\\Daniel",
         ] {
@@ -728,6 +734,29 @@ mod tests {
         }
         assert!(details.contains("%USERPROFILE%\\AppData\\Local\\OdeKrai"));
         assert!(sanitize_log_details(&"x".repeat(600), None).len() <= 512);
+    }
+
+    #[test]
+    fn diagnostic_writer_redacts_tokens_in_url_query_parameters() {
+        let path = std::env::temp_dir().join(format!(
+            "odekrai-diagnostic-token-url-{}-{}.log",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        write_log(
+            &path,
+            "diagnostic_error",
+            "request_url=https://auth.example/callback?access_token=url-access-secret&state=safe",
+        )
+        .unwrap();
+
+        let contents = fs::read_to_string(&path).unwrap();
+        assert!(!contents.contains("url-access-secret"));
+        assert!(contents.contains("[credencial removida]"));
+        fs::remove_file(path).unwrap();
     }
 
     #[test]

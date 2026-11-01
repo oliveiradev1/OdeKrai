@@ -160,15 +160,15 @@ impl std::fmt::Debug for StoredOAuth {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("StoredOAuth")
-            .field("issuer", &self.issuer)
-            .field("resource", &self.resource)
+            .field("issuer", &"[URL OMITIDA]")
+            .field("resource", &"[URL OMITIDA]")
             .field("client_id", &self.client_id)
             .field(
                 "client_secret",
                 &self.client_secret.as_ref().map(|_| "[REDACTED]"),
             )
-            .field("token_endpoint", &self.token_endpoint)
-            .field("revocation_endpoint", &self.revocation_endpoint)
+            .field("token_endpoint", &"[URL OMITIDA]")
+            .field("revocation_endpoint", &"[URL OMITIDA]")
             .field(
                 "refresh_token",
                 &self.refresh_token.as_ref().map(|_| "[REDACTED]"),
@@ -197,7 +197,6 @@ pub(crate) fn should_refresh(expires_at: Instant, now: Instant) -> bool {
     expires_at <= now + Duration::from_secs(60)
 }
 
-#[derive(Debug)]
 struct ServerMetadata {
     authorization_endpoint: String,
     token_endpoint: String,
@@ -205,6 +204,29 @@ struct ServerMetadata {
     revocation_endpoint: Option<String>,
     client_id_metadata_document_supported: bool,
     issuer_parameter_supported: bool,
+}
+
+impl std::fmt::Debug for ServerMetadata {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ServerMetadata")
+            .field("authorization_endpoint", &"[URL OMITIDA]")
+            .field("token_endpoint", &"[URL OMITIDA]")
+            .field(
+                "registration_endpoint",
+                &self.registration_endpoint.as_ref().map(|_| "[URL OMITIDA]"),
+            )
+            .field(
+                "revocation_endpoint",
+                &self.revocation_endpoint.as_ref().map(|_| "[URL OMITIDA]"),
+            )
+            .field(
+                "client_id_metadata_document_supported",
+                &self.client_id_metadata_document_supported,
+            )
+            .field("issuer_parameter_supported", &self.issuer_parameter_supported)
+            .finish()
+    }
 }
 
 #[derive(Clone, Serialize)]
@@ -764,6 +786,19 @@ struct RegisteredOAuthClient {
     client_secret: Option<String>,
 }
 
+impl std::fmt::Debug for RegisteredOAuthClient {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RegisteredOAuthClient")
+            .field("client_id", &self.client_id)
+            .field(
+                "client_secret",
+                &self.client_secret.as_ref().map(|_| "[REDACTED]"),
+            )
+            .finish()
+    }
+}
+
 fn register_client_with(
     metadata: &ServerMetadata,
     redirect_uri: &str,
@@ -1041,6 +1076,25 @@ struct TokenResponse {
     token_type: Option<String>,
     expires_in: Option<u64>,
     error: Option<String>,
+}
+
+impl std::fmt::Debug for TokenResponse {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("TokenResponse")
+            .field(
+                "access_token",
+                &self.access_token.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field(
+                "refresh_token",
+                &self.refresh_token.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("token_type", &self.token_type)
+            .field("expires_in", &self.expires_in)
+            .field("error", &self.error.as_ref().map(|_| "[OMITTED]"))
+            .finish()
+    }
 }
 
 fn exchange_code(
@@ -1726,6 +1780,15 @@ mod tests {
         })
         .unwrap();
         assert!(!public_view.contains("client-secret-fixture"));
+        for secret_field in [
+            "accessToken",
+            "refreshToken",
+            "clientSecret",
+            "authorizationCode",
+            "codeVerifier",
+        ] {
+            assert!(!public_view.contains(secret_field));
+        }
     }
 
     #[test]
@@ -1890,11 +1953,61 @@ mod tests {
             value: "access-secret-fixture".into(),
             expires_at: Instant::now(),
         };
-        let debug = format!("{stored:?} {access:?}");
+        let response = TokenResponse {
+            access_token: Some("response-access-fixture".into()),
+            refresh_token: Some("response-refresh-fixture".into()),
+            token_type: Some("Bearer".into()),
+            expires_in: Some(3600),
+            error: None,
+        };
+        let registered = RegisteredOAuthClient {
+            client_id: "public-client".into(),
+            client_secret: Some("registered-secret-fixture".into()),
+        };
+        let debug = format!("{stored:?} {access:?} {response:?} {registered:?}");
         assert!(!debug.contains("refresh-secret-fixture"));
         assert!(!debug.contains("client-secret-fixture"));
         assert!(!debug.contains("access-secret-fixture"));
-        assert_eq!(debug.matches("[REDACTED]").count(), 3);
+        assert!(!debug.contains("response-access-fixture"));
+        assert!(!debug.contains("response-refresh-fixture"));
+        assert!(!debug.contains("registered-secret-fixture"));
+        assert_eq!(debug.matches("[REDACTED]").count(), 6);
+    }
+
+    #[test]
+    fn debug_omits_server_urls_that_could_contain_query_credentials() {
+        let mut stored = stored_oauth();
+        stored.issuer = "https://auth.example/issuer?access_token=url-access-fixture".into();
+        stored.resource = "https://mcp.example/mcp?token=url-token-fixture".into();
+        stored.token_endpoint =
+            "https://auth.example/token?code_verifier=url-verifier-fixture".into();
+        stored.revocation_endpoint =
+            Some("https://auth.example/revoke?client_secret=url-secret-fixture".into());
+        let metadata = ServerMetadata {
+            authorization_endpoint: "https://auth.example/authorize?code=auth-code-fixture".into(),
+            token_endpoint: "https://auth.example/token?access_token=url-access-fixture".into(),
+            registration_endpoint: Some(
+                "https://auth.example/register?refresh_token=url-refresh-fixture".into(),
+            ),
+            revocation_endpoint: Some(
+                "https://auth.example/revoke?client_secret=url-secret-fixture".into(),
+            ),
+            client_id_metadata_document_supported: false,
+            issuer_parameter_supported: false,
+        };
+        let debug = format!("{stored:?} {metadata:?}");
+
+        for secret in [
+            "url-access-fixture",
+            "url-token-fixture",
+            "url-verifier-fixture",
+            "url-secret-fixture",
+            "auth-code-fixture",
+            "url-refresh-fixture",
+        ] {
+            assert!(!debug.contains(secret), "segredo de URL exposto: {secret}");
+        }
+        assert!(debug.contains("URL OMITIDA"));
     }
 
     #[test]

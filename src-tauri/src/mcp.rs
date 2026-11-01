@@ -26,7 +26,7 @@ pub const REQUEST_TIMEOUT_SECONDS: u64 = 15;
 pub const PROTOCOL_VERSION: &str = "2025-11-25";
 pub const MAX_STDERR_BYTES: usize = 16 * 1024;
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct StdioConfig {
     pub command: String,
     pub args: Vec<String>,
@@ -34,6 +34,22 @@ pub struct StdioConfig {
     pub env: BTreeMap<String, String>,
     pub connection_timeout: Duration,
     pub call_timeout: Duration,
+}
+
+impl std::fmt::Debug for StdioConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("StdioConfig")
+            .field("command", &self.command)
+            .field(
+                "args",
+                &format!("[{} argumentos omitidos]", self.args.len()),
+            )
+            .field("env_names", &self.env.keys().collect::<Vec<_>>())
+            .field("connection_timeout", &self.connection_timeout)
+            .field("call_timeout", &self.call_timeout)
+            .finish()
+    }
 }
 
 impl StdioConfig {
@@ -910,6 +926,23 @@ fn validate_instance(schema: &Value, value: &Value, depth: usize) -> Result<(), 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stdio_config_debug_never_prints_environment_values_or_argument_secrets() {
+        let mut config = StdioConfig::new(
+            "mcp-test",
+            vec!["--access-token=argument-token-fixture".into()],
+        );
+        config
+            .env
+            .insert("MCP_TOKEN".into(), "environment-token-fixture".into());
+
+        let debug = format!("{config:?}");
+        assert!(!debug.contains("argument-token-fixture"));
+        assert!(!debug.contains("environment-token-fixture"));
+        assert!(debug.contains("MCP_TOKEN"));
+        assert!(debug.contains("argumentos omitidos"));
+    }
 
     #[test]
     fn schema_validation_fails_closed_and_checks_required_types_and_bounds() {
