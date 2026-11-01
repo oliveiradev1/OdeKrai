@@ -441,9 +441,8 @@ export function CloudSettings({
     <div className="settings-panel settings-section cloud-settings">
       <h2 id="cloud-settings-heading">Nuvem</h2>
       <p>
-        A integração permite consultar suas VMs. O agente também pode iniciar ou parar uma VM da
-        lista consultada e executar de 1 a 10 comandos nela. O conteúdo integral dos comandos é
-        enviado à API ShardCloud somente depois da aprovação na janela nativa, em qualquer modo.
+        As capacidades variam por provedor e estão descritas nos cartões abaixo. Ações remotas
+        seguem os requisitos de aprovação indicados para cada provedor.
       </p>
       <p className="cloud-settings-notice">
         Nenhuma consulta de rede ocorre ao salvar o token. Ele fica no Gerenciador de Credenciais do
@@ -486,12 +485,12 @@ export function CloudSettings({
         </form>
         <p id="shardcloud-budget-note" className="cloud-settings-notice">
           {budgetCents === null
-            ? 'Sem teto salvo, a criação de VMs deve permanecer bloqueada.'
-            : `Teto salvo: R$ ${formatBudget(budgetCents)} por mês.`}
+            ? 'Nenhum teto mensal salvo. Criar ou comprar VPS não está disponível pelo OdeKrai.'
+            : `Teto informativo salvo: R$ ${formatBudget(budgetCents)} por mês. Compras não estão disponíveis pelo OdeKrai.`}
         </p>
         <p className="cloud-settings-notice">
-          O preço real por VM não foi conferido. Este valor é uma referência local; a ShardCloud não
-          recebe nem aplica esse teto. Custos podem variar conforme o plano e os recursos.
+          O preço real por VM não foi conferido. Este valor é apenas uma referência local; a
+          ShardCloud não recebe nem aplica esse teto. O OdeKrai não cria VPS nem efetua pagamentos.
         </p>
       </section>
 
@@ -523,6 +522,22 @@ export function CloudSettings({
             Documentação oficial da ShardCloud
           </a>
         </p>
+        <div className="cloud-capability-summary">
+          <h4>Disponível pelo OdeKrai</h4>
+          <p>
+            <strong>Leitura:</strong> listar VMs, consultar detalhes e métricas e listar
+            distribuições.
+          </p>
+          <p>
+            <strong>Sempre com aprovação nativa, em qualquer modo:</strong> iniciar ou parar uma VM
+            e executar de 1 a 10 comandos remotos. O conteúdo dos comandos só é enviado após a
+            aprovação.
+          </p>
+          <p>
+            <strong>Não disponível:</strong> projetos Docker, firewalls, backups, criar/comprar,
+            excluir ou reinstalar VMs e pagamentos.
+          </p>
+        </div>
 
         {!credentialLoaded ? (
           <p role="status">Consultando credencial salva…</p>
@@ -719,6 +734,25 @@ export function CloudSettings({
             Documentação oficial da Hostinger
           </a>
         </p>
+        <div className="cloud-capability-summary">
+          <h4>Disponível pelo OdeKrai</h4>
+          <p>
+            <strong>Leitura:</strong> VMs, detalhes, data centers, templates, ações recentes e
+            backups; projetos Docker; firewalls e regras; chaves SSH públicas anexadas.
+          </p>
+          <p>
+            <strong>Sempre com aprovação nativa, em qualquer modo:</strong> iniciar, parar ou
+            reiniciar VPS; iniciar, parar, reiniciar, criar ou atualizar projetos Docker; criar
+            firewalls e regras e ativar ou desativar firewalls; iniciar ou parar o modo de
+            recuperação. Restaurar backup, remover projeto ou apagar firewall/regra também exige
+            confirmação digitando o nome solicitado.
+          </p>
+          <p>
+            <strong>Não disponível:</strong> criar/comprar VPS, pagamentos, excluir ou reinstalar
+            VPS, restaurar snapshots, alterar chaves SSH ou executar comandos genéricos no shell da
+            VPS. O Compose é específico ao Docker e executado no servidor após aprovação.
+          </p>
+        </div>
         {!hostingerCredentialLoaded ? (
           <p role="status">Consultando credencial salva…</p>
         ) : hostingerTokenSaved ? (
@@ -921,10 +955,9 @@ export function CloudSettings({
       </section>
 
       <p className="cloud-settings-notice">
-        Iniciar, parar ou executar comandos em uma VM exige aprovação em qualquer modo. A prévia
-        mostra o nome e o ID conferidos da VM; para comandos, revise o lote completo antes de
-        aprovar. Comandos podem ler ou alterar dados da VM e usar a rede dela; parar pode
-        interromper serviços em execução.
+        As respostas dos provedores são dados externos não confiáveis. Ações remotas podem
+        interromper serviços, alterar regras de rede ou substituir dados; confira a prévia completa
+        na janela nativa de aprovação antes de continuar.
       </p>
       {CLOUD_LINK_CATEGORIES.map((category) => (
         <CloudProviderList
