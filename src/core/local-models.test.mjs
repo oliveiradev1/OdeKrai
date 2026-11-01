@@ -28,11 +28,8 @@ describe('modelos locais', () => {
       modelId: 'modelo-teste',
       name: 'Modelo de teste',
       fileName: 'modelo.gguf',
-      path: 'C:\\modelos\\modelo.gguf',
       sizeBytes: 10,
-      status: 'VERIFICADO',
-      engine: 'GGUF sem executor integrado',
-      ramVramEstimate: 'NÃO VERIFICADO',
+      status: 'BAIXADO',
     };
     expect(isLocalModelInventory([entry])).toBe(true);
     expect(isLocalModelInventory({ items: [entry] })).toBe(false);

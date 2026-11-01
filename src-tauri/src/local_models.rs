@@ -1,4 +1,5 @@
 use reqwest::{header, redirect::Policy, Client, StatusCode, Url};
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -7,10 +8,12 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     sync::Mutex,
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 use tokio_util::sync::CancellationToken;
+
+const VERIFICATION_PROGRESS_INTERVAL_BYTES: u64 = 8 * 1024 * 1024;
 
 #[derive(Deserialize)]
 struct Manifest {
@@ -44,35 +47,58 @@ pub struct LocalModelInventory {
     model_id: String,
     name: String,
     file_name: String,
-    path: String,
     size_bytes: u64,
     status: &'static str,
-    engine: &'static str,
-    ram_vram_estimate: &'static str,
 }
 
 #[derive(Default)]
-pub struct Downloads(Mutex<HashMap<String, CancellationToken>>);
+pub struct Downloads {
+    active: Mutex<HashMap<String, CancellationToken>>,
+    verifications: Mutex<HashMap<String, CancellationToken>>,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct VerificationProgress {
+    model_id: String,
+    processed_bytes: u64,
+    total_bytes: u64,
+    status: &'static str,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalModelVerificationResult {
+    pub model_id: String,
+    pub verified: bool,
+    pub size_bytes: u64,
+}
 
 /// Reads the chosen folder directly. The filesystem is the persisted inventory source;
 /// this command never treats a selected UI model as a downloaded or verified file.
 #[tauri::command]
-pub fn inspect_local_models(
+pub async fn inspect_local_models(
     caller: tauri::WebviewWindow,
     state: tauri::State<'_, Downloads>,
     destination: String,
 ) -> Result<Vec<LocalModelInventory>, String> {
     crate::require_main(&caller)?;
-    let folder = PathBuf::from(destination)
-        .canonicalize()
-        .map_err(|_| "A pasta de modelos não existe ou não pode ser acessada.".to_string())?;
-    let manifest: Manifest = serde_json::from_str(include_str!("../resources/local-models.json"))
-        .map_err(|_| "O catálogo de modelos está inválido.".to_string())?;
     let active = state
-        .0
+        .active
         .lock()
-        .map_err(|_| "Não foi possível consultar os downloads ativos.".to_string())?;
-    inventory_models(&folder, manifest.models, &active)
+        .map_err(|_| "Não foi possível consultar os downloads ativos.".to_string())?
+        .clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let folder = PathBuf::from(destination)
+            .canonicalize()
+            .map_err(|_| "A pasta de modelos não existe ou não pode ser acessada.".to_string())?;
+        let manifest: Manifest =
+            serde_json::from_str(include_str!("../resources/local-models.json"))
+                .map_err(|_| "O catálogo de modelos está inválido.".to_string())?;
+        inventory_models(&folder, manifest.models, &active)
+    })
+    .await
+    .map_err(|_| "Não foi possível concluir a consulta dos modelos locais.".to_string())?
 }
 
 fn inventory_models(
@@ -114,16 +140,6 @@ fn inventory_models(
                 let expected_size = model.size_bytes.unwrap_or_default();
                 if metadata.len() != expected_size {
                     (metadata.len(), "ERRO")
-                } else if let Some(expected_hash) = model.sha256.as_deref() {
-                    match hash_file(&path) {
-                        Ok(actual)
-                            if actual.eq_ignore_ascii_case(expected_hash)
-                                && has_gguf_magic(&path) =>
-                        {
-                            (metadata.len(), "VERIFICADO")
-                        }
-                        Ok(_) | Err(_) => (metadata.len(), "ERRO"),
-                    }
                 } else {
                     (metadata.len(), "BAIXADO")
                 }
@@ -133,30 +149,231 @@ fn inventory_models(
             model_id: model.id,
             name: model.name,
             file_name: model.file,
-            path: path.to_string_lossy().into_owned(),
             size_bytes,
             status,
-            engine: "GGUF sem executor integrado",
-            ram_vram_estimate: "NÃO VERIFICADO",
         });
     }
     Ok(inventory)
 }
 
-fn hash_file(path: &Path) -> Result<String, String> {
+fn hash_file_with_progress(
+    path: &Path,
+    token: &CancellationToken,
+    mut progress: impl FnMut(u64, u64),
+) -> Result<String, String> {
+    if token.is_cancelled() {
+        return Err("Verificação cancelada pelo usuário.".into());
+    }
     let mut file =
         fs::File::open(path).map_err(|_| "Não foi possível ler o arquivo.".to_string())?;
+    let total = file
+        .metadata()
+        .map_err(|_| "Não foi possível consultar o tamanho do arquivo.".to_string())?
+        .len();
     let mut hash = Sha256::new();
     let mut buffer = [0; 1024 * 1024];
+    let mut processed = 0;
+    let mut reported = 0;
     loop {
+        if token.is_cancelled() {
+            return Err("Verificação cancelada pelo usuário.".into());
+        }
         let count = std::io::Read::read(&mut file, &mut buffer)
             .map_err(|_| "Não foi possível verificar o arquivo.".to_string())?;
         if count == 0 {
             break;
         }
         hash.update(&buffer[..count]);
+        processed += count as u64;
+        if processed.saturating_sub(reported) >= VERIFICATION_PROGRESS_INTERVAL_BYTES
+            || processed == total
+        {
+            progress(processed, total);
+            reported = processed;
+        }
     }
     Ok(format!("{:x}", hash.finalize()))
+}
+
+fn initialize_verification_cache(connection: &Connection) -> Result<(), String> {
+    connection
+        .execute_batch(
+            "CREATE TABLE IF NOT EXISTS local_model_verifications (
+                model_id TEXT PRIMARY KEY NOT NULL,
+                actual_sha256 TEXT NOT NULL,
+                expected_sha256 TEXT NOT NULL,
+                file_size_bytes INTEGER NOT NULL,
+                modified_at INTEGER NOT NULL,
+                verified_at INTEGER NOT NULL,
+                verified INTEGER NOT NULL CHECK(verified IN (0, 1))
+            );",
+        )
+        .map_err(|_| "Não foi possível preparar o cache de verificação dos modelos.".to_string())
+}
+
+fn store_verification_cache(
+    connection: &Connection,
+    model_id: &str,
+    actual_sha256: &str,
+    expected_sha256: &str,
+    file_size_bytes: u64,
+    modified_at: i64,
+    verified_at: i64,
+    verified: bool,
+) -> Result<(), String> {
+    connection
+        .execute(
+            "INSERT INTO local_model_verifications
+                (model_id, actual_sha256, expected_sha256, file_size_bytes, modified_at, verified_at, verified)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(model_id) DO UPDATE SET
+                actual_sha256=excluded.actual_sha256,
+                expected_sha256=excluded.expected_sha256,
+                file_size_bytes=excluded.file_size_bytes,
+                modified_at=excluded.modified_at,
+                verified_at=excluded.verified_at,
+                verified=excluded.verified",
+            params![
+                model_id,
+                actual_sha256,
+                expected_sha256,
+                i64::try_from(file_size_bytes).unwrap_or(i64::MAX),
+                modified_at,
+                verified_at,
+                if verified { 1_i64 } else { 0_i64 },
+            ],
+        )
+        .map_err(|_| "Não foi possível salvar o resultado da verificação.".to_string())?;
+    Ok(())
+}
+
+fn unix_timestamp(time: SystemTime) -> i64 {
+    time.duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        .min(i64::MAX as u64) as i64
+}
+
+fn verify_model_file(
+    folder: &Path,
+    app_data: &Path,
+    model: &Model,
+    token: &CancellationToken,
+    app: &tauri::AppHandle,
+) -> Result<LocalModelVerificationResult, String> {
+    let folder = folder
+        .canonicalize()
+        .map_err(|_| "A pasta de modelos não existe ou não pode ser acessada.".to_string())?;
+    let candidate = folder.join(&model.file);
+    let metadata = fs::symlink_metadata(&candidate)
+        .map_err(|_| "O arquivo do modelo não foi encontrado.".to_string())?;
+    if !metadata.file_type().is_file() {
+        return Err("O arquivo do modelo não é um arquivo comum.".into());
+    }
+    let path = candidate
+        .canonicalize()
+        .map_err(|_| "O arquivo do modelo não pode ser acessado.".to_string())?;
+    if path.parent() != Some(folder.as_path()) {
+        return Err("O arquivo do modelo está fora da pasta escolhida.".into());
+    }
+    let metadata = fs::metadata(&path)
+        .map_err(|_| "Não foi possível consultar o arquivo do modelo.".to_string())?;
+    let modified_at = metadata.modified().map(unix_timestamp).unwrap_or_default();
+    let total_bytes = metadata.len();
+    let _ = app.emit(
+        "local-model-verification-progress",
+        VerificationProgress {
+            model_id: model.id.clone(),
+            processed_bytes: 0,
+            total_bytes,
+            status: "verificando",
+        },
+    );
+    let expected_sha256 = model
+        .sha256
+        .as_deref()
+        .ok_or("O hash deste modelo não está definido no catálogo.")?;
+    let actual_sha256 = hash_file_with_progress(&path, token, |processed_bytes, total_bytes| {
+        let _ = app.emit(
+            "local-model-verification-progress",
+            VerificationProgress {
+                model_id: model.id.clone(),
+                processed_bytes,
+                total_bytes,
+                status: "verificando",
+            },
+        );
+    });
+    let actual_sha256 = match actual_sha256 {
+        Ok(hash) => hash,
+        Err(error) => {
+            let status = if token.is_cancelled() {
+                "cancelado"
+            } else {
+                "erro"
+            };
+            let _ = app.emit(
+                "local-model-verification-progress",
+                VerificationProgress {
+                    model_id: model.id.clone(),
+                    processed_bytes: 0,
+                    total_bytes,
+                    status,
+                },
+            );
+            return Err(error);
+        }
+    };
+    let verified = total_bytes == model.size_bytes.unwrap_or_default()
+        && actual_sha256.eq_ignore_ascii_case(expected_sha256)
+        && has_gguf_magic(&path);
+    let cache_result = open_verification_cache(app_data).and_then(|connection| {
+        store_verification_cache(
+            &connection,
+            &model.id,
+            &actual_sha256,
+            expected_sha256,
+            total_bytes,
+            modified_at,
+            unix_timestamp(SystemTime::now()),
+            verified,
+        )
+    });
+    if let Err(error) = cache_result {
+        let _ = app.emit(
+            "local-model-verification-progress",
+            VerificationProgress {
+                model_id: model.id.clone(),
+                processed_bytes: total_bytes,
+                total_bytes,
+                status: "erro",
+            },
+        );
+        return Err(error);
+    }
+    let _ = app.emit(
+        "local-model-verification-progress",
+        VerificationProgress {
+            model_id: model.id.clone(),
+            processed_bytes: total_bytes,
+            total_bytes,
+            status: if verified { "concluido" } else { "erro" },
+        },
+    );
+    Ok(LocalModelVerificationResult {
+        model_id: model.id.clone(),
+        verified,
+        size_bytes: total_bytes,
+    })
+}
+
+fn open_verification_cache(app_data: &Path) -> Result<Connection, String> {
+    fs::create_dir_all(app_data)
+        .map_err(|_| "Não foi possível preparar o cache de modelos locais.".to_string())?;
+    let connection = Connection::open(app_data.join("local-model-verifications.sqlite3"))
+        .map_err(|_| "Não foi possível abrir o cache de modelos locais.".to_string())?;
+    initialize_verification_cache(&connection)?;
+    Ok(connection)
 }
 
 fn has_gguf_magic(path: &Path) -> bool {
@@ -165,6 +382,72 @@ fn has_gguf_magic(path: &Path) -> bool {
     };
     let mut magic = [0; 4];
     std::io::Read::read_exact(&mut file, &mut magic).is_ok() && &magic == b"GGUF"
+}
+
+#[tauri::command]
+pub async fn verify_local_model(
+    caller: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Downloads>,
+    model_id: String,
+    destination: String,
+) -> Result<LocalModelVerificationResult, String> {
+    crate::require_main(&caller)?;
+    let model = manifest_model(&model_id)?;
+    if model.sha256.is_none() || model.size_bytes.is_none() {
+        return Err("Este modelo não tem hash e tamanho definidos no catálogo.".into());
+    }
+    let token = CancellationToken::new();
+    {
+        let mut verifications = state
+            .verifications
+            .lock()
+            .map_err(|_| "Não foi possível iniciar a verificação do modelo.".to_string())?;
+        if verifications.contains_key(&model_id) {
+            return Err("Este modelo já está sendo verificado.".into());
+        }
+        verifications.insert(model_id.clone(), token.clone());
+    }
+    let app_data = app
+        .path()
+        .app_data_dir()
+        .map_err(|_| "Não foi possível localizar o cache de modelos locais.".to_string());
+    let result = match app_data {
+        Ok(app_data) => match tauri::async_runtime::spawn_blocking(move || {
+            verify_model_file(Path::new(&destination), &app_data, &model, &token, &app)
+        })
+        .await
+        {
+            Ok(result) => result,
+            Err(_) => Err("Não foi possível concluir a verificação do modelo.".to_string()),
+        },
+        Err(error) => Err(error),
+    };
+    if let Ok(mut verifications) = state.verifications.lock() {
+        verifications.remove(&model_id);
+    }
+    result
+}
+
+#[tauri::command]
+pub fn cancel_local_model_verification(
+    caller: tauri::WebviewWindow,
+    state: tauri::State<'_, Downloads>,
+    model_id: String,
+) -> Result<bool, String> {
+    crate::require_main(&caller)?;
+    let token = state
+        .verifications
+        .lock()
+        .map_err(|_| "Não foi possível cancelar a verificação.".to_string())?
+        .get(&model_id)
+        .cloned();
+    if let Some(token) = token {
+        token.cancel();
+        Ok(true)
+    } else {
+        Ok(false)
+    }
 }
 
 #[tauri::command]
@@ -201,7 +484,7 @@ pub async fn download_local_model(
     let token = CancellationToken::new();
     {
         let mut active = state
-            .0
+            .active
             .lock()
             .map_err(|_| "Não foi possível iniciar o download.".to_string())?;
         if active.contains_key(&model_id) {
@@ -210,7 +493,7 @@ pub async fn download_local_model(
         active.insert(model_id.clone(), token.clone());
     }
     let result = download_file(&app, &model, &final_path, &partial_path, token).await;
-    if let Ok(mut active) = state.0.lock() {
+    if let Ok(mut active) = state.active.lock() {
         active.remove(&model_id);
     }
     result
@@ -224,7 +507,7 @@ pub fn cancel_local_model_download(
 ) -> Result<bool, String> {
     crate::require_main(&caller)?;
     let token = state
-        .0
+        .active
         .lock()
         .map_err(|_| "Não foi possível cancelar o download.".to_string())?
         .get(&model_id)
@@ -499,7 +782,7 @@ mod tests {
             .iter()
             .map(|item| item.status)
             .collect::<Vec<_>>(),
-            ["VERIFICADO", "NAO_BAIXADO"]
+            ["BAIXADO", "NAO_BAIXADO"]
         );
         fs::write(folder.join(&first.file), b"NOPE").unwrap();
         assert!(!has_gguf_magic(&folder.join(&first.file)));
@@ -511,10 +794,8 @@ mod tests {
             )
             .unwrap()[0]
                 .status,
-            "ERRO"
+            "BAIXADO"
         );
-        fs::write(folder.join(&first.file), b"GGUF").unwrap();
-        assert!(has_gguf_magic(&folder.join(&first.file)));
         fs::remove_file(folder.join(first_file.clone())).unwrap();
         let partial = folder.join(format!("{first_file}.part"));
         fs::write(&partial, b"GGUF").unwrap();
@@ -539,5 +820,120 @@ mod tests {
             ["NAO_BAIXADO", "NAO_BAIXADO"]
         );
         fs::remove_dir_all(folder).unwrap();
+    }
+
+    #[test]
+    fn inventory_does_not_read_large_model_contents() {
+        let folder = std::env::temp_dir().join(format!(
+            "odekrai-model-inventory-large-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&folder).unwrap();
+        let size_bytes = 512 * 1024 * 1024;
+        let model = Model {
+            id: "large".into(),
+            name: "Large model".into(),
+            repository: "test/model".into(),
+            file: "large.gguf".into(),
+            size_bytes: Some(size_bytes),
+            sha256: Some("0".repeat(64)),
+            license: Some("test".into()),
+            download_hosts: vec!["example.test".into()],
+        };
+        let path = folder.join(&model.file);
+        let mut file = fs::File::create(&path).unwrap();
+        file.write_all(b"NOPE").unwrap();
+        file.set_len(size_bytes).unwrap();
+        drop(file);
+
+        let inventory = inventory_models(&folder, vec![model], &HashMap::new()).unwrap();
+        assert_eq!(inventory[0].status, "BAIXADO");
+        assert_eq!(inventory[0].size_bytes, size_bytes);
+        assert_eq!(inventory[0].file_name, "large.gguf");
+        let serialized = serde_json::to_value(&inventory[0]).unwrap();
+        assert!(serialized.get("path").is_none());
+        assert!(serialized.get("sha256").is_none());
+        assert!(!has_gguf_magic(&path));
+
+        fs::remove_dir_all(folder).unwrap();
+    }
+
+    #[test]
+    fn verification_hash_can_be_cancelled_between_chunks() {
+        let path = std::env::temp_dir().join(format!(
+            "odekrai-model-hash-cancel-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::write(&path, vec![b'x'; 9 * 1024 * 1024]).unwrap();
+        let token = CancellationToken::new();
+        let cancel = token.clone();
+        let mut progress_events = 0;
+        let result = hash_file_with_progress(&path, &token, |processed, _| {
+            progress_events += 1;
+            if processed > 0 {
+                cancel.cancel();
+            }
+        });
+        assert_eq!(result.unwrap_err(), "Verificação cancelada pelo usuário.");
+        assert!(progress_events > 0);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn verification_hash_reports_progress_and_matches_known_sha256() {
+        let path = std::env::temp_dir().join(format!(
+            "odekrai-model-hash-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::write(&path, b"GGUF").unwrap();
+        let mut progress = Vec::new();
+        let hash = hash_file_with_progress(&path, &CancellationToken::new(), |processed, total| {
+            progress.push((processed, total))
+        })
+        .unwrap();
+        assert_eq!(hash, format!("{:x}", Sha256::digest(b"GGUF")));
+        assert_eq!(progress, [(4, 4)]);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn verification_result_is_saved_in_sqlite_cache() {
+        let connection = Connection::open_in_memory().unwrap();
+        initialize_verification_cache(&connection).unwrap();
+        store_verification_cache(
+            &connection,
+            "model-a",
+            "actual-hash",
+            "expected-hash",
+            512,
+            10,
+            20,
+            false,
+        )
+        .unwrap();
+        let cache: (String, String, i64, i64) = connection
+            .query_row(
+                "SELECT actual_sha256, expected_sha256, file_size_bytes, verified
+                 FROM local_model_verifications WHERE model_id = ?1",
+                ["model-a"],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            cache,
+            ("actual-hash".into(), "expected-hash".into(), 512, 0)
+        );
     }
 }

@@ -7,11 +7,8 @@ export type LocalModelInventory = {
   modelId: string;
   name: string;
   fileName: string;
-  path: string;
   sizeBytes: number;
-  status: 'NAO_BAIXADO' | 'BAIXANDO' | 'PARCIAL' | 'BAIXADO' | 'VERIFICADO' | 'ERRO';
-  engine: string;
-  ramVramEstimate: string;
+  status: 'NAO_BAIXADO' | 'BAIXANDO' | 'PARCIAL' | 'BAIXADO' | 'ERRO';
 };
 
 const inventoryStatuses = new Set<LocalModelInventory['status']>([
@@ -19,7 +16,6 @@ const inventoryStatuses = new Set<LocalModelInventory['status']>([
   'BAIXANDO',
   'PARCIAL',
   'BAIXADO',
-  'VERIFICADO',
   'ERRO',
 ]);
 
@@ -36,12 +32,9 @@ export function isLocalModelInventory(value: unknown): value is LocalModelInvent
         typeof entry.modelId === 'string' &&
         typeof entry.name === 'string' &&
         typeof entry.fileName === 'string' &&
-        typeof entry.path === 'string' &&
         isNonNegativeSafeInteger(entry.sizeBytes) &&
         typeof entry.status === 'string' &&
-        inventoryStatuses.has(entry.status as LocalModelInventory['status']) &&
-        typeof entry.engine === 'string' &&
-        typeof entry.ramVramEstimate === 'string',
+        inventoryStatuses.has(entry.status as LocalModelInventory['status']),
     )
   );
 }

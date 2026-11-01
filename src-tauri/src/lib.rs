@@ -1198,6 +1198,8 @@ pub fn run() -> Result<(), tauri::Error> {
             hardware::get_hardware_profile,
             local_models::download_local_model,
             local_models::cancel_local_model_download,
+            local_models::verify_local_model,
+            local_models::cancel_local_model_verification,
             local_models::delete_local_model,
             local_models::inspect_local_models,
             diagnostics::get_startup_state,
