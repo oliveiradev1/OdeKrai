@@ -39,11 +39,8 @@ describe('ProvidersScreen', () => {
   });
 
   it('mostra as três abas e um ícone de fallback no cartão local', () => {
-    const providerCatalog = readFileSync(
-      new URL('../ProviderCatalog.tsx', import.meta.url),
-      'utf8',
-    );
     const app = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
+    const localCard = readFileSync(new URL('../LocalAiProviderCard.tsx', import.meta.url), 'utf8');
     const markup = renderToStaticMarkup(
       <ProvidersScreen
         settings={defaultSettings}
@@ -64,9 +61,9 @@ describe('ProvidersScreen', () => {
     expect(markup).toContain('Todos');
     expect(markup).toContain(renderToStaticMarkup(<Icon name="harddrives" size={23} />));
     expect(markup).toContain('IA local (gratuita)');
-    expect(markup).toContain('Serviço local não verificado');
+    expect(markup).toContain('Verificando servidor local…');
     expect(markup).toContain('Abrir Meu computador');
-    expect(providerCatalog).toContain('onClick={onOpenComputer}');
+    expect(localCard).toContain('onClick={onOpenComputer}');
     expect(app).toContain("onOpenComputer={() => navigate('computer')}");
   });
 
@@ -106,7 +103,7 @@ describe('ProvidersScreen', () => {
     expect(markup).toContain('Plano gratuito verificado');
     expect(markup).toContain('API local compatível com OpenAI');
     expect(markup).toContain('Local');
-    expect(markup).toContain('Serviço local não verificado');
+    expect(markup).toContain('Verificando servidor local…');
     expect(markup).not.toContain('Credencial salva');
     expect(css).toContain('grid-auto-rows: 1fr');
     expect(css).not.toContain('grid-auto-rows: minmax(236px, 1fr)');

@@ -19,11 +19,13 @@ import {
   confirmProviderCredentialRemoval,
   saveProviderDirectoryTab,
   localServiceStatus,
+  parseLocalProbePort,
   type ProviderDirectoryTab,
 } from '../core/provider-directory';
 import { PageHeader } from './DesignSystem';
 import { useConfirmation } from './ConfirmationProvider';
 import { Icon } from './Icon';
+import { LocalAiProviderCard } from './LocalAiProviderCard';
 import {
   activeProviderSettings,
   defaultProviderSettings,
@@ -94,7 +96,7 @@ export function ProviderCatalog({
   const [credentialSavedIds, setCredentialSavedIds] = useState<Set<string>>(new Set());
   const [localServiceOnline, setLocalServiceOnline] = useState(false);
   const [localServiceChecked, setLocalServiceChecked] = useState(false);
-  const localStatus = localServiceStatus(localServiceOnline, localServiceChecked);
+  const [localProbePort, setLocalProbePort] = useState('');
   const connectedIds = useMemo(
     () =>
       new Set(
@@ -122,6 +124,11 @@ export function ProviderCatalog({
   const credentialAvailable = credentialSavedIds.has(selected.id);
   const [models, setModels] = useState<{ id: string; name: string }[]>([]);
   const [localModels, setLocalModels] = useState<LocalDiscovery['models']>([]);
+  const localStatus = localServiceStatus(
+    localServiceOnline,
+    localModels.length,
+    localServiceChecked,
+  );
   const [stages, setStages] = useState<{ id: string; status: string; message: string }[]>([]);
   const [technicalError, setTechnicalError] = useState('');
   const [replacementPrimary, setReplacementPrimary] = useState('');
@@ -152,7 +159,7 @@ export function ProviderCatalog({
         ),
         onboardingMode
           ? Promise.resolve({ onlineEndpoints: [], models: [] } as LocalDiscovery)
-          : invoke<LocalDiscovery>('discover_local_models').catch(() => ({
+          : invoke<LocalDiscovery>('discover_local_models', { port: null }).catch(() => ({
               onlineEndpoints: [],
               models: [],
             })),
@@ -324,10 +331,21 @@ export function ProviderCatalog({
     setNotice('');
     try {
       if (selected.id === 'local') {
-        const defaults = ['http://127.0.0.1:11434/v1', 'http://127.0.0.1:8080/v1'];
+        const defaults = [
+          'http://127.0.0.1:11434/v1',
+          'http://127.0.0.1:8080/v1',
+          'http://127.0.0.1:9931/v1',
+        ];
         let discovered: LocalDiscovery;
         if (defaults.includes(endpointForDraft())) {
-          discovered = await invoke<LocalDiscovery>('discover_local_models');
+          const parsedPort = parseLocalProbePort(localProbePort);
+          if (!parsedPort.valid) {
+            setNotice('Informe uma porta inteira entre 1024 e 65535.');
+            return;
+          }
+          discovered = await invoke<LocalDiscovery>('discover_local_models', {
+            port: parsedPort.port ?? null,
+          });
         } else {
           await invoke('validate_provider_endpoint', {
             providerId: 'local',
@@ -509,12 +527,19 @@ export function ProviderCatalog({
     }
   }
   async function discoverLocalForCard(provider: AiProvider) {
+    const parsedPort = parseLocalProbePort(localProbePort);
+    if (!parsedPort.valid) {
+      setNotice('Informe uma porta inteira entre 1024 e 65535.');
+      return;
+    }
     onSelect(provider);
     setDetailsOpen(true);
     setBusy(true);
     setNotice('Procurando servidores locais…');
     try {
-      const discovered = await invoke<LocalDiscovery>('discover_local_models');
+      const discovered = await invoke<LocalDiscovery>('discover_local_models', {
+        port: parsedPort.port ?? null,
+      });
       setLocalServiceOnline(discovered.onlineEndpoints.length > 0);
       setLocalServiceChecked(true);
       setLocalModels(discovered.models);
@@ -526,6 +551,8 @@ export function ProviderCatalog({
       );
     } catch (error) {
       setLocalServiceOnline(false);
+      setLocalModels([]);
+      setModels([]);
       setLocalServiceChecked(true);
       setNotice(typeof error === 'string' ? error : 'Nenhum servidor local foi encontrado.');
     } finally {
@@ -619,23 +646,17 @@ export function ProviderCatalog({
           )}
           <div className="provider-grid">
             {tab === 'free' && (
-              <article className="provider-card provider-local-free-card">
-                <div className="provider-tile">
-                  <Icon name="harddrives" size={23} />
-                  <span className="provider-tile-copy">
-                    <strong>IA local (gratuita)</strong>
-                    <small>Execute modelos no próprio computador.</small>
-                  </span>
-                  <span className="provider-badges">
-                    <span className={`provider-badge--${localStatus.tone}`} role="status">
-                      {localStatus.label}
-                    </span>
-                  </span>
-                </div>
-                <button type="button" className="provider-local-action" onClick={onOpenComputer}>
-                  Abrir Meu computador
-                </button>
-              </article>
+              <LocalAiProviderCard
+                status={localStatus}
+                port={localProbePort}
+                busy={busy}
+                onPortChange={setLocalProbePort}
+                onProbe={() => {
+                  const localProvider = AI_PROVIDERS.find((provider) => provider.id === 'local');
+                  if (localProvider) void discoverLocalForCard(localProvider);
+                }}
+                onOpenComputer={onOpenComputer}
+              />
             )}
             {filtered.map((provider) => {
               const connected = connectedIds.has(provider.id);
@@ -918,7 +939,9 @@ export function ProviderCatalog({
               <p className="provider-key-note" role="status">
                 <strong>Serviço local:</strong>{' '}
                 {localServiceOnline
-                  ? `online em ${localModels.length} modelo(s) listado(s).`
+                  ? localModels.length
+                    ? `online em ${localModels.length} modelo(s) listado(s).`
+                    : 'online, mas sem modelos disponíveis.'
                   : localServiceChecked
                     ? 'offline nas portas padrão verificadas.'
                     : 'ainda não verificado.'}

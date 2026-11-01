@@ -7,13 +7,26 @@ export const providerCardHasManagement = (tab: ProviderDirectoryTab, connected: 
 
 export function localServiceStatus(
   online: boolean,
+  modelCount: number,
   checked: boolean,
-): { label: string; tone: 'connected' | 'disconnected' } {
-  if (online) return { label: 'Serviço local online', tone: 'connected' };
-  return {
-    label: checked ? 'Serviço local offline' : 'Serviço local não verificado',
-    tone: 'disconnected',
-  };
+): { label: string; tone: 'connected' | 'warning' | 'disconnected' } {
+  if (!checked) return { label: 'Verificando servidor local…', tone: 'warning' };
+  if (!online) return { label: 'Servidor não encontrado', tone: 'disconnected' };
+  if (modelCount === 0) {
+    return { label: 'Servidor ativo, sem modelo carregado', tone: 'warning' };
+  }
+  return { label: 'Conectado', tone: 'connected' };
+}
+
+export function parseLocalProbePort(
+  value: string,
+): { valid: true; port: number | undefined } | { valid: false } {
+  const trimmed = value.trim();
+  if (!trimmed) return { valid: true, port: undefined };
+  if (!/^\d+$/.test(trimmed)) return { valid: false };
+  const port = Number(trimmed);
+  if (!Number.isSafeInteger(port) || port < 1024 || port > 65535) return { valid: false };
+  return { valid: true, port };
 }
 const PROVIDER_TAB_STORAGE_KEY = 'odekrai.provider-directory.tab';
 

@@ -4676,6 +4676,10 @@ html[data-performance='on'] .free-mode .island-shell {
   background: #ffffff0d;
   color: #aaa7af;
 }
+.provider-badges .provider-badge--warning {
+  background: #f59e0b20;
+  color: #fcd34d;
+}
 .provider-badges .provider-badge--credential,
 .provider-badges .provider-badge--primary,
 .provider-badges .provider-badge--free {
@@ -4721,6 +4725,20 @@ html[data-performance='on'] .free-mode .island-shell {
   color: #e5e7eb;
   cursor: pointer;
   font: 500 11px var(--font-sans);
+}
+.provider-local-free-card > small {
+  display: block;
+  margin: -6px 10px 8px;
+  color: #aaa7af;
+  font-size: 10px;
+  line-height: 1.4;
+}
+.provider-local-free-card .field-label {
+  margin: 0 10px 8px;
+  font-size: 11px;
+}
+.provider-local-free-card .field-label input {
+  height: 30px;
 }
 .provider-actions-menu {
   position: relative;

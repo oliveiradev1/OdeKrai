@@ -361,18 +361,20 @@ pub async fn discover_local_models(
     caller: tauri::WebviewWindow,
     state: State<'_, ProviderRequests>,
     security: State<'_, crate::security::SecurityState>,
+    port: Option<u32>,
 ) -> Result<LocalModelDiscovery, String> {
     super::require_main(&caller)?;
+    let endpoints = local_model_probe_endpoints(port)?;
     cancellable_request(&state, &security, async {
         let mut found = Vec::new();
         let mut online_endpoints = Vec::new();
         let mut invalid_response = false;
-        for base_url in ["http://127.0.0.1:11434/v1", "http://127.0.0.1:8080/v1"] {
-            match fetch_models_with_auth("local", base_url, false).await {
+        for base_url in endpoints {
+            match fetch_models_with_auth("local", &base_url, false).await {
                 Ok(models) => {
-                    online_endpoints.push(base_url.to_string());
+                    online_endpoints.push(base_url.clone());
                     found.extend(models.into_iter().map(|model| LocalModelOption {
-                        base_url: base_url.to_string(),
+                        base_url: base_url.clone(),
                         model,
                     }));
                 }
@@ -387,6 +389,24 @@ pub async fn discover_local_models(
     .await
 }
 
+fn local_model_probe_endpoints(port: Option<u32>) -> Result<Vec<String>, String> {
+    let mut endpoints = vec![
+        "http://127.0.0.1:11434/v1".to_string(),
+        "http://127.0.0.1:8080/v1".to_string(),
+        "http://127.0.0.1:9931/v1".to_string(),
+    ];
+    if let Some(port) = port {
+        if !(1024..=65535).contains(&port) {
+            return Err("Informe uma porta entre 1024 e 65535.".into());
+        }
+        let endpoint = format!("http://127.0.0.1:{port}/v1");
+        if !endpoints.contains(&endpoint) {
+            endpoints.push(endpoint);
+        }
+    }
+    Ok(endpoints)
+}
+
 fn finish_local_discovery(
     online_endpoints: Vec<String>,
     models: Vec<LocalModelOption>,
@@ -399,7 +419,7 @@ fn finish_local_discovery(
         );
     }
     if online_endpoints.is_empty() {
-        return Err("Servidor local não encontrado nas portas padrão (11434 e 8080).".into());
+        return Err("Servidor local não encontrado nas portas verificadas.".into());
     }
     Ok(LocalModelDiscovery {
         online_endpoints,
@@ -1672,6 +1692,26 @@ mod tests {
         assert!(finish_local_discovery(Vec::new(), Vec::new(), true)
             .unwrap_err()
             .contains("dados inválidos"));
+    }
+
+    #[test]
+    fn local_probe_port_is_optional_bounded_and_loopback_only() {
+        let defaults = local_model_probe_endpoints(None).unwrap();
+        assert_eq!(defaults.len(), 3);
+        assert!(defaults.iter().all(|url| url.starts_with("http://127.0.0.1:")));
+        assert!(defaults.iter().any(|url| url.contains(":9931/")));
+
+        for port in [0, 1023, 65536] {
+            assert!(local_model_probe_endpoints(Some(port))
+                .unwrap_err()
+                .contains("1024 e 65535"));
+        }
+        assert!(local_model_probe_endpoints(Some(1024))
+            .unwrap()
+            .contains(&"http://127.0.0.1:1024/v1".to_string()));
+        assert!(local_model_probe_endpoints(Some(65535))
+            .unwrap()
+            .contains(&"http://127.0.0.1:65535/v1".to_string()));
     }
 
     #[tokio::test]

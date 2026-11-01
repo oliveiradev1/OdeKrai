@@ -16,6 +16,7 @@ import {
   type LocalModelInventory,
 } from '../../core/local-models';
 import { Badge, Button, Card, PageHeader } from '../DesignSystem';
+import { DownloadedModelNotice } from '../DownloadedModelNotice';
 import { Icon } from '../Icon';
 
 const gib = (bytes: number) => `${(bytes / 1_073_741_824).toFixed(1)} GB`;
@@ -491,18 +492,22 @@ export function ComputerScreen({ embedded = false }: { embedded?: boolean }) {
                       <span>Tamanho: {formatBytes(model.sizeBytes)}</span>
                       {file && (
                         <>
-                          <span>
-                            Estado:{' '}
-                            {
+                          {file.status === 'BAIXADO' ? (
+                            <DownloadedModelNotice />
+                          ) : (
+                            <span>
+                              Estado:{' '}
                               {
-                                NAO_BAIXADO: 'Não baixado',
-                                BAIXANDO: 'Baixando',
-                                PARCIAL: 'Download parcial, disponível para retomada',
-                                BAIXADO: 'Baixado, ainda não verificado',
-                                ERRO: 'Erro: arquivo não corresponde ao catálogo',
-                              }[file.status]
-                            }
-                          </span>
+                                {
+                                  NAO_BAIXADO: 'Não baixado',
+                                  BAIXANDO: 'Baixando',
+                                  PARCIAL: 'Download parcial, disponível para retomada',
+                                  BAIXADO: 'Baixado. Ainda não é usado pelo OdeKrai.',
+                                  ERRO: 'Erro: arquivo não corresponde ao catálogo',
+                                }[file.status]
+                              }
+                            </span>
+                          )}
                           <details>
                             <summary>Detalhes do arquivo</summary>
                             <span>
