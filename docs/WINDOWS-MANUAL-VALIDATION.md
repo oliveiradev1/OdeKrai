@@ -33,6 +33,13 @@ Use o executável Tauri gerado para Windows, com o mesmo perfil, escala de tela,
 4. No modo Livre recolhido, clique no sprite e na margem ao redor: o pet deve responder. Clique em áreas transparentes ao redor e confirme que a janela subjacente recebe o clique. Repita com DPI 100%, 125% e 150% e em cada monitor. No modo Ilha, confirme que a cápsula continua recebendo eventos normalmente. Restaure a configuração original do Windows ao terminar.
 5. Confira texto, foco, bordas e cores de estado em todas as superfícies usadas. Use as razões de contraste de `DESIGN-SYSTEM.md` como referência e registre qualquer exceção visual.
 
+## Cartões de provedor e aprovações na Nuvem
+
+1. Em **Configurações > Nuvem**, confirme que ShardCloud e Hostinger exibem um estado, o botão **Conectar** quando ainda não há token e o link oficial. Com credencial salva, **Testar conexão** e **Remover token** ficam disponíveis; o valor salvo nunca volta a aparecer.
+2. No cartão Hostinger, confirme o aviso para criar o token em **Informações da conta → API → Novo token**, que o acesso alcança toda a conta incluindo faturamento e que se recomenda uma expiração curta.
+3. Com uma ação simulada de nuvem aguardando aprovação, confira que **Ações pendentes** apresenta origem, ação solicitada e prévia em texto. **Revisar na janela de aprovação** abre a janela nativa. Não deve haver botões de aprovar ou negar no painel da Nuvem.
+4. Feche ou responda à aprovação na janela nativa e confirme que o painel atualiza e mostra **Nenhuma ação de nuvem aguarda aprovação** quando a fila ficar vazia.
+
 ## MCP e descoberta de IA local
 
 Execute os casos abaixo no executável Windows. Use uma credencial descartável de teste, sem permissões de escrita, e remova-a ao terminar. Não cole tokens em capturas, relatórios ou diagnósticos. OAuth do Notion usa uma conta de teste autorizada. Os testes automatizados correspondentes usam dados e servidores simulados; não fazem chamadas reais.

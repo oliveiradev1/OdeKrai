@@ -14,6 +14,10 @@ describe('links da Nuvem', () => {
     await openCloudLink(url, opener);
 
     expect(opener).toHaveBeenCalledWith('https://shardcloud.app/pt-br/dash/vps');
+
+    await openCloudLink('https://docs.shardcloud.app/api-reference/introduction.md', opener);
+    await openCloudLink('https://developers.hostinger.com/', opener);
+    expect(opener).toHaveBeenLastCalledWith('https://developers.hostinger.com/');
   });
 
   it('recusa protocolo HTTPS ausente e domínio que não consta da lista sem chamar o opener', async () => {
@@ -37,5 +41,7 @@ describe('links da Nuvem', () => {
       expect(url.protocol).toBe('https:');
       expect(CLOUD_LINK_DOMAINS).toContain(url.hostname);
     }
+    expect(CLOUD_LINK_DOMAINS).toContain('docs.shardcloud.app');
+    expect(CLOUD_LINK_DOMAINS).toContain('developers.hostinger.com');
   });
 });

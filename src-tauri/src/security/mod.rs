@@ -114,7 +114,7 @@ pub async fn get_pending_approval(
     caller: tauri::WebviewWindow,
     state: State<'_, SecurityState>,
 ) -> Result<Option<PendingView>, String> {
-    crate::require_caller(&caller, &["approval"])?;
+    crate::require_caller(&caller, &["approval", "main"])?;
     dispatch::get_pending_approval_inner(app, state).await
 }
 

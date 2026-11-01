@@ -13,7 +13,7 @@ describe('seção informativa de nuvem', () => {
     expect(markup).toContain('permite consultar suas VMs');
     expect(markup).toContain('iniciar ou parar uma VM da lista consultada');
     expect(markup).toContain('exige aprovação em qualquer modo');
-    expect(markup).toContain('Configuração necessária');
+    expect(markup).toContain('Não conectado');
     expect(savedMarkup).toContain('ShardCloud');
     expect(savedMarkup).toContain('Token salvo');
   });
@@ -40,7 +40,8 @@ describe('seção informativa de nuvem', () => {
     expect(savedMarkup).not.toContain('id="shardcloud-token"');
     expect(savedMarkup).toContain('id="hostinger-token"');
     expect(savedMarkup).toContain('Testar conexão');
-    expect(savedMarkup).toContain('Remover');
+    expect(savedMarkup).toContain('Remover token');
+    expect(markup).toContain('>Conectar</button>');
     const shardCloudCard = savedMarkup.slice(
       savedMarkup.indexOf('class="cloud-shardcloud"'),
       savedMarkup.indexOf('class="cloud-hostinger"'),
@@ -66,9 +67,9 @@ describe('seção informativa de nuvem', () => {
     expect(connectedMarkup).not.toContain('dangerouslySetInnerHTML');
   });
 
-  it('usa links oficiais sem parâmetros de rastreamento e não apresenta botão de conexão', () => {
+  it('usa links oficiais sem parâmetros de rastreamento e mantém o fluxo de abertura validado', () => {
     const hrefs = [...markup.matchAll(/href="([^"]+)"/g)].map((match) => match[1]);
-    expect(hrefs).toHaveLength(7);
+    expect(hrefs).toHaveLength(9);
     for (const href of hrefs) {
       const url = new URL(href);
       expect(url.protocol).toBe('https:');
@@ -76,8 +77,9 @@ describe('seção informativa de nuvem', () => {
       expect(url.hash).toBe('');
       expect(url.href).not.toContain('utm_source=');
     }
-    expect(markup).not.toMatch(/<button[^>]*>\s*(?:Conectar|Criar conta|Vincular)/i);
-    expect(markup).not.toMatch(/Conectar|Criar conta|Vincular/i);
+    expect(markup).toContain('Documentação oficial da ShardCloud');
+    expect(markup).toContain('Documentação oficial da Hostinger');
+    expect(markup).toContain('>Conectar</button>');
   });
 });
 
@@ -135,7 +137,28 @@ describe('cartão Hostinger', () => {
     expect(saved).not.toContain('id="hostinger-token"');
     expect(saved).toContain('Token salvo');
     expect(saved).toContain('Testar conexão');
-    expect(saved).toContain('Remover');
+    expect(saved).toContain('Remover token');
+    expect(unsaved).toContain('>Conectar</button>');
+  });
+
+  it('explica a criação, o alcance e a expiração curta do token', () => {
+    const markup = renderToStaticMarkup(<CloudSettings />);
+    expect(markup).toContain('Informações da conta → API → Novo token');
+    expect(markup).toContain('acesso à conta inteira, inclusive ao faturamento');
+    expect(markup).toContain('escolha uma expiração curta');
+  });
+
+  it('renderiza cada status da ShardCloud', () => {
+    const disconnected = renderToStaticMarkup(<CloudSettings />);
+    const connected = renderToStaticMarkup(
+      <CloudSettings initialTokenSaved initialConnected initialShardcloudStatus="Conectado" />,
+    );
+    const error = renderToStaticMarkup(
+      <CloudSettings initialTokenSaved initialShardcloudStatus="Erro" />,
+    );
+    expect(disconnected).toContain('>Não conectado</span>');
+    expect(connected).toContain('>Conectado</span>');
+    expect(error).toContain('>Erro</span>');
   });
 
   it('exibe as consultas disponíveis e rotula as respostas como dados externos', () => {
@@ -162,5 +185,32 @@ describe('cartão Hostinger', () => {
     expect(connected).toContain(
       'As ações de iniciar, parar ou reiniciar pelo agente sempre pedem sua aprovação.',
     );
+  });
+});
+
+describe('ações pendentes na Nuvem', () => {
+  it('mostra o pedido aguardando aprovação e abre a revisão nativa sem aprovar no painel', () => {
+    const markup = renderToStaticMarkup(
+      <CloudSettings
+        initialPendingCloudAction={{
+          id: 'pending-1',
+          tool: 'shardcloud.vm_start',
+          origin: 'Ação proposta pelo modelo',
+          summary: 'Iniciar a VM web-1',
+          preview: 'VM: web-1 (vm-123)\nAção: iniciar',
+          fullPreview: false,
+        }}
+      />,
+    );
+    expect(markup).toContain('Ações pendentes');
+    expect(markup).toContain('Iniciar a VM web-1');
+    expect(markup).toContain('VM: web-1 (vm-123)');
+    expect(markup).toContain('Revisar na janela de aprovação');
+    expect(markup).not.toMatch(/Aprovar|Negar|Recusar/);
+  });
+
+  it('mostra um estado vazio quando não há ação de nuvem pendente', () => {
+    const markup = renderToStaticMarkup(<CloudSettings />);
+    expect(markup).toContain('Nenhuma ação de nuvem aguarda aprovação.');
   });
 });

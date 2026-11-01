@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { invoke, isTauri } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { CLOUD_LINK_CATEGORIES, openCloudLink } from '../core/cloud-links';
 import { submitSecretForm } from './secret-form';
 
@@ -38,6 +39,14 @@ type ShardVmMetrics = {
 type ShardDistro = { distro: string; version: string; value: string };
 type HostingerStatus = 'Não conectado' | 'Conectado' | 'Erro';
 type HostingerResult = { title: string; data: unknown };
+type PendingCloudAction = {
+  id: string;
+  tool: string;
+  origin: string;
+  summary: string;
+  preview: string;
+  fullPreview: boolean;
+};
 
 export function hostingerStatusAfterRequest(
   current: HostingerStatus,
@@ -68,6 +77,8 @@ export function CloudSettings({
   initialHostingerTokenSaved = false,
   initialHostingerStatus = 'Não conectado',
   initialHostingerVms = [],
+  initialShardcloudStatus,
+  initialPendingCloudAction = null,
 }: {
   initialTokenSaved?: boolean;
   initialConnected?: boolean;
@@ -75,11 +86,16 @@ export function CloudSettings({
   initialHostingerTokenSaved?: boolean;
   initialHostingerStatus?: HostingerStatus;
   initialHostingerVms?: unknown[];
+  initialShardcloudStatus?: HostingerStatus;
+  initialPendingCloudAction?: PendingCloudAction | null;
 } = {}) {
   const [token, setToken] = useState('');
   const [tokenSaved, setTokenSaved] = useState(initialTokenSaved);
   const [credentialLoaded, setCredentialLoaded] = useState(() => !isTauri());
   const [connected, setConnected] = useState(initialConnected);
+  const [shardcloudStatus, setShardcloudStatus] = useState<HostingerStatus>(
+    initialShardcloudStatus ?? (initialConnected ? 'Conectado' : 'Não conectado'),
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [vms, setVms] = useState<ShardVm[]>([]);
@@ -97,12 +113,17 @@ export function CloudSettings({
   const [hostingerResult, setHostingerResult] = useState<HostingerResult | null>(null);
   const [budgetCents, setBudgetCents] = useState<number | null>(initialBudgetCents);
   const [budgetInput, setBudgetInput] = useState(formatBudget(initialBudgetCents));
+  const [pendingCloudAction, setPendingCloudAction] = useState<PendingCloudAction | null>(
+    initialPendingCloudAction,
+  );
+  const [pendingCloudLoaded, setPendingCloudLoaded] = useState(() => !isTauri());
+  const [pendingCloudError, setPendingCloudError] = useState<string | null>(null);
 
-  function openCloudProvider(url: string) {
+  function openCloudProvider(url: string, reportError: (message: string) => void = setError) {
     void openCloudLink(url, (validatedUrl) =>
       invoke<void>('open_cloud_link', { url: validatedUrl }),
     ).catch((reason: unknown) => {
-      setError(reason instanceof Error ? reason.message : safeUiError(reason));
+      reportError(reason instanceof Error ? reason.message : safeUiError(reason));
     });
   }
 
@@ -134,6 +155,45 @@ export function CloudSettings({
       });
     return () => {
       active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isTauri()) {
+      setPendingCloudLoaded(true);
+      return;
+    }
+    let active = true;
+    const refreshPending = async () => {
+      try {
+        const pending = await invoke<PendingCloudAction | null>('get_pending_approval');
+        if (active) {
+          setPendingCloudAction(
+            pending && /^(shardcloud|hostinger)\./.test(pending.tool) ? pending : null,
+          );
+          setPendingCloudError(null);
+        }
+      } catch {
+        if (active) setPendingCloudError('Não foi possível consultar as ações pendentes.');
+      } finally {
+        if (active) setPendingCloudLoaded(true);
+      }
+    };
+    void refreshPending();
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    void listen('approval-updated', () => void refreshPending())
+      .then((off) => {
+        if (disposed) off();
+        else unlisten = off;
+      })
+      .catch(() => {
+        if (active) setPendingCloudError('Não foi possível acompanhar as ações pendentes.');
+      });
+    return () => {
+      active = false;
+      disposed = true;
+      unlisten?.();
     };
   }, []);
 
@@ -192,6 +252,7 @@ export function CloudSettings({
       await invoke('save_shardcloud_token', { token });
       setTokenSaved(true);
       setConnected(false);
+      setShardcloudStatus('Não conectado');
       setVms([]);
       setDetails(null);
       setMetrics(null);
@@ -213,10 +274,12 @@ export function CloudSettings({
       const result = await invoke<ExternalData<ShardVm[]>>('shardcloud_test_connection');
       setVms(result.data);
       setConnected(true);
+      setShardcloudStatus('Conectado');
       setDetails(null);
       setMetrics(null);
     } catch (reason) {
       setConnected(false);
+      setShardcloudStatus('Erro');
       setError(safeUiError(reason));
     } finally {
       setBusy(false);
@@ -295,6 +358,7 @@ export function CloudSettings({
       await invoke('remove_shardcloud_token');
       setTokenSaved(false);
       setConnected(false);
+      setShardcloudStatus('Não conectado');
       setVms([]);
       setDetails(null);
       setMetrics(null);
@@ -434,14 +498,31 @@ export function CloudSettings({
       <section className="cloud-shardcloud" aria-labelledby="cloud-shardcloud-heading">
         <div className="cloud-shardcloud-title">
           <h3 id="cloud-shardcloud-heading">ShardCloud</h3>
-          {connected ? (
-            <span className="cloud-connected-label">Conectado</span>
-          ) : tokenSaved ? (
-            <span className="cloud-saved-label">Token salvo</span>
-          ) : (
-            <span className="cloud-planned-label">Configuração necessária</span>
-          )}
+          <span
+            className={
+              shardcloudStatus === 'Conectado'
+                ? 'cloud-connected-label'
+                : shardcloudStatus === 'Erro'
+                  ? 'cloud-error-label'
+                  : 'cloud-saved-label'
+            }
+            role="status"
+          >
+            {shardcloudStatus}
+          </span>
         </div>
+        <p>
+          Token guardado no Gerenciador de Credenciais do Windows.{' '}
+          <a
+            href="https://docs.shardcloud.app/api-reference/introduction.md"
+            onClick={(event) => {
+              event.preventDefault();
+              openCloudProvider('https://docs.shardcloud.app/api-reference/introduction.md');
+            }}
+          >
+            Documentação oficial da ShardCloud
+          </a>
+        </p>
 
         {!credentialLoaded ? (
           <p role="status">Consultando credencial salva…</p>
@@ -453,7 +534,7 @@ export function CloudSettings({
                 {busy ? 'Consultando…' : 'Testar conexão'}
               </button>
               <button type="button" disabled={busy} onClick={() => void removeToken()}>
-                Remover
+                Remover token
               </button>
             </div>
           </div>
@@ -476,7 +557,7 @@ export function CloudSettings({
               spellCheck={false}
             />
             <button type="submit" disabled={busy || !token.trim()}>
-              {busy ? 'Salvando…' : 'Salvar token'}
+              {busy ? 'Conectando…' : 'Conectar'}
             </button>
           </form>
         )}
@@ -625,6 +706,19 @@ export function CloudSettings({
           backups. As ações de iniciar, parar ou reiniciar pelo agente sempre pedem sua aprovação. O
           token fica no Gerenciador de Credenciais do Windows e não é exibido novamente.
         </p>
+        <p className="cloud-settings-notice">
+          Crie o token em <strong>Informações da conta → API → Novo token</strong>. Ele concede
+          acesso à conta inteira, inclusive ao faturamento; escolha uma expiração curta.{' '}
+          <a
+            href="https://developers.hostinger.com/"
+            onClick={(event) => {
+              event.preventDefault();
+              openCloudProvider('https://developers.hostinger.com/', setHostingerError);
+            }}
+          >
+            Documentação oficial da Hostinger
+          </a>
+        </p>
         {!hostingerCredentialLoaded ? (
           <p role="status">Consultando credencial salva…</p>
         ) : hostingerTokenSaved ? (
@@ -645,7 +739,7 @@ export function CloudSettings({
                 disabled={hostingerBusy}
                 onClick={() => void removeHostingerToken()}
               >
-                Remover
+                Remover token
               </button>
             </div>
           </div>
@@ -668,7 +762,7 @@ export function CloudSettings({
               spellCheck={false}
             />
             <button type="submit" disabled={hostingerBusy || !hostingerToken.trim()}>
-              {hostingerBusy ? 'Salvando…' : 'Salvar token'}
+              {hostingerBusy ? 'Conectando…' : 'Conectar'}
             </button>
           </form>
         )}
@@ -775,6 +869,54 @@ export function CloudSettings({
               </section>
             )}
           </div>
+        )}
+      </section>
+
+      <section className="cloud-pending-actions" aria-labelledby="cloud-pending-actions-heading">
+        <div className="cloud-readonly-heading">
+          <h3 id="cloud-pending-actions-heading">Ações pendentes</h3>
+          {pendingCloudAction && (
+            <button
+              type="button"
+              onClick={() =>
+                void invoke('show_pending_approval_window').catch(() =>
+                  setPendingCloudError('Não foi possível abrir a janela nativa de aprovação.'),
+                )
+              }
+            >
+              Revisar na janela de aprovação
+            </button>
+          )}
+        </div>
+        {pendingCloudError && (
+          <p className="cloud-error" role="alert">
+            {pendingCloudError}
+          </p>
+        )}
+        {!pendingCloudLoaded ? (
+          <p role="status">Consultando ações pendentes…</p>
+        ) : pendingCloudAction ? (
+          <article className="cloud-pending-action">
+            <p>
+              <strong>Solicitada por:</strong> {pendingCloudAction.origin}
+            </p>
+            <p>
+              <strong>Ação pedida:</strong> {pendingCloudAction.summary}
+            </p>
+            <p>
+              <strong>Prévia:</strong>
+            </p>
+            <pre>{pendingCloudAction.preview}</pre>
+            {pendingCloudAction.fullPreview && (
+              <p>A prévia completa fica disponível na janela nativa de aprovação.</p>
+            )}
+            <p className="cloud-settings-notice">
+              Esta ação aguarda sua decisão na janela nativa. Este painel não aprova nem recusa
+              ações.
+            </p>
+          </article>
+        ) : (
+          <p className="empty-state">Nenhuma ação de nuvem aguarda aprovação.</p>
         )}
       </section>
 
