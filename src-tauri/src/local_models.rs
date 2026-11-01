@@ -211,15 +211,19 @@ fn initialize_verification_cache(connection: &Connection) -> Result<(), String> 
         .map_err(|_| "Não foi possível preparar o cache de verificação dos modelos.".to_string())
 }
 
-fn store_verification_cache(
-    connection: &Connection,
-    model_id: &str,
-    actual_sha256: &str,
-    expected_sha256: &str,
+struct VerificationCacheEntry<'a> {
+    model_id: &'a str,
+    actual_sha256: &'a str,
+    expected_sha256: &'a str,
     file_size_bytes: u64,
     modified_at: i64,
     verified_at: i64,
     verified: bool,
+}
+
+fn store_verification_cache(
+    connection: &Connection,
+    entry: VerificationCacheEntry<'_>,
 ) -> Result<(), String> {
     connection
         .execute(
@@ -234,13 +238,13 @@ fn store_verification_cache(
                 verified_at=excluded.verified_at,
                 verified=excluded.verified",
             params![
-                model_id,
-                actual_sha256,
-                expected_sha256,
-                i64::try_from(file_size_bytes).unwrap_or(i64::MAX),
-                modified_at,
-                verified_at,
-                if verified { 1_i64 } else { 0_i64 },
+                entry.model_id,
+                entry.actual_sha256,
+                entry.expected_sha256,
+                i64::try_from(entry.file_size_bytes).unwrap_or(i64::MAX),
+                entry.modified_at,
+                entry.verified_at,
+                if entry.verified { 1_i64 } else { 0_i64 },
             ],
         )
         .map_err(|_| "Não foi possível salvar o resultado da verificação.".to_string())?;
@@ -330,13 +334,15 @@ fn verify_model_file(
     let cache_result = open_verification_cache(app_data).and_then(|connection| {
         store_verification_cache(
             &connection,
-            &model.id,
-            &actual_sha256,
-            expected_sha256,
-            total_bytes,
-            modified_at,
-            unix_timestamp(SystemTime::now()),
-            verified,
+            VerificationCacheEntry {
+                model_id: &model.id,
+                actual_sha256: &actual_sha256,
+                expected_sha256,
+                file_size_bytes: total_bytes,
+                modified_at,
+                verified_at: unix_timestamp(SystemTime::now()),
+                verified,
+            },
         )
     });
     if let Err(error) = cache_result {
@@ -914,13 +920,15 @@ mod tests {
         initialize_verification_cache(&connection).unwrap();
         store_verification_cache(
             &connection,
-            "model-a",
-            "actual-hash",
-            "expected-hash",
-            512,
-            10,
-            20,
-            false,
+            VerificationCacheEntry {
+                model_id: "model-a",
+                actual_sha256: "actual-hash",
+                expected_sha256: "expected-hash",
+                file_size_bytes: 512,
+                modified_at: 10,
+                verified_at: 20,
+                verified: false,
+            },
         )
         .unwrap();
         let cache: (String, String, i64, i64) = connection

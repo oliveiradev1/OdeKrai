@@ -1232,6 +1232,7 @@ pub(crate) struct SkillTurnOffer {
 }
 
 impl SkillTurnOffer {
+    #[cfg(test)]
     pub(crate) fn from_registry(
         skills: Vec<Skill>,
         enabled: &std::collections::HashSet<String>,

@@ -238,7 +238,7 @@ impl McpHttpClient {
                     .lock()
                     .map_err(|_| "Estado OAuth MCP indisponível.".to_string())?;
                 if force_refresh
-                    || access.as_ref().map_or(true, |token| {
+                    || access.as_ref().is_none_or(|token| {
                         crate::mcp_oauth::should_refresh(
                             token.expires_at,
                             std::time::Instant::now(),
