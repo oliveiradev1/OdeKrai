@@ -261,7 +261,8 @@ export function CloudSettings({
       <h2 id="cloud-settings-heading">Nuvem</h2>
       <p>
         A integração permite consultar suas VMs. O agente também pode iniciar ou parar uma VM da
-        lista consultada, sempre depois da aprovação na janela nativa.
+        lista consultada e executar de 1 a 10 comandos nela. O conteúdo integral dos comandos é
+        enviado à API ShardCloud somente depois da aprovação na janela nativa, em qualquer modo.
       </p>
       <p className="cloud-settings-notice">
         Nenhuma consulta de rede ocorre ao salvar o token. Ele fica no Gerenciador de Credenciais do
@@ -487,8 +488,10 @@ export function CloudSettings({
       </section>
 
       <p className="cloud-settings-notice">
-        Iniciar ou parar uma VM exige aprovação em qualquer modo. A prévia mostra o nome e o ID
-        conferidos da VM; parar pode interromper serviços em execução.
+        Iniciar, parar ou executar comandos em uma VM exige aprovação em qualquer modo. A prévia
+        mostra o nome e o ID conferidos da VM; para comandos, revise o lote completo antes de
+        aprovar. Comandos podem ler ou alterar dados da VM e usar a rede dela; parar pode
+        interromper serviços em execução.
       </p>
       {CLOUD_LINK_CATEGORIES.map((category) => (
         <CloudProviderList
