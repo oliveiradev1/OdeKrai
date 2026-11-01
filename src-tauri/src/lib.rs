@@ -1183,6 +1183,7 @@ pub fn run() -> Result<(), tauri::Error> {
         .manage(PetHitTestState::default())
         .manage(security::SecurityState::new(true))
         .manage(shardcloud::ShardCloudState::default())
+        .manage(hostinger::HostingerState::default())
         .manage(tray::CloseBehaviorState::default())
         .manage(tray::ShutdownState::default())
         .manage(reminders::ReminderScheduler::default())

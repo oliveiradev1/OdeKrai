@@ -103,7 +103,10 @@ pub(super) fn action_metadata(
             | "shardcloud.vm_details"
             | "shardcloud.vm_start"
             | "shardcloud.vm_stop"
-            | "shardcloud.vm_exec" => skill_id,
+            | "shardcloud.vm_exec"
+            | "hostinger.vps_start"
+            | "hostinger.vps_stop"
+            | "hostinger.vps_restart" => skill_id,
             "code.delegate" => "code.delegate",
             "web.fetch" => "web.fetch",
             "system.open_url"
@@ -161,7 +164,11 @@ fn is_workspace_skill(skill_id: &str) -> bool {
 }
 
 fn require_batch_approval(action: &SimulatedAction, decision: Decision) -> Decision {
-    if matches!(action, SimulatedAction::Productivity { skill_id, .. } if matches!(skill_id.as_str(), "shardcloud.vm_start" | "shardcloud.vm_stop" | "shardcloud.vm_exec"))
+    if matches!(action, SimulatedAction::Productivity { skill_id, .. } if matches!(skill_id.as_str(), "hostinger.vps_start" | "hostinger.vps_stop" | "hostinger.vps_restart"))
+        && matches!(decision, Decision::Allow(_))
+    {
+        Decision::AskUser("hostinger_vps_action_requires_approval")
+    } else if matches!(action, SimulatedAction::Productivity { skill_id, .. } if matches!(skill_id.as_str(), "shardcloud.vm_start" | "shardcloud.vm_stop" | "shardcloud.vm_exec"))
         && matches!(decision, Decision::Allow(_))
     {
         Decision::AskUser(
@@ -593,6 +600,56 @@ mod explicit_approval_tests {
             assert!(!audit.contains("token"));
         }
     }
+
+    #[test]
+    fn hostinger_vps_actions_always_require_approval_and_denial_never_runs_them() {
+        for skill_id in [
+            "hostinger.vps_start",
+            "hostinger.vps_stop",
+            "hostinger.vps_restart",
+        ] {
+            let action = SimulatedAction::Productivity {
+                skill_id: skill_id.into(),
+                params: json!({"vm_name":"VPS de produção", "vm_id":42}),
+            };
+            let (tool, risk, inside, fixed) = action_metadata(&action);
+            assert_eq!(risk, Risk::EscritaReversivel, "{skill_id}");
+            assert!(!inside, "{skill_id}");
+            let preview = summary(&action);
+            assert!(preview.contains("VPS de produção"));
+            assert!(preview.contains("42"));
+            assert!(preview.contains("indisponíveis"));
+            assert!(preview.contains(match skill_id {
+                "hostinger.vps_start" => "iniciar",
+                "hostinger.vps_stop" => "parar",
+                _ => "reiniciar",
+            }));
+            for mode in [
+                Mode::SemprePerguntar,
+                Mode::AprovarPorMim,
+                Mode::ControleTotal,
+            ] {
+                let decision = policy::decide(mode, risk, &Origin::User, inside, fixed, true);
+                assert!(
+                    matches!(require_batch_approval(&action, decision), Decision::AskUser(_)),
+                    "{mode:?}, {tool}"
+                );
+            }
+            assert_eq!(
+                require_batch_approval(&action, Decision::Allow("mode_total")),
+                Decision::AskUser("hostinger_vps_action_requires_approval")
+            );
+            let mut network_calls = 0;
+            if approval_granted_and_running(
+                &ApprovalDecision::Negada("user_denied".into()),
+                false,
+                false,
+            ) {
+                network_calls += 1;
+            }
+            assert_eq!(network_calls, 0, "{skill_id}");
+        }
+    }
 }
 
 pub(super) fn summary(action: &SimulatedAction) -> String {
@@ -627,6 +684,14 @@ pub(super) fn summary(action: &SimulatedAction) -> String {
             amount_cents,
             currency,
         } => format!("Pagamento bloqueado: {currency} {amount_cents}"),
+        SimulatedAction::Productivity { skill_id, params }
+            if matches!(
+                skill_id.as_str(),
+                "hostinger.vps_start" | "hostinger.vps_stop" | "hostinger.vps_restart"
+            ) =>
+        {
+            crate::hostinger::preview_skill(skill_id, params).unwrap_or_else(|_| skill_id.clone())
+        }
         SimulatedAction::Productivity { skill_id, params }
             if matches!(
                 skill_id.as_str(),
@@ -1121,6 +1186,7 @@ pub(super) async fn submit_agent_action(
     let params = audit_params(&action);
     let (preview, preview_image) = match validate_action(&action)
         .and_then(|_| crate::shardcloud::validate_action_against_catalog(app, &action))
+        .and_then(|_| crate::hostinger::validate_action_against_catalog(app, &action))
         .and_then(|_| match &action {
             SimulatedAction::McpToolCall {
                 skill_id,

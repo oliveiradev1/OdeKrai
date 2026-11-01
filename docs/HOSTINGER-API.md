@@ -1,9 +1,9 @@
 # Auditoria da API da Hostinger para VPS
 
-Pesquisa documental para a integração somente de leitura da Hostinger. O OdeKrai implementa apenas
-as consultas listadas como comandos de leitura; operações mutáveis e financeiras permanecem fora
-de escopo. Risco e confirmação por nome são a avaliação do OdeKrai, não campos fornecidos pela
-Hostinger.
+Pesquisa documental da API de VPS da Hostinger. O OdeKrai implementa as consultas de leitura e,
+desde H-3, iniciar, parar e reiniciar uma VPS mediante aprovação obrigatória. As demais operações
+mutáveis e financeiras permanecem fora de escopo. Risco e confirmação por nome são avaliações do
+OdeKrai, não campos fornecidos pela Hostinger.
 
 Pesquisa realizada em 2026-11-01. O OpenAPI declara `openapi: 3.0.0`, título `Hostinger API`,
 versão `2.6.1` e servidor de produção `https://developers.hostinger.com`. O documento descreve
@@ -38,6 +38,7 @@ schema, o OpenAPI o declara obrigatório. As respostas abaixo resumem códigos e
 | Listar backups                       | GET    | `/api/vps/v1/virtual-machines/{virtualMachineId}/backups`                    | `virtualMachineId` (path, inteiro); `page` (query, opcional). 200 coleção paginada de backups; 401, 500.                                                                                                                                                                           | Leitura                                               | Não                          | [OpenAPI](https://github.com/Hostinger/api/blob/main/openapi.json), `paths./api/vps/v1/virtual-machines/{virtualMachineId}/backups.get`, `VPS_getBackupsV1`                                                                                                           |
 | Iniciar VPS                          | POST   | `/api/vps/v1/virtual-machines/{virtualMachineId}/start`                      | `virtualMachineId` (path, inteiro). 200 `ActionResource`; 401, 500.                                                                                                                                                                                                                | Escrita reversível                                    | Não                          | [OpenAPI](https://github.com/Hostinger/api/blob/main/openapi.json), `paths./api/vps/v1/virtual-machines/{virtualMachineId}/start.post`, `VPS_startVirtualMachineV1`                                                                                                   |
 | Parar VPS                            | POST   | `/api/vps/v1/virtual-machines/{virtualMachineId}/stop`                       | `virtualMachineId` (path, inteiro). 200 `ActionResource`; 401, 500.                                                                                                                                                                                                                | Escrita reversível                                    | Não                          | [OpenAPI](https://github.com/Hostinger/api/blob/main/openapi.json), `paths./api/vps/v1/virtual-machines/{virtualMachineId}/stop.post`, `VPS_stopVirtualMachineV1`                                                                                                     |
+| Reiniciar VPS                        | POST   | `/api/vps/v1/virtual-machines/{virtualMachineId}/restart`                    | `virtualMachineId` (path, inteiro). 200 `ActionResource`; 401, 500.                                                                                                                                                                                                                | Escrita reversível                                    | Não                          | [OpenAPI](https://github.com/Hostinger/api/blob/main/openapi.json), `paths./api/vps/v1/virtual-machines/{virtualMachineId}/restart.post`, `VPS_restartVirtualMachineV1`                                                                                               |
 | Restaurar backup                     | POST   | `/api/vps/v1/virtual-machines/{virtualMachineId}/backups/{backupId}/restore` | `virtualMachineId` e `backupId` (path, inteiros obrigatórios). 200 `ActionResource`; 401, 500.                                                                                                                                                                                     | Destrutiva: substitui estado da VPS                   | Sim                          | [OpenAPI](https://github.com/Hostinger/api/blob/main/openapi.json), `paths./api/vps/v1/virtual-machines/{virtualMachineId}/backups/{backupId}/restore.post`, `VPS_restoreBackupV1`                                                                                    |
 | Restaurar snapshot                   | POST   | `/api/vps/v1/virtual-machines/{virtualMachineId}/snapshot/restore`           | `virtualMachineId` (path, inteiro). 200 `ActionResource`; 401, 500.                                                                                                                                                                                                                | Destrutiva: restaura snapshot                         | Sim                          | [OpenAPI](https://github.com/Hostinger/api/blob/main/openapi.json), `paths./api/vps/v1/virtual-machines/{virtualMachineId}/snapshot/restore.post`, `VPS_restoreSnapshotV1`                                                                                            |
 | Reinstalar/recriar VPS               | POST   | `/api/vps/v1/virtual-machines/{virtualMachineId}/recreate`                   | `virtualMachineId` (path); corpo obrigatório `RecreateRequest`: `template_id` obrigatório (inteiro), `password`, `panel_password` e `post_install_script_id` opcionais. 200 `ActionResource`; 422, 401, 500.                                                                       | Destrutiva: recria o sistema                          | Sim                          | [OpenAPI](https://github.com/Hostinger/api/blob/main/openapi.json), `paths./api/vps/v1/virtual-machines/{virtualMachineId}/recreate.post`, `VPS_recreateVirtualMachineV1`; schema `VPS.V1.VirtualMachine.RecreateRequest`                                             |
@@ -65,6 +66,14 @@ condições comerciais. Não presumir que um teto mensal local limite ou impeça
 Hostinger.
 
 ## Operações não confirmadas
+
+Para as três ações implementadas, a resposta `VPS.V1.Action.ActionResource` contém `id` (inteiro)
+e `state` (enumeração `success`, `error`, `delayed`, `sent`, `created`). O OdeKrai consulta
+`GET /api/vps/v1/virtual-machines/{virtualMachineId}/actions/{actionId}` até `success`, `error` ou
+o limite local de 60 segundos; `created`, `sent` e `delayed` continuam pendentes. Ao atingir o
+limite, o cartão informa que a ação não terminou a tempo. Fonte: OpenAPI oficial consultado em
+2026-11-01, `components.schemas.VPS.V1.Action.ActionResource` e
+`paths./api/vps/v1/virtual-machines/{virtualMachineId}/actions/{actionId}.get`.
 
 Não implementar nesta etapa exclusão de VPS nem execução arbitrária de comandos. A ausência de
 operações correspondentes no OpenAPI consultado não prova que não existam APIs privadas ou outros

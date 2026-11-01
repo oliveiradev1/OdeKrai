@@ -642,6 +642,14 @@ impl Tool for Productivity {
             {
                 Risk::EscritaReversivel
             }
+            SimulatedAction::Productivity { skill_id, .. }
+                if matches!(
+                    skill_id.as_str(),
+                    "hostinger.vps_start" | "hostinger.vps_stop" | "hostinger.vps_restart"
+                ) =>
+            {
+                Risk::EscritaReversivel
+            }
             SimulatedAction::Productivity { skill_id, .. } if skill_id == "shardcloud.vm_exec" => {
                 Risk::ExecucaoDeCodigo
             }
@@ -752,6 +760,9 @@ impl Tool for Productivity {
         if skill_id.starts_with("shardcloud.") {
             return crate::shardcloud::preview_skill(skill_id, params);
         }
+        if skill_id.starts_with("hostinger.") {
+            return crate::hostinger::preview_skill(skill_id, params);
+        }
         if skill_id == "web.fetch" {
             return crate::web_fetch::preview(
                 params["url"].as_str().ok_or("Informe uma URL HTTPS.")?,
@@ -814,6 +825,13 @@ impl Tool for Productivity {
             let cancel = cancel.clone();
             return Box::pin(async move {
                 crate::shardcloud::execute_skill(&app, &skill_id, &params, &cancel).await
+            });
+        }
+        if skill_id.starts_with("hostinger.") {
+            let skill_id = skill_id.clone();
+            let params = params.clone();
+            return Box::pin(async move {
+                crate::hostinger::execute_skill(&skill_id, &params).await
             });
         }
         if skill_id == "plan.propose" {
@@ -1752,6 +1770,8 @@ pub(super) fn validate_action(action: &SimulatedAction) -> Result<(), String> {
                 validate_file_skill(skill_id, params)?;
             } else if skill_id.starts_with("shardcloud.") {
                 validate_shardcloud_skill(skill_id, params)?;
+            } else if skill_id.starts_with("hostinger.") {
+                validate_hostinger_skill(skill_id, params)?;
             } else if skill_id == "plan.propose" {
                 super::skills::validate_plan_proposal(params)?;
             } else if skill_id.starts_with("google.calendar.") {
@@ -1760,6 +1780,33 @@ pub(super) fn validate_action(action: &SimulatedAction) -> Result<(), String> {
                 crate::productivity::validate(skill_id, params)?;
             }
         }
+    }
+    Ok(())
+}
+
+fn validate_hostinger_skill(id: &str, params: &serde_json::Value) -> Result<(), String> {
+    let object = params.as_object().ok_or("Parâmetros inválidos.")?;
+    if !matches!(
+        id,
+        "hostinger.vps_start" | "hostinger.vps_stop" | "hostinger.vps_restart"
+    )
+        || object.len() != 2
+        || object
+            .keys()
+            .any(|key| !["vm_name", "vm_id"].contains(&key.as_str()))
+    {
+        return Err("Os parâmetros da ação Hostinger não correspondem à habilidade.".into());
+    }
+    let name = object
+        .get("vm_name")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("Informe o nome da VPS.")?;
+    let id = object
+        .get("vm_id")
+        .and_then(serde_json::Value::as_i64)
+        .ok_or("A VPS não foi confirmada pela lista consultada.")?;
+    if name.trim().is_empty() || name.chars().count() > 512 || id <= 0 {
+        return Err("O nome ou identificador da VPS é inválido.".into());
     }
     Ok(())
 }

@@ -102,13 +102,13 @@ describe('teto local da ShardCloud', () => {
   });
 });
 
-describe('cartão Hostinger em somente leitura', () => {
+describe('cartão Hostinger', () => {
   it('usa os estados de conexão pedidos e não declara conexão sem teste', () => {
     const disconnected = renderToStaticMarkup(<CloudSettings />);
     const connected = renderToStaticMarkup(
       <CloudSettings
         initialHostingerTokenSaved
-        initialHostingerStatus="Conectado (somente leitura)"
+        initialHostingerStatus="Conectado"
         initialHostingerVms={[{ id: 12, hostname: 'vps.example', state: 'running', plan: 'KVM' }]}
       />,
     );
@@ -117,13 +117,11 @@ describe('cartão Hostinger em somente leitura', () => {
     );
 
     expect(disconnected).toContain('Não conectado');
-    expect(disconnected).not.toContain('Conectado (somente leitura)');
-    expect(connected).toContain('Conectado (somente leitura)');
+    expect(disconnected).not.toContain('Conectado');
+    expect(connected).toContain('>Conectado</span>');
     expect(error).toContain('>Erro</span>');
     expect(hostingerStatusAfterRequest('Não conectado', false, true)).toBe('Não conectado');
-    expect(hostingerStatusAfterRequest('Não conectado', true, true)).toBe(
-      'Conectado (somente leitura)',
-    );
+    expect(hostingerStatusAfterRequest('Não conectado', true, true)).toBe('Conectado');
     expect(hostingerStatusAfterRequest('Não conectado', true, false)).toBe('Erro');
   });
 
@@ -144,7 +142,7 @@ describe('cartão Hostinger em somente leitura', () => {
     const connected = renderToStaticMarkup(
       <CloudSettings
         initialHostingerTokenSaved
-        initialHostingerStatus="Conectado (somente leitura)"
+        initialHostingerStatus="Conectado"
         initialHostingerVms={[{ id: 12, hostname: 'vps.example', state: 'running', plan: 'KVM' }]}
       />,
     );
@@ -159,7 +157,10 @@ describe('cartão Hostinger em somente leitura', () => {
       expect(connected).toContain(action);
     }
     expect(connected).toContain('Dados externos da Hostinger — não confiáveis');
+    expect(connected).toContain('Identificador: 12');
     expect(connected).not.toContain('dangerouslySetInnerHTML');
-    expect(connected).toContain('Nesta etapa, ela não altera máquinas.');
+    expect(connected).toContain(
+      'As ações de iniciar, parar ou reiniciar pelo agente sempre pedem sua aprovação.',
+    );
   });
 });

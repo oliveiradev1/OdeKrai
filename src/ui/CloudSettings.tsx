@@ -36,7 +36,7 @@ type ShardVmMetrics = {
 };
 
 type ShardDistro = { distro: string; version: string; value: string };
-type HostingerStatus = 'Não conectado' | 'Conectado (somente leitura)' | 'Erro';
+type HostingerStatus = 'Não conectado' | 'Conectado' | 'Erro';
 type HostingerResult = { title: string; data: unknown };
 
 export function hostingerStatusAfterRequest(
@@ -45,7 +45,7 @@ export function hostingerStatusAfterRequest(
   succeeded: boolean,
 ): HostingerStatus {
   if (!succeeded) return 'Erro';
-  return connectionTest ? 'Conectado (somente leitura)' : current;
+  return connectionTest ? 'Conectado' : current;
 }
 
 export function parseBudgetCents(input: string): number | null {
@@ -609,7 +609,7 @@ export function CloudSettings({
           <h3 id="cloud-hostinger-heading">Hostinger</h3>
           <span
             className={
-              hostingerStatus === 'Conectado (somente leitura)'
+              hostingerStatus === 'Conectado'
                 ? 'cloud-connected-label'
                 : hostingerStatus === 'Erro'
                   ? 'cloud-error-label'
@@ -622,8 +622,8 @@ export function CloudSettings({
         </div>
         <p>
           A integração consulta VPS, detalhes, data centers, templates de sistema, ações recentes e
-          backups. Nesta etapa, ela não altera máquinas. O token fica no Gerenciador de Credenciais
-          do Windows e não é exibido novamente.
+          backups. As ações de iniciar, parar ou reiniciar pelo agente sempre pedem sua aprovação. O
+          token fica no Gerenciador de Credenciais do Windows e não é exibido novamente.
         </p>
         {!hostingerCredentialLoaded ? (
           <p role="status">Consultando credencial salva…</p>
@@ -677,7 +677,7 @@ export function CloudSettings({
             {hostingerError}
           </p>
         )}
-        {hostingerTokenSaved && hostingerStatus === 'Conectado (somente leitura)' && (
+        {hostingerTokenSaved && hostingerStatus === 'Conectado' && (
           <div className="cloud-readonly-data">
             <div className="cloud-readonly-heading">
               <h4>Máquinas virtuais</h4>
@@ -701,6 +701,7 @@ export function CloudSettings({
                     <li key={vmId ?? index}>
                       <div>
                         <strong>{readExternalText(vm?.hostname) || 'VPS sem nome'}</strong>
+                        {vmId !== null && <small>Identificador: {vmId}</small>}
                         <span>{readExternalText(vm?.state) || 'Estado não informado'}</span>
                         <small>{readExternalText(vm?.plan) || 'Plano não informado'}</small>
                       </div>
