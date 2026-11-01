@@ -380,6 +380,7 @@ pub struct PendingView {
     pub expires_at: u64,
     pub display_hash: String,
     pub required_confirmation: Option<String>,
+    pub confirmation_prompt: Option<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]

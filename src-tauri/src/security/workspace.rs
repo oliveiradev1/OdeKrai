@@ -651,6 +651,10 @@ impl Tool for Productivity {
                         | "hostinger.docker_start"
                         | "hostinger.docker_stop"
                         | "hostinger.docker_restart"
+                        | "hostinger.firewall_create"
+                        | "hostinger.firewall_rule_create"
+                        | "hostinger.firewall_activate"
+                        | "hostinger.firewall_deactivate"
                 ) =>
             {
                 Risk::EscritaReversivel
@@ -667,6 +671,24 @@ impl Tool for Productivity {
             }
             SimulatedAction::Productivity { skill_id, .. }
                 if skill_id == "hostinger.docker_remove" =>
+            {
+                Risk::DestrutivoFinanceiro
+            }
+            SimulatedAction::Productivity { skill_id, .. }
+                if matches!(
+                    skill_id.as_str(),
+                    "hostinger.firewall_list"
+                        | "hostinger.firewall_details"
+                        | "hostinger.ssh_keys_list"
+                ) =>
+            {
+                Risk::Leitura
+            }
+            SimulatedAction::Productivity { skill_id, .. }
+                if matches!(
+                    skill_id.as_str(),
+                    "hostinger.firewall_delete" | "hostinger.firewall_rule_delete"
+                ) =>
             {
                 Risk::DestrutivoFinanceiro
             }
@@ -1807,6 +1829,103 @@ pub(super) fn validate_action(action: &SimulatedAction) -> Result<(), String> {
 
 fn validate_hostinger_skill(id: &str, params: &serde_json::Value) -> Result<(), String> {
     let object = params.as_object().ok_or("Parâmetros inválidos.")?;
+    if id == "hostinger.firewall_list" {
+        return if object.is_empty() {
+            Ok(())
+        } else {
+            Err("A lista de firewalls não recebe parâmetros.".into())
+        };
+    }
+    if id == "hostinger.firewall_create" {
+        if object.len() != 1 || !object.contains_key("firewall_name") {
+            return Err("Informe somente o nome do firewall.".into());
+        }
+        let name = object
+            .get("firewall_name")
+            .and_then(serde_json::Value::as_str)
+            .ok_or("Informe o nome do firewall.")?;
+        if name.trim().is_empty() || name.chars().count() > 128 {
+            return Err("O nome do firewall é inválido.".into());
+        }
+        return Ok(());
+    }
+    let firewall_allowed: &[&str] = match id {
+        "hostinger.firewall_details" | "hostinger.firewall_delete" => {
+            &["firewall_name", "firewall_id"]
+        }
+        "hostinger.firewall_rule_create" => &[
+            "firewall_name",
+            "firewall_id",
+            "protocol",
+            "port",
+            "source_cidr",
+        ],
+        "hostinger.firewall_rule_delete" => {
+            &["firewall_name", "firewall_id", "rule_name", "rule_id"]
+        }
+        "hostinger.firewall_activate" | "hostinger.firewall_deactivate" => {
+            &["vm_name", "vm_id", "firewall_name", "firewall_id"]
+        }
+        "hostinger.ssh_keys_list" => &["vm_name", "vm_id"],
+        _ => &[],
+    };
+    if !firewall_allowed.is_empty() {
+        if object.len() != firewall_allowed.len()
+            || object
+                .keys()
+                .any(|key| !firewall_allowed.contains(&key.as_str()))
+        {
+            return Err("Os parâmetros da ação Firewall não correspondem à habilidade.".into());
+        }
+        if let Some(name) = object
+            .get("firewall_name")
+            .and_then(serde_json::Value::as_str)
+        {
+            if name.trim().is_empty() || name.chars().count() > 128 {
+                return Err("O nome do firewall é inválido.".into());
+            }
+        }
+        for id_key in ["firewall_id", "vm_id", "rule_id"] {
+            if object.contains_key(id_key)
+                && object
+                    .get(id_key)
+                    .and_then(serde_json::Value::as_i64)
+                    .is_none_or(|id| id <= 0)
+            {
+                return Err("O identificador da ação Firewall é inválido.".into());
+            }
+        }
+        if let Some(name) = object.get("vm_name").and_then(serde_json::Value::as_str) {
+            if name.trim().is_empty() || name.chars().count() > 512 {
+                return Err("O nome da VPS é inválido.".into());
+            }
+        }
+        if id == "hostinger.firewall_rule_create" {
+            crate::hostinger::validate_skill_firewall_rule(
+                object
+                    .get("protocol")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default(),
+                object
+                    .get("port")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default(),
+                object
+                    .get("source_cidr")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default(),
+            )?;
+        }
+        if id == "hostinger.firewall_rule_delete"
+            && object
+                .get("rule_name")
+                .and_then(serde_json::Value::as_str)
+                .is_none_or(str::is_empty)
+        {
+            return Err("Informe o nome exato da regra consultada.".into());
+        }
+        return Ok(());
+    }
     let allowed: &[&str] = match id {
         "hostinger.vps_start"
         | "hostinger.vps_stop"

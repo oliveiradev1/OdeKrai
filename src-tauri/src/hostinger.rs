@@ -13,10 +13,24 @@ use tauri::Manager;
 pub(crate) struct HostingerState {
     approved_vms: Mutex<Vec<ApprovedVm>>,
     approved_projects: Mutex<HashMap<i64, Vec<String>>>,
+    approved_firewalls: Mutex<Vec<ApprovedFirewall>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ApprovedVm {
+    id: i64,
+    name: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ApprovedFirewall {
+    id: i64,
+    name: String,
+    rules: Vec<ApprovedFirewallRule>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ApprovedFirewallRule {
     id: i64,
     name: String,
 }
@@ -66,6 +80,7 @@ pub fn save_hostinger_token(caller: tauri::WebviewWindow, token: String) -> Resu
         "Não foi possível salvar o token no Gerenciador de Credenciais do Windows.".to_string()
     })?;
     clear_vms(caller.app_handle());
+    clear_firewalls(caller.app_handle());
     Ok(())
 }
 
@@ -85,6 +100,7 @@ pub fn remove_hostinger_token(caller: tauri::WebviewWindow) -> Result<(), String
     match keyring_entry()?.delete_credential() {
         Ok(()) | Err(keyring::Error::NoEntry) => {
             clear_vms(caller.app_handle());
+            clear_firewalls(caller.app_handle());
             Ok(())
         }
         Err(_) => {
@@ -292,6 +308,51 @@ async fn request_action_at<T: DeserializeOwned>(
     read_limited(response).await
 }
 
+async fn request_action_empty_at(
+    client: &Client,
+    endpoint: Url,
+    token: Option<&str>,
+    method: reqwest::Method,
+) -> Result<(), String> {
+    let token = token.ok_or_else(|| {
+        "Salve o token da Hostinger em Configurações > Nuvem para continuar.".to_string()
+    })?;
+    let response = client
+        .request(method, endpoint)
+        .bearer_auth(validate_token(token)?)
+        .send()
+        .await
+        .map_err(|error| {
+            if error.is_timeout() {
+                "A solicitação à Hostinger excedeu o tempo limite.".to_string()
+            } else {
+                "Falha de rede ao conectar à Hostinger.".to_string()
+            }
+        })?;
+    if !response.status().is_success() {
+        return Err(status_error(response.status()));
+    }
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_RESPONSE_BYTES as u64)
+    {
+        return Err("A resposta da Hostinger excedeu o limite de 1 MiB.".into());
+    }
+    let mut response = response;
+    let mut total = 0usize;
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| "Não foi possível ler a resposta da Hostinger.".to_string())?
+    {
+        total = total.saturating_add(chunk.len());
+        if total > MAX_RESPONSE_BYTES {
+            return Err("A resposta da Hostinger excedeu o limite de 1 MiB.".into());
+        }
+    }
+    Ok(())
+}
+
 fn action_status(value: &Value) -> Result<ActionStatus, String> {
     let value = value.get("data").unwrap_or(value);
     let raw = value
@@ -451,6 +512,14 @@ fn clear_vms(app: &tauri::AppHandle) {
     }
 }
 
+fn clear_firewalls(app: &tauri::AppHandle) {
+    if let Some(state) = app.try_state::<HostingerState>() {
+        if let Ok(mut firewalls) = state.approved_firewalls.lock() {
+            firewalls.clear();
+        }
+    }
+}
+
 fn resolve_approved_vm(vms: &[ApprovedVm], name: &str) -> Result<ApprovedVm, String> {
     let matching = vms.iter().filter(|vm| vm.name == name).collect::<Vec<_>>();
     match matching.as_slice() {
@@ -466,6 +535,143 @@ pub(crate) fn prepare_skill_params(
     mut params: Value,
 ) -> Result<Value, String> {
     if !skill_id.starts_with("hostinger.") {
+        return Ok(params);
+    }
+    if skill_id == "hostinger.firewall_list" {
+        if params.as_object().is_none_or(|object| !object.is_empty()) {
+            return Err("A lista de firewalls não recebe parâmetros.".into());
+        }
+        return Ok(params);
+    }
+    if skill_id == "hostinger.firewall_create" {
+        let object = params
+            .as_object()
+            .ok_or("Os parâmetros da habilidade são inválidos.")?;
+        if object.len() != 1 || !object.contains_key("firewall_name") {
+            return Err("Informe somente o nome do firewall.".into());
+        }
+        let name = params
+            .get("firewall_name")
+            .and_then(Value::as_str)
+            .ok_or("Informe o nome do firewall.")?;
+        validate_firewall_name(name)?;
+        return Ok(params);
+    }
+    if matches!(
+        skill_id,
+        "hostinger.firewall_details"
+            | "hostinger.firewall_delete"
+            | "hostinger.firewall_rule_create"
+            | "hostinger.firewall_rule_delete"
+    ) {
+        let allowed = match skill_id {
+            "hostinger.firewall_details" | "hostinger.firewall_delete" => &["firewall_name"][..],
+            "hostinger.firewall_rule_create" => {
+                &["firewall_name", "protocol", "port", "source_cidr"][..]
+            }
+            _ => &["firewall_name", "rule_name"][..],
+        };
+        let object = params
+            .as_object()
+            .ok_or("Os parâmetros da habilidade são inválidos.")?;
+        if object.len() != allowed.len()
+            || object.keys().any(|key| !allowed.contains(&key.as_str()))
+        {
+            return Err("Os parâmetros da habilidade Firewall são inválidos.".into());
+        }
+        let name = params
+            .get("firewall_name")
+            .and_then(Value::as_str)
+            .ok_or("Informe o nome do firewall consultado.")?;
+        validate_firewall_name(name)?;
+        let state = app_state(app)?;
+        let firewalls = state
+            .approved_firewalls
+            .lock()
+            .map_err(|_| "Não foi possível consultar a lista local de firewalls.".to_string())?;
+        let firewall = resolve_approved_firewall(&firewalls, name)?;
+        drop(firewalls);
+        params
+            .as_object_mut()
+            .ok_or("Os parâmetros da habilidade são inválidos.")?
+            .insert("firewall_id".into(), Value::from(firewall.id));
+        match skill_id {
+            "hostinger.firewall_rule_create" => {
+                let protocol = params
+                    .get("protocol")
+                    .and_then(Value::as_str)
+                    .ok_or("Informe o protocolo.")?;
+                let port = params
+                    .get("port")
+                    .and_then(Value::as_str)
+                    .ok_or("Informe a porta.")?;
+                let source = params
+                    .get("source_cidr")
+                    .and_then(Value::as_str)
+                    .ok_or("Informe a origem.")?;
+                validate_firewall_rule(protocol, port, source)?;
+            }
+            "hostinger.firewall_rule_delete" => {
+                let rule_name = params
+                    .get("rule_name")
+                    .and_then(Value::as_str)
+                    .ok_or("Informe o nome exato da regra consultada.")?;
+                let rule = resolve_approved_firewall_rule(&firewall, rule_name)?;
+                params
+                    .as_object_mut()
+                    .ok_or("Os parâmetros da habilidade são inválidos.")?
+                    .insert("rule_id".into(), Value::from(rule.id));
+            }
+            _ => {}
+        }
+        return Ok(params);
+    }
+    if matches!(
+        skill_id,
+        "hostinger.firewall_activate" | "hostinger.firewall_deactivate" | "hostinger.ssh_keys_list"
+    ) {
+        let allowed = if skill_id == "hostinger.ssh_keys_list" {
+            &["vm_name"][..]
+        } else {
+            &["vm_name", "firewall_name"][..]
+        };
+        let object = params
+            .as_object()
+            .ok_or("Os parâmetros da habilidade são inválidos.")?;
+        if object.len() != allowed.len()
+            || object.keys().any(|key| !allowed.contains(&key.as_str()))
+        {
+            return Err("Os parâmetros da habilidade são inválidos.".into());
+        }
+        let name = params
+            .get("vm_name")
+            .and_then(Value::as_str)
+            .ok_or("Informe o nome da VPS consultada.")?;
+        let state = app_state(app)?;
+        let vms = state
+            .approved_vms
+            .lock()
+            .map_err(|_| "Não foi possível consultar a lista local de VPS.".to_string())?;
+        let vm = resolve_approved_vm(&vms, name)?;
+        params
+            .as_object_mut()
+            .ok_or("Os parâmetros da habilidade são inválidos.")?
+            .insert("vm_id".into(), Value::from(vm.id));
+        drop(vms);
+        if skill_id != "hostinger.ssh_keys_list" {
+            let firewall_name = params
+                .get("firewall_name")
+                .and_then(Value::as_str)
+                .ok_or("Informe o nome do firewall consultado.")?;
+            let firewalls = state.approved_firewalls.lock().map_err(|_| {
+                "Não foi possível consultar a lista local de firewalls.".to_string()
+            })?;
+            let firewall = resolve_approved_firewall(&firewalls, firewall_name)?;
+            params
+                .as_object_mut()
+                .ok_or("Os parâmetros da habilidade são inválidos.")?
+                .insert("firewall_id".into(), Value::from(firewall.id));
+        }
         return Ok(params);
     }
     let object = params
@@ -558,7 +764,109 @@ pub(crate) fn validate_action_against_catalog(
             | "hostinger.docker_restart"
             | "hostinger.docker_deploy"
             | "hostinger.docker_remove"
+            | "hostinger.firewall_list"
+            | "hostinger.firewall_details"
+            | "hostinger.firewall_create"
+            | "hostinger.firewall_rule_create"
+            | "hostinger.firewall_activate"
+            | "hostinger.firewall_deactivate"
+            | "hostinger.firewall_delete"
+            | "hostinger.firewall_rule_delete"
+            | "hostinger.ssh_keys_list"
     ) {
+        return Ok(());
+    }
+    if skill_id == "hostinger.firewall_list" || skill_id == "hostinger.firewall_create" {
+        return Ok(());
+    }
+    if skill_id.starts_with("hostinger.firewall_") || skill_id == "hostinger.ssh_keys_list" {
+        let state = app_state(app)?;
+        if skill_id == "hostinger.ssh_keys_list" {
+            let name = params
+                .get("vm_name")
+                .and_then(Value::as_str)
+                .ok_or("Informe o nome da VPS consultada.")?;
+            let id = params
+                .get("vm_id")
+                .and_then(Value::as_i64)
+                .ok_or("A VPS não foi confirmada pela lista consultada.")?;
+            let vms = state
+                .approved_vms
+                .lock()
+                .map_err(|_| "Não foi possível consultar a lista local de VPS.".to_string())?;
+            let vm = resolve_approved_vm(&vms, name)?;
+            return if vm.id == id {
+                Ok(())
+            } else {
+                Err("O identificador não corresponde à VPS da lista consultada.".into())
+            };
+        }
+        let name = params
+            .get("firewall_name")
+            .and_then(Value::as_str)
+            .ok_or("Informe o nome do firewall consultado.")?;
+        let id = params
+            .get("firewall_id")
+            .and_then(Value::as_i64)
+            .ok_or("O firewall não foi confirmado pela lista consultada.")?;
+        let firewalls = state
+            .approved_firewalls
+            .lock()
+            .map_err(|_| "Não foi possível consultar a lista local de firewalls.".to_string())?;
+        let firewall = resolve_approved_firewall(&firewalls, name)?;
+        if firewall.id != id {
+            return Err("O identificador não corresponde ao firewall consultado.".into());
+        }
+        if skill_id == "hostinger.firewall_rule_delete" {
+            let rule_name = params
+                .get("rule_name")
+                .and_then(Value::as_str)
+                .ok_or("Informe o nome exato da regra consultada.")?;
+            let rule_id = params
+                .get("rule_id")
+                .and_then(Value::as_i64)
+                .ok_or("A regra não foi confirmada pelos detalhes consultados.")?;
+            let rule = resolve_approved_firewall_rule(&firewall, rule_name)?;
+            if rule.id != rule_id {
+                return Err("O identificador não corresponde à regra consultada.".into());
+            }
+        }
+        if matches!(
+            skill_id.as_str(),
+            "hostinger.firewall_activate" | "hostinger.firewall_deactivate"
+        ) {
+            let vm_name = params
+                .get("vm_name")
+                .and_then(Value::as_str)
+                .ok_or("Informe o nome da VPS consultada.")?;
+            let vm_id = params
+                .get("vm_id")
+                .and_then(Value::as_i64)
+                .ok_or("A VPS não foi confirmada pela lista consultada.")?;
+            let vms = state
+                .approved_vms
+                .lock()
+                .map_err(|_| "Não foi possível consultar a lista local de VPS.".to_string())?;
+            if resolve_approved_vm(&vms, vm_name)?.id != vm_id {
+                return Err("O identificador não corresponde à VPS consultada.".into());
+            }
+        }
+        if skill_id == "hostinger.firewall_rule_create" {
+            validate_firewall_rule(
+                params
+                    .get("protocol")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+                params
+                    .get("port")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+                params
+                    .get("source_cidr")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+            )?;
+        }
         return Ok(());
     }
     let name = params
@@ -830,7 +1138,265 @@ fn resolve_approved_project(projects: &[String], name: &str) -> Result<(), Strin
     }
 }
 
+fn validate_firewall_name(name: &str) -> Result<&str, String> {
+    let name = name.trim();
+    if name.is_empty() || name.chars().count() > 128 || name.chars().any(char::is_control) {
+        return Err("Informe um nome de firewall válido (até 128 caracteres).".into());
+    }
+    Ok(name)
+}
+
+fn validate_firewall_rule(protocol: &str, port: &str, source: &str) -> Result<(), String> {
+    if !matches!(
+        protocol,
+        "TCP"
+            | "UDP"
+            | "ICMP"
+            | "GRE"
+            | "any"
+            | "ESP"
+            | "AH"
+            | "ICMPv6"
+            | "SSH"
+            | "HTTP"
+            | "HTTPS"
+            | "MySQL"
+            | "PostgreSQL"
+    ) {
+        return Err("O protocolo da regra de firewall não é válido.".into());
+    }
+    let valid_port = port.parse::<u16>().is_ok_and(|port| port > 0)
+        || port.split_once(':').is_some_and(|(start, end)| {
+            matches!((start.parse::<u16>(), end.parse::<u16>()), (Ok(a), Ok(b)) if a > 0 && a <= b)
+        })
+        || (matches!(protocol, "ICMP" | "ICMPv6" | "GRE" | "ESP" | "AH" | "any") && port == "all");
+    if !valid_port {
+        return Err("Informe uma porta entre 1 e 65535 ou um intervalo válido.".into());
+    }
+    if source == "any" {
+        return Ok(());
+    }
+    let (address, prefix) = source.split_once('/').unwrap_or((source, ""));
+    let ip = address
+        .parse::<std::net::IpAddr>()
+        .map_err(|_| "A origem deve ser um endereço IP ou CIDR válido.")?;
+    if !prefix.is_empty() {
+        let bits = if ip.is_ipv4() { 32 } else { 128 };
+        let mask = prefix
+            .parse::<u8>()
+            .map_err(|_| "A máscara CIDR da origem é inválida.")?;
+        if mask > bits {
+            return Err("A máscara CIDR da origem é inválida.".into());
+        }
+    } else if source.contains('/') {
+        return Err("A máscara CIDR da origem é inválida.".into());
+    }
+    Ok(())
+}
+
+fn firewall_source_is_public(source: &str) -> bool {
+    matches!(source.trim(), "any" | "0.0.0.0/0" | "::/0")
+}
+
+fn firewall_http_method(skill_id: &str) -> Option<reqwest::Method> {
+    match skill_id {
+        "hostinger.firewall_list" | "hostinger.firewall_details" | "hostinger.ssh_keys_list" => {
+            Some(reqwest::Method::GET)
+        }
+        "hostinger.firewall_create"
+        | "hostinger.firewall_rule_create"
+        | "hostinger.firewall_activate"
+        | "hostinger.firewall_deactivate" => Some(reqwest::Method::POST),
+        "hostinger.firewall_delete" | "hostinger.firewall_rule_delete" => {
+            Some(reqwest::Method::DELETE)
+        }
+        _ => None,
+    }
+}
+
+pub(crate) fn validate_skill_firewall_rule(
+    protocol: &str,
+    port: &str,
+    source: &str,
+) -> Result<(), String> {
+    validate_firewall_rule(protocol, port, source)
+}
+
+pub(crate) fn is_public_firewall_source(source: &str) -> bool {
+    firewall_source_is_public(source)
+}
+
+fn firewall_rule_name(rule: &Value) -> Option<String> {
+    let protocol = rule.get("protocol")?.as_str()?;
+    let port = rule.get("port")?.as_str()?;
+    let source = rule
+        .get("source_detail")
+        .or_else(|| rule.get("source"))?
+        .as_str()?;
+    Some(format!(
+        "{} {protocol} {port} de {source}",
+        rule.get("action")
+            .and_then(Value::as_str)
+            .unwrap_or("accept")
+    ))
+}
+
+fn firewall_rules_from(value: &Value) -> Vec<ApprovedFirewallRule> {
+    value
+        .get("data")
+        .unwrap_or(value)
+        .get("rules")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|rule| {
+            Some(ApprovedFirewallRule {
+                id: rule.get("id")?.as_i64().filter(|id| *id > 0)?,
+                name: firewall_rule_name(rule).map(|name| display_vm_name(&name))?,
+            })
+        })
+        .collect()
+}
+
+fn remember_firewall(app: &tauri::AppHandle, value: &Value) -> Result<(), String> {
+    let data = value.get("data").unwrap_or(value);
+    let id = data
+        .get("id")
+        .and_then(Value::as_i64)
+        .filter(|id| *id > 0)
+        .ok_or("A Hostinger não retornou o identificador do firewall.")?;
+    let name = data
+        .get("name")
+        .and_then(Value::as_str)
+        .map(display_vm_name)
+        .filter(|name| !name.is_empty())
+        .ok_or("A Hostinger não retornou o nome do firewall.")?;
+    let firewall = ApprovedFirewall {
+        id,
+        name,
+        rules: firewall_rules_from(value),
+    };
+    let state = app_state(app)?;
+    let mut approved = state
+        .approved_firewalls
+        .lock()
+        .map_err(|_| "Não foi possível atualizar a lista local de firewalls.".to_string())?;
+    approved.retain(|existing| existing.id != firewall.id && existing.name != firewall.name);
+    approved.push(firewall);
+    Ok(())
+}
+
+fn remember_firewalls(app: &tauri::AppHandle, value: &Value) -> Result<(), String> {
+    let values = value
+        .get("data")
+        .and_then(Value::as_array)
+        .or_else(|| value.as_array())
+        .ok_or("A Hostinger retornou uma lista de firewalls inválida.")?;
+    let mut firewalls = Vec::new();
+    for firewall in values {
+        let Some(id) = firewall
+            .get("id")
+            .and_then(Value::as_i64)
+            .filter(|id| *id > 0)
+        else {
+            continue;
+        };
+        let Some(name) = firewall
+            .get("name")
+            .and_then(Value::as_str)
+            .map(display_vm_name)
+            .filter(|name| !name.is_empty())
+        else {
+            continue;
+        };
+        firewalls.push(ApprovedFirewall {
+            id,
+            name,
+            rules: firewall_rules_from(firewall),
+        });
+    }
+    *app_state(app)?
+        .approved_firewalls
+        .lock()
+        .map_err(|_| "Não foi possível atualizar a lista local de firewalls.".to_string())? =
+        firewalls;
+    Ok(())
+}
+
+fn resolve_approved_firewall(
+    firewalls: &[ApprovedFirewall],
+    name: &str,
+) -> Result<ApprovedFirewall, String> {
+    let name = validate_firewall_name(name)?;
+    let matches = firewalls
+        .iter()
+        .filter(|firewall| firewall.name == name)
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [firewall] => Ok((*firewall).clone()),
+        [] => Err("O firewall precisa aparecer na lista consultada por você nesta sessão.".into()),
+        _ => Err("Há mais de um firewall com esse nome; escolha um nome único.".into()),
+    }
+}
+
+fn resolve_approved_firewall_rule(
+    firewall: &ApprovedFirewall,
+    name: &str,
+) -> Result<ApprovedFirewallRule, String> {
+    let matches = firewall
+        .rules
+        .iter()
+        .filter(|rule| rule.name == name)
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [rule] => Ok((*rule).clone()),
+        [] => Err("A regra precisa aparecer nos detalhes consultados do firewall.".into()),
+        _ => Err("Há regras com o mesmo nome; atualize os detalhes do firewall.".into()),
+    }
+}
+
 pub(crate) fn preview_skill(skill_id: &str, params: &Value) -> Result<String, String> {
+    if matches!(
+        skill_id,
+        "hostinger.firewall_list" | "hostinger.firewall_details" | "hostinger.ssh_keys_list"
+    ) {
+        return Ok(match skill_id {
+            "hostinger.firewall_list" => "Consultar firewalls e regras da conta Hostinger.".into(),
+            "hostinger.firewall_details" => format!(
+                "Consultar firewall ‘{}’ e suas regras.",
+                params
+                    .get("firewall_name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+            ),
+            _ => format!(
+                "Listar somente as chaves SSH públicas anexadas à VPS ‘{}’ (identificador {}).",
+                params.get("vm_name").and_then(Value::as_str).unwrap_or(""),
+                params
+                    .get("vm_id")
+                    .and_then(Value::as_i64)
+                    .unwrap_or_default()
+            ),
+        });
+    }
+    if skill_id.starts_with("hostinger.firewall_") {
+        let name = params
+            .get("firewall_name")
+            .and_then(Value::as_str)
+            .ok_or("Informe o nome do firewall.")?;
+        return Ok(match skill_id {
+            "hostinger.firewall_create" => format!("Criar firewall ‘{}’ na conta Hostinger.", display_vm_name(name)),
+            "hostinger.firewall_rule_create" => {
+                let source = params.get("source_cidr").and_then(Value::as_str).ok_or("Informe a origem.")?;
+                let warning = if firewall_source_is_public(source) { " ATENÇÃO: esta origem permite acesso de qualquer endereço e exige confirmação extra." } else { "" };
+                format!("Adicionar regra ao firewall ‘{}’: porta {}, protocolo {}, origem {}.{}", display_vm_name(name), params.get("port").and_then(Value::as_str).unwrap_or(""), params.get("protocol").and_then(Value::as_str).unwrap_or(""), source, warning)
+            }
+            "hostinger.firewall_activate" | "hostinger.firewall_deactivate" => format!("{} firewall ‘{}’ na VPS ‘{}’ (identificador {}). Serviços podem ficar indisponíveis.", if skill_id == "hostinger.firewall_activate" { "Ativar" } else { "Desativar" }, display_vm_name(name), display_vm_name(params.get("vm_name").and_then(Value::as_str).unwrap_or("")), params.get("vm_id").and_then(Value::as_i64).unwrap_or_default()),
+            "hostinger.firewall_delete" => format!("Remover firewall ‘{}’; ele será desativado automaticamente nas VPS anexadas. Esta ação não pode ser desfeita.", display_vm_name(name)),
+            "hostinger.firewall_rule_delete" => format!("Remover a regra ‘{}’ do firewall ‘{}’. Esta ação não pode ser desfeita.", params.get("rule_name").and_then(Value::as_str).unwrap_or(""), display_vm_name(name)),
+            _ => return Err("Ação de firewall inválida.".into()),
+        });
+    }
     let action = match skill_id {
         "hostinger.vps_start" => "iniciar",
         "hostinger.vps_stop" => "parar",
@@ -887,6 +1453,20 @@ pub(crate) async fn execute_skill(
     skill_id: &str,
     params: &Value,
 ) -> Result<String, String> {
+    if matches!(
+        skill_id,
+        "hostinger.firewall_list"
+            | "hostinger.firewall_details"
+            | "hostinger.firewall_create"
+            | "hostinger.firewall_rule_create"
+            | "hostinger.firewall_activate"
+            | "hostinger.firewall_deactivate"
+            | "hostinger.firewall_delete"
+            | "hostinger.firewall_rule_delete"
+            | "hostinger.ssh_keys_list"
+    ) {
+        return execute_firewall_skill(app, skill_id, params).await;
+    }
     let vm_id = params
         .get("vm_id")
         .and_then(Value::as_i64)
@@ -1019,6 +1599,191 @@ pub(crate) async fn execute_skill(
         data: sanitize_external_value(result, 0, &token),
     })
     .map_err(|_| "Não foi possível preparar o resultado da ação da Hostinger.".into())
+}
+
+async fn execute_firewall_skill(
+    app: &tauri::AppHandle,
+    skill_id: &str,
+    params: &Value,
+) -> Result<String, String> {
+    let token = token_from_keyring()?;
+    let client = production_client()?;
+    let firewall_id = params.get("firewall_id").and_then(Value::as_i64);
+    let vm_id = params.get("vm_id").and_then(Value::as_i64);
+    let value = match skill_id {
+        "hostinger.firewall_list" => {
+            let value: Value = request_action_at(
+                &client,
+                api_endpoint("api/vps/v1/firewall")?,
+                Some(&token),
+                firewall_http_method(skill_id).ok_or("Ação de firewall inválida.")?,
+                None,
+            )
+            .await?;
+            remember_firewalls(app, &value)?;
+            value
+        }
+        "hostinger.firewall_details" => {
+            let id = firewall_id.ok_or("O firewall não foi confirmado pela lista consultada.")?;
+            let value: Value = request_action_at(
+                &client,
+                api_endpoint(&format!("api/vps/v1/firewall/{id}"))?,
+                Some(&token),
+                firewall_http_method(skill_id).ok_or("Ação de firewall inválida.")?,
+                None,
+            )
+            .await?;
+            remember_firewall(app, &value)?;
+            value
+        }
+        "hostinger.ssh_keys_list" => {
+            let id = vm_id.ok_or("A VPS não foi confirmada pela lista consultada.")?;
+            request_action_at(
+                &client,
+                api_endpoint(&format!("api/vps/v1/virtual-machines/{id}/ssh-keys"))?,
+                Some(&token),
+                firewall_http_method(skill_id).ok_or("Ação SSH inválida.")?,
+                None,
+            )
+            .await?
+        }
+        "hostinger.firewall_create" => {
+            let name = validate_firewall_name(
+                params
+                    .get("firewall_name")
+                    .and_then(Value::as_str)
+                    .ok_or("Informe o nome do firewall.")?,
+            )?;
+            let value: Value = request_action_at(
+                &client,
+                api_endpoint("api/vps/v1/firewall")?,
+                Some(&token),
+                firewall_http_method(skill_id).ok_or("Ação de firewall inválida.")?,
+                Some(&serde_json::json!({"name": name})),
+            )
+            .await?;
+            remember_firewall(app, &value)?;
+            value
+        }
+        "hostinger.firewall_rule_create" => {
+            let id = firewall_id.ok_or("O firewall não foi confirmado pela lista consultada.")?;
+            let protocol = params
+                .get("protocol")
+                .and_then(Value::as_str)
+                .ok_or("Informe o protocolo.")?;
+            let port = params
+                .get("port")
+                .and_then(Value::as_str)
+                .ok_or("Informe a porta.")?;
+            let source = params
+                .get("source_cidr")
+                .and_then(Value::as_str)
+                .ok_or("Informe a origem.")?;
+            validate_firewall_rule(protocol, port, source)?;
+            let (source_type, source_detail) = if source == "any" {
+                ("any", "any")
+            } else {
+                ("custom", source)
+            };
+            let body = serde_json::json!({"protocol": protocol, "port": port, "source": source_type, "source_detail": source_detail});
+            let value: Value = request_action_at(
+                &client,
+                api_endpoint(&format!("api/vps/v1/firewall/{id}/rules"))?,
+                Some(&token),
+                firewall_http_method(skill_id).ok_or("Ação de firewall inválida.")?,
+                Some(&body),
+            )
+            .await?;
+            let rule_name = firewall_rule_name(value.get("data").unwrap_or(&value));
+            if let Some(rule_name) = rule_name {
+                let state = app_state(app)?;
+                if let Ok(mut firewalls) = state.approved_firewalls.lock() {
+                    if let Some(firewall) = firewalls.iter_mut().find(|firewall| firewall.id == id)
+                    {
+                        if let Some(rule_id) = value
+                            .get("data")
+                            .unwrap_or(&value)
+                            .get("id")
+                            .and_then(Value::as_i64)
+                        {
+                            firewall.rules.push(ApprovedFirewallRule {
+                                id: rule_id,
+                                name: display_vm_name(&rule_name),
+                            });
+                        }
+                    }
+                }
+            }
+            value
+        }
+        "hostinger.firewall_activate" | "hostinger.firewall_deactivate" => {
+            let fid = firewall_id.ok_or("O firewall não foi confirmado pela lista consultada.")?;
+            let vid = vm_id.ok_or("A VPS não foi confirmada pela lista consultada.")?;
+            let action = if skill_id.ends_with("activate") {
+                "activate"
+            } else {
+                "deactivate"
+            };
+            run_action_paths_with(
+                &client,
+                API_BASE,
+                Some(&token),
+                &format!("api/vps/v1/firewall/{fid}/{action}/{vid}"),
+                &format!("api/vps/v1/virtual-machines/{vid}/actions"),
+                firewall_http_method(skill_id).ok_or("Ação de firewall inválida.")?,
+                None,
+                ACTION_MAX_WAIT,
+                ACTION_POLL_INTERVAL,
+            )
+            .await?
+        }
+        "hostinger.firewall_delete" => {
+            let id = firewall_id.ok_or("O firewall não foi confirmado pela lista consultada.")?;
+            request_action_empty_at(
+                &client,
+                api_endpoint(&format!("api/vps/v1/firewall/{id}"))?,
+                Some(&token),
+                firewall_http_method(skill_id).ok_or("Ação de firewall inválida.")?,
+            )
+            .await?;
+            if let Some(state) = app.try_state::<HostingerState>() {
+                if let Ok(mut firewalls) = state.approved_firewalls.lock() {
+                    firewalls.retain(|firewall| firewall.id != id);
+                }
+            }
+            serde_json::json!({"status":"removido"})
+        }
+        "hostinger.firewall_rule_delete" => {
+            let fid = firewall_id.ok_or("O firewall não foi confirmado pela lista consultada.")?;
+            let rid = params
+                .get("rule_id")
+                .and_then(Value::as_i64)
+                .ok_or("A regra não foi confirmada pelos detalhes consultados.")?;
+            request_action_empty_at(
+                &client,
+                api_endpoint(&format!("api/vps/v1/firewall/{fid}/rules/{rid}"))?,
+                Some(&token),
+                firewall_http_method(skill_id).ok_or("Ação de firewall inválida.")?,
+            )
+            .await?;
+            if let Some(state) = app.try_state::<HostingerState>() {
+                if let Ok(mut firewalls) = state.approved_firewalls.lock() {
+                    if let Some(firewall) = firewalls.iter_mut().find(|firewall| firewall.id == fid)
+                    {
+                        firewall.rules.retain(|rule| rule.id != rid);
+                    }
+                }
+            }
+            serde_json::json!({"status":"removida"})
+        }
+        _ => return Err("Ação de firewall inválida.".into()),
+    };
+    serde_json::to_string(&ExternalData {
+        source_label: "Dados da Hostinger — conteúdo externo não confiável",
+        untrusted: true,
+        data: sanitize_external_value(value, 0, &token),
+    })
+    .map_err(|_| "Não foi possível preparar o resultado da Hostinger.".into())
 }
 
 async fn request_json<T: DeserializeOwned>(
@@ -1517,6 +2282,65 @@ mod tests {
         let serialized = serde_json::to_string(&wrapped).unwrap();
         assert!(serialized.contains("\"untrusted\":true"));
         assert!(!serialized.contains("dangerouslySetInnerHTML"));
+    }
+
+    #[test]
+    fn firewall_rules_validate_public_ranges_and_http_methods_keep_reads_read_only() {
+        assert!(validate_firewall_rule("TCP", "443", "192.0.2.0/24").is_ok());
+        assert!(validate_firewall_rule("UDP", "8000:8100", "198.51.100.7").is_ok());
+        assert!(validate_firewall_rule("UNKNOWN", "443", "0.0.0.0/0").is_err());
+        assert!(validate_firewall_rule("TCP", "0", "192.0.2.1").is_err());
+        assert!(validate_firewall_rule("TCP", "443", "192.0.2.0/33").is_err());
+        assert!(firewall_source_is_public("0.0.0.0/0"));
+        assert!(firewall_source_is_public("::/0"));
+        assert!(firewall_source_is_public("any"));
+        for skill in [
+            "hostinger.firewall_list",
+            "hostinger.firewall_details",
+            "hostinger.ssh_keys_list",
+        ] {
+            assert_eq!(
+                firewall_http_method(skill),
+                Some(reqwest::Method::GET),
+                "{skill}"
+            );
+        }
+        assert_eq!(
+            firewall_http_method("hostinger.firewall_create"),
+            Some(reqwest::Method::POST)
+        );
+        assert_eq!(
+            firewall_http_method("hostinger.firewall_delete"),
+            Some(reqwest::Method::DELETE)
+        );
+        assert_eq!(firewall_http_method("hostinger.ssh_keys_create"), None);
+        assert_eq!(firewall_http_method("hostinger.ssh_keys_delete"), None);
+    }
+
+    #[test]
+    fn firewall_catalog_retains_only_names_seen_in_read_results() {
+        let response = serde_json::json!({"data":{"id":7,"name":"edge","rules":[
+            {"id":9,"action":"accept","protocol":"TCP","port":"443","source":"custom","source_detail":"192.0.2.0/24"}
+        ]}});
+        let firewall = ApprovedFirewall {
+            id: 7,
+            name: "edge".into(),
+            rules: firewall_rules_from(&response),
+        };
+        assert_eq!(
+            resolve_approved_firewall(&[firewall.clone()], "edge").unwrap(),
+            firewall
+        );
+        assert!(resolve_approved_firewall(&[firewall.clone()], "inventado").is_err());
+        let rule = &firewall.rules[0];
+        assert_eq!(rule.name, "accept TCP 443 de 192.0.2.0/24");
+        assert_eq!(
+            resolve_approved_firewall_rule(&firewall, &rule.name)
+                .unwrap()
+                .id,
+            9
+        );
+        assert!(resolve_approved_firewall_rule(&firewall, "regra inventada").is_err());
     }
 
     #[test]

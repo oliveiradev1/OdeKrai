@@ -64,6 +64,7 @@ type Pending = {
   expiresAt: number;
   displayHash: string;
   requiredConfirmation: string | null;
+  confirmationPrompt: string | null;
 };
 
 const modes: { id: Mode; title: string; description: string }[] = [
@@ -734,10 +735,10 @@ export function ApprovalWindow() {
           </section>
           {pending.requiredConfirmation && (
             <label className="approval-project-confirmation">
-              Para confirmar a remoção, digite exatamente{' '}
+              {pending.confirmationPrompt ?? 'Para confirmar, digite exatamente'}{' '}
               <strong>{pending.requiredConfirmation}</strong>.
               <input
-                aria-label="Digite o nome do projeto para confirmar a remoção"
+                aria-label="Digite o texto solicitado para confirmar a ação"
                 autoComplete="off"
                 value={projectConfirmation}
                 onChange={(event) => setProjectConfirmation(event.target.value)}

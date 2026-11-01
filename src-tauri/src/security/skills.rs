@@ -277,7 +277,16 @@ fn skill_metadata(
         | "hostinger.docker_stop"
         | "hostinger.docker_restart"
         | "hostinger.docker_deploy"
-        | "hostinger.docker_remove" => (SkillFamily::Nuvem, "cloud"),
+        | "hostinger.docker_remove"
+        | "hostinger.firewall_list"
+        | "hostinger.firewall_details"
+        | "hostinger.firewall_create"
+        | "hostinger.firewall_rule_create"
+        | "hostinger.firewall_activate"
+        | "hostinger.firewall_deactivate"
+        | "hostinger.firewall_delete"
+        | "hostinger.firewall_rule_delete"
+        | "hostinger.ssh_keys_list" => (SkillFamily::Nuvem, "cloud"),
         _ => (SkillFamily::Computador, "desktop"),
     };
     let examples = match id {
@@ -302,6 +311,16 @@ impl Skill {
             }
             "hostinger.docker_deploy" => return Ok(Risk::ExecucaoDeCodigo),
             "hostinger.docker_remove" => return Ok(Risk::DestrutivoFinanceiro),
+            "hostinger.firewall_list"
+            | "hostinger.firewall_details"
+            | "hostinger.ssh_keys_list" => return Ok(Risk::Leitura),
+            "hostinger.firewall_create"
+            | "hostinger.firewall_rule_create"
+            | "hostinger.firewall_activate"
+            | "hostinger.firewall_deactivate" => return Ok(Risk::EscritaReversivel),
+            "hostinger.firewall_delete" | "hostinger.firewall_rule_delete" => {
+                return Ok(Risk::DestrutivoFinanceiro)
+            }
             _ => {}
         }
         let action = parse_action(self.id, params)?;
@@ -462,6 +481,15 @@ fn action_id(action: &SimulatedAction) -> &str {
             | "hostinger.docker_restart"
             | "hostinger.docker_deploy"
             | "hostinger.docker_remove" => skill_id,
+            "hostinger.firewall_list"
+            | "hostinger.firewall_details"
+            | "hostinger.firewall_create"
+            | "hostinger.firewall_rule_create"
+            | "hostinger.firewall_activate"
+            | "hostinger.firewall_deactivate"
+            | "hostinger.firewall_delete"
+            | "hostinger.firewall_rule_delete"
+            | "hostinger.ssh_keys_list" => skill_id,
             _ => "",
         },
     }
@@ -545,6 +573,15 @@ fn parse_action(id: &str, params: &Value) -> Result<SimulatedAction, String> {
             | "hostinger.docker_restart"
             | "hostinger.docker_deploy"
             | "hostinger.docker_remove"
+            | "hostinger.firewall_list"
+            | "hostinger.firewall_details"
+            | "hostinger.firewall_create"
+            | "hostinger.firewall_rule_create"
+            | "hostinger.firewall_activate"
+            | "hostinger.firewall_deactivate"
+            | "hostinger.firewall_delete"
+            | "hostinger.firewall_rule_delete"
+            | "hostinger.ssh_keys_list"
             | "web.fetch"
     ) {
         if id == "code.delegate" {
@@ -931,6 +968,15 @@ pub fn registry() -> Vec<Skill> {
         ("hostinger.docker_restart", "Reiniciar projeto Docker", "Reinicia projeto Docker existente. Sempre exige aprovação.", "Reinicie um projeto Docker existente usando os nomes exatos de VPS e projeto retornados pelas listas aprovadas. Sempre exige aprovação.", json!({"type":"object","properties":{"vm_name":{"type":"string","minLength":1,"maxLength":512},"project_name":{"type":"string","minLength":3,"maxLength":64}},"required":["vm_name","project_name"],"additionalProperties":false}), ResultTrust::Untrusted),
         ("hostinger.docker_deploy", "Criar ou atualizar projeto Docker", "Envia docker-compose para execução no servidor; sempre exige aprovação após validar tamanho e montagens.", "Crie ou atualize um projeto usando docker-compose YAML local em texto (não URL), até 8 KiB. O arquivo completo, nome do projeto e aviso de execução no servidor serão mostrados para aprovação.", json!({"type":"object","properties":{"vm_name":{"type":"string","minLength":1,"maxLength":512},"project_name":{"type":"string","minLength":3,"maxLength":64},"compose_yaml":{"type":"string","minLength":1,"maxLength":8192}},"required":["vm_name","project_name","compose_yaml"],"additionalProperties":false}), ResultTrust::Untrusted),
         ("hostinger.docker_remove", "Remover projeto Docker", "Remove um projeto Docker e seus recursos; sempre exige aprovação e confirmação digitando o nome.", "Remova projeto Docker existente. O usuário deverá digitar o nome exato na janela de aprovação.", json!({"type":"object","properties":{"vm_name":{"type":"string","minLength":1,"maxLength":512},"project_name":{"type":"string","minLength":3,"maxLength":64}},"required":["vm_name","project_name"],"additionalProperties":false}), ResultTrust::Untrusted),
+        ("hostinger.firewall_list", "Listar firewalls da Hostinger", "Lista firewalls e regras cadastrados na conta; saída externa não confiável.", "Consulte a lista de firewalls e regras cadastrados. Esta leitura não altera configurações.", json!({"type":"object","properties":{},"required":[],"additionalProperties":false}), ResultTrust::Untrusted),
+        ("hostinger.firewall_details", "Consultar regras de firewall", "Consulta detalhes e regras de firewall listados nesta sessão.", "Consulte regras usando somente o nome exato retornado pela lista de firewalls.", json!({"type":"object","properties":{"firewall_name":{"type":"string","minLength":1,"maxLength":128}},"required":["firewall_name"],"additionalProperties":false}), ResultTrust::Untrusted),
+        ("hostinger.ssh_keys_list", "Listar chaves SSH públicas anexadas", "Lista somente chaves SSH públicas anexadas a uma VPS consultada.", "Liste as chaves SSH públicas anexadas usando somente a VPS retornada pela lista consultada. Não há ferramentas para criar, alterar ou apagar chaves.", json!({"type":"object","properties":{"vm_name":{"type":"string","minLength":1,"maxLength":512}},"required":["vm_name"],"additionalProperties":false}), ResultTrust::Untrusted),
+        ("hostinger.firewall_create", "Criar firewall", "Cria um firewall; sempre exige aprovação.", "Crie um firewall com o nome informado. A ação será apresentada para aprovação antes de ser enviada.", json!({"type":"object","properties":{"firewall_name":{"type":"string","minLength":1,"maxLength":128}},"required":["firewall_name"],"additionalProperties":false}), ResultTrust::Untrusted),
+        ("hostinger.firewall_rule_create", "Adicionar regra ao firewall", "Adiciona regra de entrada; origem pública exige confirmação adicional.", "Adicione regra informando nome do firewall, protocolo, porta (ou intervalo) e origem IP/CIDR. Uma origem universal exige confirmação extra.", json!({"type":"object","properties":{"firewall_name":{"type":"string","minLength":1,"maxLength":128},"protocol":{"type":"string","enum":["TCP","UDP","ICMP","GRE","any","ESP","AH","ICMPv6","SSH","HTTP","HTTPS","MySQL","PostgreSQL"]},"port":{"type":"string","minLength":1,"maxLength":32},"source_cidr":{"type":"string","minLength":1,"maxLength":64}},"required":["firewall_name","protocol","port","source_cidr"],"additionalProperties":false}), ResultTrust::Untrusted),
+        ("hostinger.firewall_activate", "Ativar firewall na VPS", "Ativa firewall numa VPS; sempre exige aprovação.", "Ative um firewall listado em uma VPS também listada; serviços podem ficar indisponíveis.", json!({"type":"object","properties":{"vm_name":{"type":"string","minLength":1,"maxLength":512},"firewall_name":{"type":"string","minLength":1,"maxLength":128}},"required":["vm_name","firewall_name"],"additionalProperties":false}), ResultTrust::Untrusted),
+        ("hostinger.firewall_deactivate", "Desativar firewall na VPS", "Desativa firewall numa VPS; sempre exige aprovação.", "Desative um firewall listado em uma VPS também listada; a VPS ficará sem essa proteção.", json!({"type":"object","properties":{"vm_name":{"type":"string","minLength":1,"maxLength":512},"firewall_name":{"type":"string","minLength":1,"maxLength":128}},"required":["vm_name","firewall_name"],"additionalProperties":false}), ResultTrust::Untrusted),
+        ("hostinger.firewall_delete", "Remover firewall", "Remove firewall; sempre exige aprovação e confirmação digitando o nome.", "Remova um firewall consultado; será necessário digitar o nome exato na janela nativa de aprovação.", json!({"type":"object","properties":{"firewall_name":{"type":"string","minLength":1,"maxLength":128}},"required":["firewall_name"],"additionalProperties":false}), ResultTrust::Untrusted),
+        ("hostinger.firewall_rule_delete", "Remover regra de firewall", "Remove regra; sempre exige aprovação e confirmação digitando o nome.", "Remova uma regra consultada; será necessário digitar o nome exato da regra na janela nativa de aprovação.", json!({"type":"object","properties":{"firewall_name":{"type":"string","minLength":1,"maxLength":128},"rule_name":{"type":"string","minLength":1,"maxLength":512}},"required":["firewall_name","rule_name"],"additionalProperties":false}), ResultTrust::Untrusted),
     ];
     rows.into_iter()
         .map(
@@ -1003,6 +1049,34 @@ fn action_example(id: &str) -> SimulatedAction {
         "hostinger.docker_deploy" => SimulatedAction::Productivity {
             skill_id: id.into(),
             params: json!({"vm_name":"VPS de teste", "vm_id":42,"project_name":"demo","compose_yaml":"services:\n  app:\n    image: nginx\n"}),
+        },
+        "hostinger.firewall_list" => SimulatedAction::Productivity {
+            skill_id: id.into(),
+            params: json!({}),
+        },
+        "hostinger.firewall_details"
+        | "hostinger.firewall_create"
+        | "hostinger.firewall_delete" => SimulatedAction::Productivity {
+            skill_id: id.into(),
+            params: json!({"firewall_name":"Firewall de teste"}),
+        },
+        "hostinger.ssh_keys_list" => SimulatedAction::Productivity {
+            skill_id: id.into(),
+            params: json!({"vm_name":"VPS de teste","vm_id":42}),
+        },
+        "hostinger.firewall_rule_create" => SimulatedAction::Productivity {
+            skill_id: id.into(),
+            params: json!({"firewall_name":"Firewall de teste","firewall_id":4,"protocol":"TCP","port":"443","source_cidr":"192.0.2.0/24"}),
+        },
+        "hostinger.firewall_activate" | "hostinger.firewall_deactivate" => {
+            SimulatedAction::Productivity {
+                skill_id: id.into(),
+                params: json!({"vm_name":"VPS de teste","vm_id":42,"firewall_name":"Firewall de teste","firewall_id":4}),
+            }
+        }
+        "hostinger.firewall_rule_delete" => SimulatedAction::Productivity {
+            skill_id: id.into(),
+            params: json!({"firewall_name":"Firewall de teste","firewall_id":4,"rule_name":"accept TCP 443 de 192.0.2.0/24","rule_id":2}),
         },
         "plan.propose" => SimulatedAction::Productivity {
             skill_id: id.into(),
@@ -2431,6 +2505,32 @@ mod tests {
             deploy.schema["properties"]["compose_yaml"]["maxLength"],
             8192
         );
+    }
+
+    #[test]
+    fn hostinger_firewall_and_ssh_skills_use_safe_risks_and_register_no_ssh_writes() {
+        let cases = [
+            ("hostinger.firewall_list", Risk::Leitura),
+            ("hostinger.firewall_details", Risk::Leitura),
+            ("hostinger.ssh_keys_list", Risk::Leitura),
+            ("hostinger.firewall_create", Risk::EscritaReversivel),
+            ("hostinger.firewall_rule_create", Risk::EscritaReversivel),
+            ("hostinger.firewall_activate", Risk::EscritaReversivel),
+            ("hostinger.firewall_deactivate", Risk::EscritaReversivel),
+            ("hostinger.firewall_delete", Risk::DestrutivoFinanceiro),
+            ("hostinger.firewall_rule_delete", Risk::DestrutivoFinanceiro),
+        ];
+        let skills = registry();
+        for (id, risk) in cases {
+            let skill = skills.iter().find(|skill| skill.id == id).expect(id);
+            assert_eq!(skill.family, SkillFamily::Nuvem, "{id}");
+            assert_eq!(skill.result_trust, ResultTrust::Untrusted, "{id}");
+            assert_eq!(skill.risk(&json!({})).unwrap(), risk, "{id}");
+        }
+        assert!(!skills.iter().any(|skill| matches!(
+            skill.id,
+            "hostinger.ssh_keys_create" | "hostinger.ssh_keys_update" | "hostinger.ssh_keys_delete"
+        )));
     }
 
     #[test]

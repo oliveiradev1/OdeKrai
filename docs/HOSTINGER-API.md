@@ -61,6 +61,30 @@ schema, o OpenAPI o declara obrigatório. As respostas abaixo resumem códigos e
 
 Todas as habilidades Docker só aceitam VMs que o usuário já viu na listagem de VPS e projetos que vieram da habilidade de listar projetos. Escritas sempre pedem aprovação. Compose recebido é texto não confiável, validado antes da aprovação e apresentado integralmente na janela de aprovação; URLs remotas são recusadas. O OdeKrai bloqueia montagens de diretórios de sistema do servidor, incluindo `/etc`, `/root`, `/var/run`, `/proc`, `/sys`, `/dev` e `/boot`. Isso é uma barreira adicional, não uma análise completa de segurança do YAML: revise o arquivo inteiro antes de aprovar, pois o conteúdo aprovado será executado na VPS.
 
+## Firewalls e chaves SSH públicas (H-5)
+
+As operações abaixo foram conferidas no OpenAPI oficial consultado em 2026-11-01. Todas as
+respostas são conteúdo externo não confiável. Escritas passam pela aprovação do OdeKrai mesmo em
+Controle total. Regras com origem `0.0.0.0/0`, `::/0` ou `any` mostram aviso e exigem confirmação
+digitando a origem antes que a chamada seja liberada.
+
+| Operação                                      | Método | Caminho                                                           | Risco OdeKrai      | Confirmação digitada                                | Fonte no OpenAPI                                                 |
+| --------------------------------------------- | ------ | ----------------------------------------------------------------- | ------------------ | --------------------------------------------------- | ---------------------------------------------------------------- |
+| Listar firewalls e regras                     | GET    | `/api/vps/v1/firewall`                                            | Leitura            | Não                                                 | `VPS_getFirewallListV1`, `FirewallCollection`                    |
+| Consultar detalhes e regras                   | GET    | `/api/vps/v1/firewall/{firewallId}`                               | Leitura            | Não                                                 | `VPS_getFirewallDetailsV1`, `FirewallResource`                   |
+| Listar chaves SSH públicas anexadas a uma VPS | GET    | `/api/vps/v1/virtual-machines/{virtualMachineId}/ssh-keys`        | Leitura            | Não                                                 | `VPS_listVirtualMachineSSHKeysV1`                                |
+| Criar firewall                                | POST   | `/api/vps/v1/firewall`                                            | Escrita reversível | Aprovação                                           | `VPS_createNewFirewallV1`, `VPS.V1.Firewall.StoreRequest`        |
+| Adicionar regra                               | POST   | `/api/vps/v1/firewall/{firewallId}/rules`                         | Escrita reversível | Aprovação; origem universal requer digitar a origem | `VPS_createFirewallRuleV1`, `VPS.V1.Firewall.Rules.StoreRequest` |
+| Ativar firewall em VPS                        | POST   | `/api/vps/v1/firewall/{firewallId}/activate/{virtualMachineId}`   | Escrita reversível | Aprovação                                           | `VPS_activateFirewallV1`                                         |
+| Desativar firewall em VPS                     | POST   | `/api/vps/v1/firewall/{firewallId}/deactivate/{virtualMachineId}` | Escrita reversível | Aprovação                                           | `VPS_deactivateFirewallV1`                                       |
+| Remover firewall                              | DELETE | `/api/vps/v1/firewall/{firewallId}`                               | Destrutiva         | Digitar o nome exato do firewall                    | `VPS_deleteFirewallV1`                                           |
+| Remover regra                                 | DELETE | `/api/vps/v1/firewall/{firewallId}/rules/{ruleId}`                | Destrutiva         | Digitar o nome exato da regra                       | `VPS_deleteFirewallRuleV1`                                       |
+
+Os identificadores de VPS, firewall e regra são resolvidos em Rust a partir das listas de leitura
+obtidas na sessão, nunca aceitos do modelo. Nesta versão não existem habilidades para criar,
+alterar ou apagar chaves SSH. Os endpoints `POST` e `DELETE` de chaves não são registrados nem
+chamados.
+
 ## Compra e cobrança
 
 **Existe endpoint de compra/criação de VPS:** `POST /api/vps/v1/virtual-machines` é descrito como

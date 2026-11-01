@@ -113,6 +113,15 @@ pub(super) fn action_metadata(
             | "hostinger.docker_restart"
             | "hostinger.docker_deploy"
             | "hostinger.docker_remove" => skill_id,
+            "hostinger.firewall_list"
+            | "hostinger.firewall_details"
+            | "hostinger.firewall_create"
+            | "hostinger.firewall_rule_create"
+            | "hostinger.firewall_activate"
+            | "hostinger.firewall_deactivate"
+            | "hostinger.firewall_delete"
+            | "hostinger.firewall_rule_delete"
+            | "hostinger.ssh_keys_list" => skill_id,
             "code.delegate" => "code.delegate",
             "web.fetch" => "web.fetch",
             "system.open_url"
@@ -145,7 +154,7 @@ pub(super) fn action_metadata(
     };
     let policy_scope = workspace_action
         || matches!(action, SimulatedAction::Productivity { skill_id, .. }
-            if matches!(skill_id.as_str(), "shardcloud.vm_list" | "shardcloud.vm_details" | "hostinger.docker_list"));
+            if matches!(skill_id.as_str(), "shardcloud.vm_list" | "shardcloud.vm_details" | "hostinger.docker_list" | "hostinger.firewall_list" | "hostinger.firewall_details" | "hostinger.ssh_keys_list"));
     (tool_name, tool.risk(action), policy_scope, fixed)
 }
 
@@ -170,7 +179,7 @@ fn is_workspace_skill(skill_id: &str) -> bool {
 }
 
 fn require_batch_approval(action: &SimulatedAction, decision: Decision) -> Decision {
-    if matches!(action, SimulatedAction::Productivity { skill_id, .. } if matches!(skill_id.as_str(), "hostinger.vps_start" | "hostinger.vps_stop" | "hostinger.vps_restart" | "hostinger.docker_list" | "hostinger.docker_start" | "hostinger.docker_stop" | "hostinger.docker_restart" | "hostinger.docker_deploy" | "hostinger.docker_remove"))
+    if matches!(action, SimulatedAction::Productivity { skill_id, .. } if matches!(skill_id.as_str(), "hostinger.vps_start" | "hostinger.vps_stop" | "hostinger.vps_restart" | "hostinger.docker_list" | "hostinger.docker_start" | "hostinger.docker_stop" | "hostinger.docker_restart" | "hostinger.docker_deploy" | "hostinger.docker_remove" | "hostinger.firewall_create" | "hostinger.firewall_rule_create" | "hostinger.firewall_activate" | "hostinger.firewall_deactivate" | "hostinger.firewall_delete" | "hostinger.firewall_rule_delete"))
         && matches!(decision, Decision::Allow(_))
     {
         Decision::AskUser(
@@ -216,22 +225,80 @@ fn require_batch_approval(action: &SimulatedAction, decision: Decision) -> Decis
     }
 }
 
+fn required_confirmation(action: &SimulatedAction) -> Option<(String, &'static str)> {
+    let SimulatedAction::Productivity { skill_id, params } = action else {
+        return None;
+    };
+    match skill_id.as_str() {
+        "hostinger.docker_remove" => params
+            .get("project_name")
+            .and_then(serde_json::Value::as_str)
+            .map(|name| {
+                (
+                    name.to_owned(),
+                    "Para confirmar a remoção, digite exatamente",
+                )
+            }),
+        "hostinger.firewall_delete" => params
+            .get("firewall_name")
+            .and_then(serde_json::Value::as_str)
+            .map(|name| {
+                (
+                    name.to_owned(),
+                    "Para confirmar a remoção do firewall, digite exatamente",
+                )
+            }),
+        "hostinger.firewall_rule_delete" => params
+            .get("rule_name")
+            .and_then(serde_json::Value::as_str)
+            .map(|name| {
+                (
+                    name.to_owned(),
+                    "Para confirmar a remoção da regra, digite exatamente",
+                )
+            }),
+        "hostinger.firewall_rule_create"
+            if params
+                .get("source_cidr")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(crate::hostinger::is_public_firewall_source) =>
+        {
+            Some((
+                params
+                    .get("source_cidr")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("0.0.0.0/0")
+                    .to_owned(),
+                "A origem libera acesso de qualquer endereço. Para confirmar, digite",
+            ))
+        }
+        _ => None,
+    }
+}
+
+fn validate_required_confirmation(
+    action: &SimulatedAction,
+    supplied: Option<&str>,
+) -> Result<(), String> {
+    if matches!(action, SimulatedAction::Productivity { skill_id, .. } if matches!(skill_id.as_str(), "hostinger.docker_remove" | "hostinger.firewall_delete" | "hostinger.firewall_rule_delete"))
+        && required_confirmation(action).is_none()
+    {
+        return Err("O nome a confirmar está ausente nos parâmetros da ação.".into());
+    }
+    if let Some((expected, _)) = required_confirmation(action) {
+        if supplied != Some(expected.as_str()) {
+            return Err("Digite exatamente o texto indicado para confirmar esta ação.".into());
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
 fn validate_project_removal_confirmation(
     action: &SimulatedAction,
     supplied: Option<&str>,
 ) -> Result<(), String> {
-    if let SimulatedAction::Productivity { skill_id, params } = action {
-        if skill_id == "hostinger.docker_remove" {
-            let expected = params
-                .get("project_name")
-                .and_then(serde_json::Value::as_str)
-                .ok_or("O nome do projeto pendente está inválido.")?;
-            if supplied != Some(expected) {
-                return Err("Digite exatamente o nome do projeto para confirmar a remoção.".into());
-            }
-        }
-    }
-    Ok(())
+    validate_required_confirmation(action, supplied)
 }
 
 fn preview_for_approval(action: &SimulatedAction, preview: &str) -> String {
@@ -738,6 +805,15 @@ pub(super) fn summary(action: &SimulatedAction) -> String {
                     | "hostinger.docker_stop"
                     | "hostinger.docker_restart"
                     | "hostinger.docker_remove"
+                    | "hostinger.firewall_list"
+                    | "hostinger.firewall_details"
+                    | "hostinger.firewall_create"
+                    | "hostinger.firewall_rule_create"
+                    | "hostinger.firewall_activate"
+                    | "hostinger.firewall_deactivate"
+                    | "hostinger.firewall_delete"
+                    | "hostinger.firewall_rule_delete"
+                    | "hostinger.ssh_keys_list"
             ) =>
         {
             crate::hostinger::preview_skill(skill_id, params).unwrap_or_else(|_| skill_id.clone())
@@ -1837,17 +1913,8 @@ pub(super) async fn get_pending_approval_inner(
         preview_image: item.preview_image.clone(),
         expires_at: item.expires_at,
         display_hash: item.digest.clone(),
-        required_confirmation: match &item.action {
-            SimulatedAction::Productivity { skill_id, params }
-                if skill_id == "hostinger.docker_remove" =>
-            {
-                params
-                    .get("project_name")
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::to_owned)
-            }
-            _ => None,
-        },
+        required_confirmation: required_confirmation(&item.action).map(|value| value.0),
+        confirmation_prompt: required_confirmation(&item.action).map(|value| value.1.to_owned()),
     }))
 }
 
@@ -2017,6 +2084,107 @@ mod batch_approval_tests {
             params: serde_json::json!({}),
         };
         assert!(validate_project_removal_confirmation(&read, None).is_ok());
+    }
+
+    #[test]
+    fn firewall_open_rule_requires_extra_confirmation_and_removals_require_exact_name() {
+        let open_rule = SimulatedAction::Productivity {
+            skill_id: "hostinger.firewall_rule_create".into(),
+            params: serde_json::json!({"firewall_name":"web","protocol":"TCP","port":"443","source_cidr":"0.0.0.0/0"}),
+        };
+        let (_tool, risk, inside, fixed) = action_metadata(&open_rule);
+        assert_eq!(risk, Risk::EscritaReversivel);
+        assert!(!inside);
+        assert!(summary(&open_rule).contains("qualquer endereço"));
+        for mode in [
+            Mode::SemprePerguntar,
+            Mode::AprovarPorMim,
+            Mode::ControleTotal,
+        ] {
+            let decision = policy::decide(mode, risk, &Origin::User, inside, fixed, true);
+            assert!(matches!(
+                require_batch_approval(&open_rule, decision),
+                Decision::AskUser(_)
+            ));
+        }
+        assert!(validate_required_confirmation(&open_rule, None).is_err());
+        assert!(validate_required_confirmation(&open_rule, Some("::/0")).is_err());
+        assert!(validate_required_confirmation(&open_rule, Some("0.0.0.0/0")).is_ok());
+
+        for (skill_id, params, expected) in [
+            (
+                "hostinger.firewall_delete",
+                serde_json::json!({"firewall_name":"web"}),
+                "web",
+            ),
+            (
+                "hostinger.firewall_rule_delete",
+                serde_json::json!({"rule_name":"accept TCP 443 de any"}),
+                "accept TCP 443 de any",
+            ),
+        ] {
+            let action = SimulatedAction::Productivity {
+                skill_id: skill_id.into(),
+                params,
+            };
+            assert!(validate_required_confirmation(&action, None).is_err());
+            assert!(validate_required_confirmation(&action, Some("outro")).is_err());
+            assert!(validate_required_confirmation(&action, Some(expected)).is_ok());
+        }
+        let missing_name = SimulatedAction::Productivity {
+            skill_id: "hostinger.firewall_delete".into(),
+            params: serde_json::json!({}),
+        };
+        assert!(validate_required_confirmation(&missing_name, Some("anything")).is_err());
+    }
+
+    #[test]
+    fn hostinger_firewall_writes_always_ask_in_every_permission_mode() {
+        let cases = [
+            (
+                "hostinger.firewall_create",
+                serde_json::json!({"firewall_name":"web"}),
+            ),
+            (
+                "hostinger.firewall_rule_create",
+                serde_json::json!({"firewall_name":"web","protocol":"TCP","port":"443","source_cidr":"192.0.2.1"}),
+            ),
+            (
+                "hostinger.firewall_activate",
+                serde_json::json!({"firewall_name":"web","firewall_id":5,"vm_name":"vps","vm_id":42}),
+            ),
+            (
+                "hostinger.firewall_deactivate",
+                serde_json::json!({"firewall_name":"web","firewall_id":5,"vm_name":"vps","vm_id":42}),
+            ),
+        ];
+        for (skill_id, params) in cases {
+            let action = SimulatedAction::Productivity {
+                skill_id: skill_id.into(),
+                params,
+            };
+            for mode in [
+                Mode::SemprePerguntar,
+                Mode::AprovarPorMim,
+                Mode::ControleTotal,
+            ] {
+                let decision = policy::decide(
+                    mode,
+                    Risk::EscritaReversivel,
+                    &Origin::User,
+                    false,
+                    false,
+                    true,
+                );
+                assert!(
+                    matches!(
+                        require_batch_approval(&action, decision),
+                        Decision::AskUser(_)
+                    ),
+                    "{skill_id} {mode:?}"
+                );
+            }
+        }
     }
 
     #[test]
