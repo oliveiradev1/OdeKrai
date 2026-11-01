@@ -823,7 +823,7 @@ fn register_client_with(
             request["scope"] = Value::String(scopes.to_owned());
         }
         let response = post(endpoint, request)?;
-        let client_id = response
+        let client_id: Result<String, String> = response
             .get("client_id")
             .and_then(Value::as_str)
             .filter(|id| !id.is_empty() && id.len() <= 2048 && !id.chars().any(char::is_control))
@@ -2165,7 +2165,8 @@ mod tests {
                 "https://auth.example",
                 false,
             )
-            .unwrap(),
+            .unwrap()
+            .0,
             "authorization-code"
         );
     }
