@@ -1148,9 +1148,7 @@ fn eligible_provider_targets(
         if !credential_requirement_met(&target.provider_id, has_credential) {
             return Ok(false);
         }
-        if target.provider_id == "local"
-            && provider_endpoint("local", &target.base_url).is_err()
-        {
+        if target.provider_id == "local" && provider_endpoint("local", &target.base_url).is_err() {
             return Ok(false);
         }
         if tools_required {
@@ -1899,12 +1897,8 @@ mod tests {
         assert!(credential_requirement_met("local", true));
         assert!(!credential_requirement_met("openai", false));
         assert!(credential_requirement_met("openai", true));
-        assert!(
-            provider_endpoint("local", "http://127.0.0.1:11434/v1").is_ok()
-        );
-        assert!(
-            provider_endpoint("local", "http://192.168.1.8:11434/v1").is_err()
-        );
+        assert!(provider_endpoint("local", "http://127.0.0.1:11434/v1").is_ok());
+        assert!(provider_endpoint("local", "http://192.168.1.8:11434/v1").is_err());
     }
 
     #[test]

@@ -99,8 +99,10 @@ fn resolve_public_endpoint(endpoint: &Url) -> Result<Vec<SocketAddr>, String> {
 
 fn validate_resolved_addresses(addresses: &[SocketAddr]) -> Result<(), String> {
     if addresses.is_empty() || addresses.iter().any(|address| !is_public_address(*address)) {
-        Err("O host do servidor MCP resolve para um endereço local ou reservado e foi recusado."
-            .into())
+        Err(
+            "O host do servidor MCP resolve para um endereço local ou reservado e foi recusado."
+                .into(),
+        )
     } else {
         Ok(())
     }

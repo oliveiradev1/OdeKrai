@@ -117,7 +117,13 @@ pub(super) fn classify_task(text: &str, has_image: bool) -> TaskKind {
     if normalized.contains("programar")
         && contains_any(
             &normalized,
-            &["reunião", "reuniao", "compromisso", "calendário", "calendario"],
+            &[
+                "reunião",
+                "reuniao",
+                "compromisso",
+                "calendário",
+                "calendario",
+            ],
         )
     {
         return TaskKind::Agenda;

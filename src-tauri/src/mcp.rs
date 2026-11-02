@@ -409,10 +409,12 @@ impl McpStdioClient {
 }
 
 fn redact_secret_text(value: &str, secrets: &[String]) -> String {
-    secrets.iter().filter(|secret| !secret.is_empty()).fold(
-        value.to_owned(),
-        |redacted, secret| redacted.replace(secret, "[segredo omitido]"),
-    )
+    secrets
+        .iter()
+        .filter(|secret| !secret.is_empty())
+        .fold(value.to_owned(), |redacted, secret| {
+            redacted.replace(secret, "[segredo omitido]")
+        })
 }
 
 fn redact_json_strings(value: &mut Value, secrets: &[String]) {
