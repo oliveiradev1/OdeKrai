@@ -366,6 +366,7 @@ impl AgentBackend for RuntimeBackend<'_> {
                 untrusted_result,
                 undo_descriptor: None,
                 plan: None,
+                code_review_id: None,
                 created_at: std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
@@ -651,7 +652,17 @@ impl AgentBackend for RuntimeBackend<'_> {
                                 .get("diff")
                                 .and_then(serde_json::Value::as_str)
                                 .map(str::to_owned);
-                            card.result_summary = "Diff pronto para revisão; nenhuma alteração foi aplicada ao projeto original.".into();
+                            card.code_review_id = value
+                                .get("reviewId")
+                                .and_then(serde_json::Value::as_str)
+                                .map(str::to_owned);
+                            card.result_summary = if card.code_review_id.is_some() {
+                                "Diff pronto para revisão; nenhuma alteração foi aplicada ao projeto original.".into()
+                            } else if card.diff.as_deref() == Some("(nenhuma alteração no worktree)") {
+                                "A ferramenta não propôs mudanças; nada foi aplicado ao projeto original.".into()
+                            } else {
+                                "Diff limitado; a aplicação automática foi desativada. Nenhuma alteração foi aplicada ao projeto original.".into()
+                            };
                         }
                     }
                 }

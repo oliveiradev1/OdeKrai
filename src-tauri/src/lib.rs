@@ -1218,6 +1218,7 @@ pub fn run() -> Result<(), tauri::Error> {
             open_logs_folder,
             code_delegate::get_code_tool_settings,
             code_delegate::set_code_tool,
+            code_delegate::apply_code_diff,
             agent_runtime::agent_run,
             agent_runtime::agent_cancel,
             agent_runtime::agent_availability,

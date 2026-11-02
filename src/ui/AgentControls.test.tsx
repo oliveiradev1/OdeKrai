@@ -138,6 +138,34 @@ describe('controles e cartões do agente', () => {
     expect(markup).toContain('1.3 s');
   });
 
+  it('mostra o diff da delegação e só oferece aplicação quando há revisão pendente', () => {
+    const pending = renderToStaticMarkup(
+      <AgentActionCard
+        action={action('Concluída', {
+          skillId: 'code.delegate',
+          diff: 'diff --git a/file.txt b/file.txt',
+          codeReviewId: 'a'.repeat(64),
+        })}
+        onApplyCodeDiff={async () => undefined}
+      />,
+    );
+    expect(pending).toContain('details open=""');
+    expect(pending).toContain('Aplicar alterações ao projeto');
+    expect(pending).toContain('Ele ainda não foi aplicado ao projeto original.');
+
+    const applied = renderToStaticMarkup(
+      <AgentActionCard
+        action={action('Concluída', {
+          skillId: 'code.delegate',
+          diff: 'diff --git a/file.txt b/file.txt',
+          codeReviewId: null,
+        })}
+        onApplyCodeDiff={async () => undefined}
+      />,
+    );
+    expect(applied).not.toContain('Aplicar alterações ao projeto');
+  });
+
   it('renderiza o resultado MCP como cartão da conversa e o marca como não confiável', () => {
     const markup = renderToStaticMarkup(
       <AgentActionCard

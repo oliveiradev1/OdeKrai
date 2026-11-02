@@ -2052,6 +2052,29 @@ function MainApp() {
                 });
                 selectSettingsSection('privacidade');
               }}
+              onApplyCodeDiff={async (action) => {
+                if (!action.codeReviewId || !conversationId)
+                  throw new Error('Esta revisão não está mais disponível.');
+                const applied = await invoke<boolean>('apply_code_diff', {
+                  reviewId: action.codeReviewId,
+                  conversationId,
+                  actionId: action.id,
+                });
+                if (applied) {
+                  setAgentActionCards((items) =>
+                    items.map((item) =>
+                      item.id === action.id
+                        ? {
+                            ...item,
+                            codeReviewId: null,
+                            resultSummary:
+                              'Alterações aplicadas ao projeto após aprovação explícita.',
+                          }
+                        : item,
+                    ),
+                  );
+                }
+              }}
               onUndo={(action) => {
                 const descriptor = action.undoDescriptor;
                 if (!descriptor) return;

@@ -102,6 +102,7 @@ export function ConversationsScreen({
   onReviewApproval,
   onConfigureDiscord,
   onUndo,
+  onApplyCodeDiff,
   onOpenArtifact,
   onRevealArtifact,
   onToggleAgent,
@@ -156,6 +157,7 @@ export function ConversationsScreen({
   onReviewApproval: () => void;
   onConfigureDiscord?: () => void;
   onUndo: (action: AgentActionCardData) => void;
+  onApplyCodeDiff?: (action: AgentActionCardData) => Promise<void>;
   onOpenArtifact: (path: string) => void;
   onRevealArtifact: (path: string) => void;
   onToggleAgent: (enabled: boolean) => void;
@@ -876,6 +878,7 @@ export function ConversationsScreen({
                   onOpenArtifact={onOpenArtifact}
                   onRevealArtifact={onRevealArtifact}
                   onUndo={() => onUndo(action)}
+                  onApplyCodeDiff={onApplyCodeDiff}
                 />
               ))}
               {busy && !agentAwaitingApproval && (

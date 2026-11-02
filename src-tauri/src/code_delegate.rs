@@ -6,11 +6,12 @@ use std::{
     process::{Child, Command, Stdio},
     sync::{
         atomic::{AtomicU64, Ordering},
-        mpsc,
+        mpsc, Mutex, OnceLock,
     },
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+use sha2::{Digest, Sha256};
 use tauri::Manager;
 use tokio_util::sync::CancellationToken;
 
@@ -19,6 +20,23 @@ const MAX_OUTPUT_BYTES: usize = 8 * 1024;
 const MAX_DIFF_BYTES: usize = 14 * 1024;
 const RUN_TIMEOUT: Duration = Duration::from_secs(600);
 static RUN_ID: AtomicU64 = AtomicU64::new(1);
+static REVIEW_ID: AtomicU64 = AtomicU64::new(1);
+static PENDING_REVIEWS: OnceLock<Mutex<std::collections::HashMap<String, PendingCodeReview>>> =
+    OnceLock::new();
+
+#[derive(Clone)]
+struct PendingCodeReview {
+    project: PathBuf,
+    allowed_root: PathBuf,
+    base_head: String,
+    diff: String,
+    created: Instant,
+}
+
+struct CodeRunResult {
+    diff: String,
+    review_id: Option<String>,
+}
 
 pub fn new_run_id() -> String {
     format!(
@@ -128,7 +146,7 @@ pub fn preview(
     let worktree = worktree_path(app, id)?;
     let command = preview_command(tool, &executable, &worktree, task);
     Ok(format!(
-        "EXECUÇÃO DE CÓDIGO — RISCO ALTO\nProjeto: {}\nTarefa: {task}\n\nComando completo:\n{command}\nDiretório de execução: {}\n\nA ferramenta será iniciada com os privilégios desta conta do Windows dentro de um git worktree temporário. O worktree não é um sandbox: a ferramenta ainda pode acessar rede, arquivos do usuário e credenciais próprios do CLI. Segredos do OdeKrai não são adicionados ao ambiente do processo. O diff será exibido para revisão e nunca será aplicado ao projeto original por esta habilidade.",
+        "EXECUÇÃO DE CÓDIGO — RISCO ALTO\nProjeto: {}\nTarefa: {task}\n\nComando completo:\n{command}\nDiretório de execução: {}\n\nA ferramenta será iniciada com os privilégios desta conta do Windows dentro de um git worktree temporário. O worktree não é um sandbox: a ferramenta ainda pode acessar rede, arquivos do usuário e credenciais próprios do CLI. Segredos do OdeKrai não são adicionados ao ambiente do processo. O diff será exibido no cartão; aplicá-lo ao projeto original exige uma segunda aprovação explícita depois da revisão.",
         project_path.display(),
         worktree.display()
     ))
@@ -199,6 +217,9 @@ pub fn validate_request(project: &str, task: &str) -> Result<(), String> {
 }
 
 pub fn command_args(tool: CodeTool, worktree: &Path, task: &str) -> Vec<OsString> {
+    let delegated_task = format!(
+        "Restrições fixas do OdeKrai: trabalhe somente no diretório de execução informado; não leia nem altere caminhos externos a ele. Não execute git commit, git push, criação de tag ou publicação. Deixe as alterações no worktree para revisão.\n\nTarefa do usuário:\n{task}"
+    );
     match tool {
         CodeTool::Codex => vec![
             "exec".into(),
@@ -206,7 +227,7 @@ pub fn command_args(tool: CodeTool, worktree: &Path, task: &str) -> Vec<OsString
             "--json".into(),
             "-C".into(),
             worktree.as_os_str().to_owned(),
-            task.into(),
+            delegated_task.into(),
         ],
         CodeTool::Claude => vec![
             "-p".into(),
@@ -214,7 +235,7 @@ pub fn command_args(tool: CodeTool, worktree: &Path, task: &str) -> Vec<OsString
             "--output-format".into(),
             "stream-json".into(),
             "--verbose".into(),
-            task.into(),
+            delegated_task.into(),
         ],
     }
 }
@@ -295,15 +316,20 @@ pub async fn run(
     append_output(result, output)
 }
 
-fn append_output(result: Result<String, String>, output: String) -> Result<String, String> {
+fn append_output(result: Result<CodeRunResult, String>, output: String) -> Result<String, String> {
     let output = if output.is_empty() {
         "(sem saída capturada)".to_string()
     } else {
         output
     };
     let result = result?;
-    serde_json::to_string(&serde_json::json!({"output":output,"diff":result,"applied":false}))
-        .map_err(|_| "Não foi possível preparar a revisão das alterações.".into())
+    serde_json::to_string(&serde_json::json!({
+        "output": output,
+        "diff": result.diff,
+        "applied": false,
+        "reviewId": result.review_id
+    }))
+    .map_err(|_| "Não foi possível preparar a revisão das alterações.".into())
 }
 
 fn truncate_utf8(value: &str, max_bytes: usize) -> &str {
@@ -321,7 +347,7 @@ fn run_blocking(
     config: CodeRunConfig,
     app_data: PathBuf,
     output: tokio::sync::mpsc::UnboundedSender<String>,
-) -> Result<String, String> {
+) -> Result<CodeRunResult, String> {
     run_blocking_with(
         config.tool,
         config.executable,
@@ -350,7 +376,7 @@ fn run_blocking_with(
     output: tokio::sync::mpsc::UnboundedSender<String>,
     test_args: Option<Vec<OsString>>,
     timeout: Duration,
-) -> Result<String, String> {
+) -> Result<CodeRunResult, String> {
     if cancel.is_cancelled() {
         return Err("A execução foi cancelada.".into());
     }
@@ -372,6 +398,7 @@ fn run_blocking_with(
         return Err("Já existe uma execução de código com este identificador.".into());
     }
     let mut guard = WorktreeGuard::create(project.clone(), worktree.clone())?;
+    let base_head = git_head(&project)?;
     if cancel.is_cancelled() {
         return Err("A execução foi cancelada.".into());
     }
@@ -437,7 +464,242 @@ fn run_blocking_with(
     }
     let diff = capture_diff(&worktree)?;
     guard.remove()?;
-    Ok(diff)
+    let review_id = if diff.trim().is_empty()
+        || diff == "(nenhuma alteração no worktree)"
+        || diff.len() > MAX_DIFF_BYTES
+        || diff.contains("[diff truncado")
+    {
+        None
+    } else {
+        Some(store_pending_review(PendingCodeReview {
+            project,
+            allowed_root,
+            base_head,
+            diff: diff.clone(),
+            created: Instant::now(),
+        })?)
+    };
+    Ok(CodeRunResult { diff, review_id })
+}
+
+#[tauri::command]
+pub async fn apply_code_diff(
+    app: tauri::AppHandle,
+    caller: tauri::WebviewWindow,
+    review_id: String,
+    conversation_id: String,
+    action_id: String,
+) -> Result<bool, String> {
+    crate::require_main(&caller)?;
+    if !valid_review_id(&review_id)
+        || !crate::history::code_review_card_matches(&app, &conversation_id, &action_id, &review_id)?
+    {
+        return Err("Esta revisão não está mais pendente neste cartão.".into());
+    }
+    let review = pending_review(&review_id)?;
+    let project_label = review
+        .project
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("projeto selecionado");
+    let approved = crate::security::confirm_native(format!(
+        "Aplicar ao projeto {project_label} o diff exibido no cartão?\n\nIsso altera arquivos do projeto original. A CLI já terminou e o worktree temporário foi removido."
+    ))
+    .await;
+    if !approved {
+        return Ok(false);
+    }
+    let apply_id = review_id.clone();
+    tauri::async_runtime::spawn_blocking(move || apply_pending_review(&apply_id, true))
+        .await
+        .map_err(|_| "A aplicação da revisão foi interrompida.".to_string())??;
+    crate::history::mark_code_review_applied(&app, &conversation_id, &action_id, &review_id)?;
+    Ok(true)
+}
+
+fn store_pending_review(review: PendingCodeReview) -> Result<String, String> {
+    let created = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let nonce = REVIEW_ID.fetch_add(1, Ordering::Relaxed);
+    let mut hash = Sha256::new();
+    hash.update(created.to_le_bytes());
+    hash.update(nonce.to_le_bytes());
+    hash.update(std::process::id().to_le_bytes());
+    hash.update(review.diff.as_bytes());
+    let id = format!("{:x}", hash.finalize());
+    let mut reviews = PENDING_REVIEWS
+        .get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+        .lock()
+        .map_err(|_| "O estado da revisão está indisponível.".to_string())?;
+    reviews.retain(|_, pending| pending.created.elapsed() < Duration::from_secs(30 * 60));
+    if reviews.len() >= 64 {
+        let oldest = reviews
+            .iter()
+            .min_by_key(|(_, pending)| pending.created)
+            .map(|(id, _)| id.clone());
+        if let Some(oldest) = oldest {
+            reviews.remove(&oldest);
+        }
+    }
+    reviews.insert(id.clone(), review);
+    Ok(id)
+}
+
+fn pending_review(review_id: &str) -> Result<PendingCodeReview, String> {
+    let mut reviews = PENDING_REVIEWS
+        .get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+        .lock()
+        .map_err(|_| "O estado da revisão está indisponível.".to_string())?;
+    let Some(review) = reviews.get(review_id).cloned() else {
+        return Err("A revisão expirou ou o aplicativo foi reiniciado. Delegue novamente.".into());
+    };
+    if review.created.elapsed() >= Duration::from_secs(30 * 60) {
+        reviews.remove(review_id);
+        return Err("A revisão expirou. Delegue novamente para gerar outro diff.".into());
+    }
+    Ok(review)
+}
+
+fn valid_review_id(review_id: &str) -> bool {
+    review_id.len() == 64 && review_id.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn apply_pending_review(review_id: &str, approved: bool) -> Result<(), String> {
+    if !approved {
+        return Err("A aplicação não foi aprovada; o projeto original não foi alterado.".into());
+    }
+    let review = pending_review(review_id)?;
+    let project = canonical_git_project(&review.project)?;
+    let allowed_root = review
+        .allowed_root
+        .canonicalize()
+        .map_err(|_| "A pasta permitida do projeto não existe mais.".to_string())?;
+    if project != review.project || !project.starts_with(&allowed_root) {
+        return Err("O projeto saiu da pasta permitida desde a delegação.".into());
+    }
+    if git_head(&project)? != review.base_head {
+        return Err("O projeto mudou desde a revisão. Gere um novo diff antes de aplicar.".into());
+    }
+    if !git_worktree_is_clean(&project)? {
+        return Err("O projeto tem alterações locais. Salve ou reverta-as antes de aplicar o diff.".into());
+    }
+    validate_patch_paths(&review.diff)?;
+    git_apply(&project, &review.diff, true)?;
+    git_apply(&project, &review.diff, false)?;
+    PENDING_REVIEWS
+        .get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+        .lock()
+        .map_err(|_| "O estado da revisão está indisponível.".to_string())?
+        .remove(review_id);
+    Ok(())
+}
+
+fn validate_patch_paths(diff: &str) -> Result<(), String> {
+    if diff.is_empty() || diff.len() > MAX_DIFF_BYTES || diff.contains("[diff truncado") {
+        return Err("O diff está vazio ou foi truncado; não pode ser aplicado.".into());
+    }
+    for line in diff.lines() {
+        let paths = line
+            .strip_prefix("diff --git ")
+            .map(|value| value.split_whitespace().collect::<Vec<_>>())
+            .or_else(|| {
+                ["+++ ", "--- ", "rename from ", "rename to ", "copy from ", "copy to "]
+                    .iter()
+                    .find_map(|prefix| line.strip_prefix(prefix))
+                    .map(|value| vec![value])
+            });
+        let Some(paths) = paths else { continue };
+        for path in paths {
+            let path = path
+                .trim_matches('"')
+                .strip_prefix("a/")
+                .or_else(|| path.trim_matches('"').strip_prefix("b/"))
+                .unwrap_or(path)
+                .trim_matches('"');
+            if path == "/dev/null" {
+                continue;
+            }
+            let normalized = path.replace('\\', "/");
+            if normalized.starts_with('/')
+                || normalized
+                    .split(|character: char| character == '/' || character.is_whitespace())
+                    .any(|part| part == ".." || part == ".git")
+                || normalized.as_bytes().get(1) == Some(&b':')
+            {
+                return Err("O diff contém um caminho fora do projeto e foi recusado.".into());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn git_head(project: &Path) -> Result<String, String> {
+    let output = git_command()
+        .args(["-C", project.to_string_lossy().as_ref(), "rev-parse", "HEAD"])
+        .output()
+        .map_err(|_| "Não foi possível conferir a revisão do projeto.".to_string())?;
+    if !output.status.success() {
+        return Err("Não foi possível conferir a revisão do projeto.".into());
+    }
+    String::from_utf8(output.stdout)
+        .map(|value| value.trim().to_string())
+        .map_err(|_| "A revisão do projeto não está em UTF-8.".into())
+}
+
+fn git_worktree_is_clean(project: &Path) -> Result<bool, String> {
+    let output = git_command()
+        .args([
+            "-C",
+            project.to_string_lossy().as_ref(),
+            "status",
+            "--porcelain",
+            "--untracked-files=all",
+        ])
+        .output()
+        .map_err(|_| "Não foi possível verificar as alterações locais do projeto.".to_string())?;
+    if !output.status.success() {
+        return Err("Não foi possível verificar as alterações locais do projeto.".into());
+    }
+    Ok(output.stdout.is_empty())
+}
+
+fn git_apply(project: &Path, diff: &str, check: bool) -> Result<(), String> {
+    let mut command = git_command();
+    command.args(["-C", project.to_string_lossy().as_ref(), "apply"]);
+    if check {
+        command.args(["--check", "--whitespace=nowarn"]);
+    } else {
+        command.args(["--whitespace=nowarn"]);
+    }
+    command
+        .arg("-")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let mut child = command
+        .spawn()
+        .map_err(|_| "Não foi possível iniciar a aplicação do diff.".to_string())?;
+    use std::io::Write;
+    child
+        .stdin
+        .take()
+        .ok_or_else(|| "Não foi possível enviar o diff para o Git.".to_string())?
+        .write_all(diff.as_bytes())
+        .map_err(|_| "Não foi possível enviar o diff para o Git.".to_string())?;
+    let status = child
+        .wait()
+        .map_err(|_| "Não foi possível concluir a aplicação do diff.".to_string())?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(if check {
+            "O diff não pode ser aplicado com segurança ao estado atual do projeto.".into()
+        } else {
+            "O Git não conseguiu aplicar o diff ao projeto.".into()
+        })
+    }
 }
 
 fn canonical_git_project(project: &Path) -> Result<PathBuf, String> {
@@ -733,6 +995,8 @@ mod tests {
 
     #[test]
     fn preview_has_complete_separate_arguments_and_quotes_task() {
+        let args = command_args(CodeTool::Codex, Path::new("C:\\Work Area\\repo"), "change safe");
+        assert!(args.iter().any(|arg| arg.to_string_lossy().contains("Não execute git commit, git push")));
         let command = preview_command(
             CodeTool::Codex,
             Path::new("C:\\Tools Folder\\codex.exe"),
@@ -742,6 +1006,15 @@ mod tests {
         assert!(command.contains("\"C:\\Tools Folder\\codex.exe\""));
         assert!(command.contains("\"C:\\Work Area\\repo\""));
         assert!(command.contains("change \\\"safe\\\""));
+    }
+
+    #[test]
+    fn rejects_truncated_or_out_of_project_review_patches() {
+        assert!(validate_patch_paths("diff --git a/file.txt b/file.txt\n+++ b/file.txt").is_ok());
+        assert!(validate_patch_paths("diff --git a/../outside b/../outside\n").is_err());
+        assert!(validate_patch_paths("diff --git a/.git/config b/.git/config\n").is_err());
+        assert!(validate_patch_paths("rename from \"safe name/../outside\"\n").is_err());
+        assert!(validate_patch_paths("[diff truncado no limite]").is_err());
     }
 
     #[test]
@@ -815,7 +1088,7 @@ mod tests {
         script: &str,
         cancel: CancellationToken,
         timeout: Duration,
-    ) -> Result<String, String> {
+    ) -> Result<CodeRunResult, String> {
         let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
         let executable = PathBuf::from(std::env::var_os("SYSTEMROOT").unwrap())
             .join("System32\\WindowsPowerShell\\v1.0\\powershell.exe");
@@ -868,8 +1141,36 @@ mod tests {
             CancellationToken::new(),
             Duration::from_secs(60),
         ).unwrap();
-        assert!(diff.contains("+safe"));
+        assert!(diff.diff.contains("+safe"));
         assert!(!project.join("generated.txt").exists());
+        assert_no_extra_worktrees(&project);
+        if let Some(review_id) = diff.review_id {
+            PENDING_REVIEWS.get().unwrap().lock().unwrap().remove(&review_id);
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn fake_diff_is_applied_only_after_explicit_approval() {
+        let (root, project) = fake_git_project();
+        let result = execute_fake(
+            project.clone(),
+            &root,
+            "[IO.File]::WriteAllText('generated.txt','approved',[Text.UTF8Encoding]::new($false))",
+            CancellationToken::new(),
+            Duration::from_secs(60),
+        )
+        .unwrap();
+        let review_id = result.review_id.expect("diff creates a pending review");
+        let head_before_apply = git_head(&project).unwrap();
+        assert!(!project.join("generated.txt").exists());
+        assert_no_extra_worktrees(&project);
+        assert!(apply_pending_review(&review_id, false).is_err());
+        assert!(!project.join("generated.txt").exists());
+        apply_pending_review(&review_id, true).unwrap();
+        assert_eq!(fs::read_to_string(project.join("generated.txt")).unwrap(), "approved");
+        assert_eq!(git_head(&project).unwrap(), head_before_apply);
         assert_no_extra_worktrees(&project);
         fs::remove_dir_all(root).unwrap();
     }
