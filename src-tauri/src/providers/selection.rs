@@ -114,6 +114,14 @@ pub(super) fn classify_task(text: &str, has_image: bool) -> TaskKind {
         return TaskKind::Vision;
     }
     let normalized = text.to_lowercase();
+    if normalized.contains("programar")
+        && contains_any(
+            &normalized,
+            &["reunião", "reuniao", "compromisso", "calendário", "calendario"],
+        )
+    {
+        return TaskKind::Agenda;
+    }
     if contains_any(
         &normalized,
         &[
@@ -344,6 +352,10 @@ mod tests {
             TaskKind::Research
         );
         assert_eq!(classify_task("Marque uma reunião", false), TaskKind::Agenda);
+        assert_eq!(
+            classify_task("Programar uma reunião amanhã", false),
+            TaskKind::Agenda
+        );
         assert_eq!(classify_task("Leia este arquivo", false), TaskKind::Files);
         assert_eq!(
             classify_task("O que aparece nesta imagem?", true),
