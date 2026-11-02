@@ -2254,11 +2254,19 @@ select:focus-visible {
 .public-mcp-service-summary strong {
   color: var(--color-text-secondary);
 }
-.public-mcp-program-status {
-  width: fit-content;
-  border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-pill);
-  padding: 3px 8px;
+.public-mcp-action-reason,
+.public-mcp-service-details {
+  border-left: 2px solid var(--color-border-strong);
+  padding-left: var(--space-2);
+}
+.public-mcp-service-details {
+  display: grid;
+  gap: var(--space-2);
+}
+.public-mcp-service-details h4 {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-12);
 }
 .public-mcp-status {
   border: 1px solid var(--color-border-subtle);

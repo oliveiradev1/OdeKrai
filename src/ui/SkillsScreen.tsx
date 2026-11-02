@@ -32,8 +32,10 @@ import {
   canConnectToPublicOAuth,
   canConnectWithOAuth,
   getPublicMcpStatus,
+  getPublicMcpPrimaryAction,
   publicOAuthServiceKey,
   publicMcpErrorMessage,
+  publicMcpPrimaryActionLabels,
   publicMcpStatusLabels,
   type PublicMcpCatalogEntry,
   type OAuthRegistrationOptions,
@@ -439,6 +441,7 @@ function PublicMcpServiceCard({
 }) {
   const formId = useId();
   const [expanded, setExpanded] = useState(false);
+  const [detailsExpanded, setDetailsExpanded] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [endpoint, setEndpoint] = useState(service.endpoint);
   const [authentication, setAuthentication] = useState<'oauth' | 'bearer'>(
@@ -476,6 +479,15 @@ function PublicMcpServiceCard({
     busy || clientSecretBusy,
   );
   const isConnecting = connecting || status === 'connecting';
+  const requestedPrimaryAction = getPublicMcpPrimaryAction(service, status);
+  const primaryHandlerAvailable =
+    requestedPrimaryAction === 'details' ||
+    requestedPrimaryAction === 'connecting' ||
+    (requestedPrimaryAction === 'connect' &&
+      (isGitHub ? Boolean(onConfigure || onConnectGitHubOAuth) : Boolean(onConfigure))) ||
+    (requestedPrimaryAction === 'configure' &&
+      (isGitHub ? Boolean(onConfigure || onSaveGitHubToken) : Boolean(onConfigure)));
+  const primaryAction = primaryHandlerAvailable ? requestedPrimaryAction : 'details';
 
   useEffect(() => {
     if (!service.authenticationMethods.includes('oauth') || !isTauri()) return;
@@ -701,12 +713,24 @@ function PublicMcpServiceCard({
           {isConnecting ? publicMcpStatusLabels.connecting : publicMcpStatusLabels[status]}
         </span>
       </div>
-      {service.status === 'in_preview' && (
-        <p className="public-mcp-program-status">Em fase de testes</p>
-      )}
       {status === 'error' && (
         <p className="public-mcp-error" role="alert">
           {publicMcpErrorMessage(server?.status)}
+        </p>
+      )}
+      {isConnecting && (
+        <p className="public-mcp-action-reason" role="status">
+          A conexão está em andamento.
+        </p>
+      )}
+      {busy && !isConnecting && (
+        <p className="public-mcp-action-reason" role="status">
+          Aguarde a operação atual terminar para usar este cartão.
+        </p>
+      )}
+      {clientSecretBusy && (
+        <p className="public-mcp-action-reason" role="status">
+          Atualizando os dados de acesso…
         </p>
       )}
       <section className="public-mcp-service-summary" aria-label={`Sobre ${service.name}`}>
@@ -719,14 +743,22 @@ function PublicMcpServiceCard({
         <p>
           <strong>Próximo passo:</strong> {service.nextStep}
         </p>
-        <Button
-          type="button"
-          variant="secondary"
-          onClick={() => void openOfficialLink(service.officialLink)}
-        >
-          Abrir guia oficial
-        </Button>
         {linkError && <p role="alert">{linkError}</p>}
+      </section>
+      <section
+        id={`${formId}-service-details`}
+        className="public-mcp-service-details"
+        aria-label={`Detalhes de ${service.name}`}
+        hidden={!detailsExpanded}
+      >
+        <h4>Detalhes</h4>
+        <p>
+          {service.connectable
+            ? status === 'connected'
+              ? 'A conexão foi testada e está ativa.'
+              : service.whatItNeeds
+            : (service.unavailableMessage ?? service.whatItNeeds)}
+        </p>
       </section>
       {isGitHub && (
         <div className="public-mcp-github-oauth">
@@ -761,6 +793,9 @@ function PublicMcpServiceCard({
                   onChange={(event) => setClientSecret(event.target.value)}
                 />
                 <small>{service.oauthSecretHelp}</small>
+                {!clientSecret.trim() && (
+                  <small>Digite o segredo para habilitar o salvamento.</small>
+                )}
               </label>
               {oauthClientSettings.clientSecretSaved ? (
                 <>
@@ -833,6 +868,9 @@ function PublicMcpServiceCard({
                     <small>
                       O segredo fica no Gerenciador de Credenciais e não volta a ser exibido.
                     </small>
+                    {!clientSecret.trim() && (
+                      <small>Digite o segredo para habilitar o salvamento.</small>
+                    )}
                   </label>
                   {oauthClientSettings.clientSecretSaved ? (
                     <>
@@ -889,20 +927,32 @@ function PublicMcpServiceCard({
         </details>
       )}
       <div className="public-mcp-card-actions">
-        {(!service.connectable ||
-          onConfigure ||
-          (server && onTest) ||
-          (isGitHub && onConnectGitHubOAuth)) && (
-          <Button
-            type="button"
-            variant="primary"
-            disabled={busy || isConnecting}
-            aria-busy={isConnecting}
-            onClick={() => void connectOrConfigure()}
-          >
-            {isConnecting ? 'Conectando…' : service.connectable ? 'Conectar' : 'Abrir guia oficial'}
-          </Button>
-        )}
+        <Button
+          type="button"
+          variant="primary"
+          disabled={busy || isConnecting}
+          aria-busy={isConnecting}
+          aria-expanded={primaryAction === 'details' ? detailsExpanded : undefined}
+          aria-controls={primaryAction === 'details' ? `${formId}-service-details` : undefined}
+          onClick={() => {
+            if (primaryAction === 'connect') void connectOrConfigure();
+            else if (primaryAction === 'configure') {
+              setAuthentication(isGitHub ? 'bearer' : 'oauth');
+              setExpanded(true);
+            } else if (primaryAction === 'details') {
+              setDetailsExpanded((open) => !open);
+            }
+          }}
+        >
+          {publicMcpPrimaryActionLabels[primaryAction]}
+        </Button>
+        <Button
+          type="button"
+          variant="secondary"
+          onClick={() => void openOfficialLink(service.officialLink)}
+        >
+          Ver guia oficial
+        </Button>
         <details className="public-mcp-actions-menu">
           <summary aria-label={`Ações de ${service.name}`}>Ações</summary>
           <div className="public-mcp-actions-menu-items">
@@ -1173,6 +1223,7 @@ function GitHubTokenManager({
         </Button>
       </div>
       <small>O valor salvo não pode ser consultado nem reaparece no OdeKrai.</small>
+      {!token && <small>Digite o token para habilitar o salvamento.</small>}
       {notice && <p role="status">{notice}</p>}
     </form>
   );

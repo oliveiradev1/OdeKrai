@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import {
   canConnectToPublicOAuth,
   canConnectWithOAuth,
+  getPublicMcpPrimaryAction,
   getPublicMcpStatus,
   oauthClientIdHelp,
   publicOAuthServiceKey,
@@ -13,6 +14,19 @@ import rawCatalog from '../../src-tauri/resources/public-mcp-catalog.json';
 const catalog = rawCatalog as unknown as PublicMcpCatalogEntry[];
 
 describe('catálogo público de servidores MCP', () => {
+  it('escolhe uma ação principal para cada status e substitui conexão impossível por detalhes', () => {
+    const github = catalog.find(({ id }) => id === 'github');
+    const figma = catalog.find(({ id }) => id === 'figma');
+    if (!github || !figma) throw new Error('Serviço esperado ausente do catálogo.');
+
+    expect(getPublicMcpPrimaryAction(github, 'available')).toBe('connect');
+    expect(getPublicMcpPrimaryAction(github, 'configured')).toBe('configure');
+    expect(getPublicMcpPrimaryAction(github, 'connecting')).toBe('connecting');
+    expect(getPublicMcpPrimaryAction(github, 'connected')).toBe('details');
+    expect(getPublicMcpPrimaryAction(github, 'error')).toBe('configure');
+    expect(getPublicMcpPrimaryAction(figma, 'available')).toBe('details');
+  });
+
   it('contém somente os sete serviços pedidos, com fontes e dados de transporte/autenticação', () => {
     expect(catalog.map(({ name }) => name)).toEqual([
       'GitHub',

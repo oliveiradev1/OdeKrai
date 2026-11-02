@@ -38,6 +38,7 @@ export type PublicMcpCatalogEntry = {
 };
 
 export type PublicMcpStatus = 'available' | 'configured' | 'connecting' | 'connected' | 'error';
+export type PublicMcpPrimaryAction = 'connect' | 'configure' | 'details' | 'connecting';
 export type OAuthRegistrationOptions = { dynamicRegistration: boolean };
 export type PublicOAuthClientSettings = {
   service: string;
@@ -111,6 +112,23 @@ export const publicMcpStatusLabels: Record<PublicMcpStatus, string> = {
   connecting: 'Conectando',
   connected: 'Conectado',
   error: 'Erro',
+};
+
+export function getPublicMcpPrimaryAction(
+  service: PublicMcpCatalogEntry,
+  status: PublicMcpStatus,
+): PublicMcpPrimaryAction {
+  if (status === 'connecting') return 'connecting';
+  if (!service.connectable || status === 'connected') return 'details';
+  if (status === 'configured' || status === 'error') return 'configure';
+  return 'connect';
+}
+
+export const publicMcpPrimaryActionLabels: Record<PublicMcpPrimaryAction, string> = {
+  connect: 'Conectar',
+  configure: 'Configurar',
+  details: 'Ver detalhes',
+  connecting: 'Conectando…',
 };
 
 export function publicMcpErrorMessage(cause: unknown): string {

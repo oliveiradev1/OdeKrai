@@ -244,7 +244,7 @@ describe('renderização das telas principais', () => {
     fireEvent.click(await screen.findByRole('tab', { name: 'Público' }));
     expect(await screen.findByRole('heading', { name: 'GitHub' })).toBeTruthy();
     expect(tauri.invoke).toHaveBeenCalledWith('mcp_public_catalog');
-    fireEvent.click(screen.getAllByRole('button', { name: 'Abrir guia oficial' })[0]);
+    fireEvent.click(screen.getAllByRole('button', { name: 'Ver guia oficial' })[0]);
     await waitFor(() =>
       expect(tauri.invoke).toHaveBeenCalledWith('open_external_link', {
         url: publicCatalogFixture[0].officialLink,
