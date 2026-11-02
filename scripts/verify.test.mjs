@@ -15,23 +15,25 @@ describe('npm run verify', () => {
 
   it('mostra a etapa e para no primeiro erro', () => {
     const failedIndex = 3;
+    const failedStep = verificationSteps[failedIndex];
+    const failedCommand = [failedStep.command, ...failedStep.args].join(' ');
     const execute = vi.fn((_step, index) => ({ status: index === failedIndex ? 2 : 0 }));
     const report = vi.fn();
 
     expect(runVerification((step) => execute(step, execute.mock.calls.length), report)).toBe(1);
     expect(execute).toHaveBeenCalledTimes(failedIndex + 1);
-    expect(report).toHaveBeenCalledWith(
-      `[verify] FALHOU: ${verificationSteps[failedIndex].name} (npm run check:encoding)`,
-    );
+    expect(report).toHaveBeenCalledWith(`[verify] FALHOU: ${failedStep.name} (${failedCommand})`);
     expect(report).toHaveBeenCalledWith('[verify] Código de saída: 2');
   });
 
   it('mostra o erro exato quando uma ferramenta não inicia', () => {
     const report = vi.fn();
     const error = new Error('spawn cargo ENOENT');
+    const firstStep = verificationSteps[0];
+    const firstCommand = [firstStep.command, ...firstStep.args].join(' ');
 
     expect(runVerification(() => ({ status: null, error }), report)).toBe(1);
-    expect(report).toHaveBeenCalledWith('[verify] FALHOU: build (npm run build)');
+    expect(report).toHaveBeenCalledWith(`[verify] FALHOU: ${firstStep.name} (${firstCommand})`);
     expect(report).toHaveBeenCalledWith('[verify] Erro ao iniciar: spawn cargo ENOENT');
   });
 });
