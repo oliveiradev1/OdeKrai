@@ -239,7 +239,7 @@ pub async fn google_oauth_connect(
         .append_pair("code_challenge", &pkce_challenge(&verifier))
         .append_pair("code_challenge_method", "S256")
         .append_pair("access_type", "offline");
-    crate::external_links::open_google_oauth_authorization_url(app, auth.as_str())?;
+    crate::external_links::open_google_oauth_authorization_url(&app, auth.as_str())?;
     let code = receive_callback(listener, &state_value).await?;
     let http = safe_http()?;
     let mut form = vec![

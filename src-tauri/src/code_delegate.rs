@@ -1004,6 +1004,13 @@ impl Drop for WindowsJob {
 mod tests {
     use super::*;
 
+    fn error_or_panic<T>(result: Result<T, String>) -> String {
+        match result {
+            Ok(_) => panic!("esperava um erro"),
+            Err(error) => error,
+        }
+    }
+
     #[test]
     fn validates_tool_paths_and_task_bounds() {
         assert!(validate_request("C:\\repo", "implemente teste").is_ok());
@@ -1219,7 +1226,7 @@ mod tests {
             CancellationToken::new(),
             Duration::from_millis(120),
         );
-        assert!(timeout.unwrap_err().contains("excedeu o limite"));
+        assert!(error_or_panic(timeout).contains("excedeu o limite"));
         assert_no_extra_worktrees(&project);
 
         let cancel = CancellationToken::new();
@@ -1236,7 +1243,7 @@ mod tests {
             Duration::from_secs(5),
         );
         canceller.join().unwrap();
-        assert!(cancelled.unwrap_err().contains("cancelada"));
+        assert!(error_or_panic(cancelled).contains("cancelada"));
         assert_no_extra_worktrees(&project);
         fs::remove_dir_all(root).unwrap();
     }
@@ -1291,7 +1298,7 @@ mod tests {
             Some(Vec::new()),
             Duration::from_secs(1),
         );
-        assert!(result.unwrap_err().contains("pasta permitida"));
+        assert!(error_or_panic(result).contains("pasta permitida"));
         fs::remove_dir_all(root).unwrap();
     }
 }
