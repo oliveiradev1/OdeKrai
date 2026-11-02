@@ -391,36 +391,66 @@ fn sensitive_argument_name(value: &str) -> bool {
         .map_or(value.trim_start_matches('-'), |(key, _)| key)
         .to_ascii_lowercase()
         .replace('-', "_");
-    ["token", "secret", "password", "passwd", "api_key", "apikey", "authorization", "bearer", "private_key"]
+    [
+        "token",
+        "secret",
+        "password",
+        "passwd",
+        "api_key",
+        "apikey",
+        "authorization",
+        "bearer",
+        "private_key",
+    ]
         .iter()
         .any(|marker| key.contains(marker))
 }
 
 fn looks_like_credential(value: &str) -> bool {
     let lower = value.to_ascii_lowercase();
-    [
+    let known_token = [
         "ghp_", "github_pat_", "glpat-", "xoxb-", "xoxp-", "xoxs-", "ya29.", "AIza", "sk-",
         "bearer ", "-----begin ",
     ]
     .iter()
-    .any(|marker| lower.contains(&marker.to_ascii_lowercase()))
-        || value
+    .any(|marker| lower.contains(&marker.to_ascii_lowercase()));
+    let jwt = value.starts_with("eyJ")
+        && value
             .split('.')
             .filter(|part| !part.is_empty())
             .count()
-            == 3
-            && value.starts_with("eyJ")
+            == 3;
+    let named_value = value
+        .split(|character| matches!(character, '?' | '&' | ';' | ' '))
+        .any(|part| {
+            part.split_once('=')
+                .is_some_and(|(key, secret)| sensitive_argument_name(key) && !secret.is_empty())
+        })
+    let url_value = value.split_once('=').map_or(value, |(_, suffix)| suffix);
+    known_token || jwt || named_value || url_contains_credential(url_value)
+}
+
+fn url_contains_credential(value: &str) -> bool {
+    url::Url::parse(value).ok().is_some_and(|url| {
+        !url.username().is_empty()
+            || url.password().is_some()
+            || url.query_pairs().any(|(key, secret)| {
+                sensitive_argument_name(&key) && !secret.is_empty()
+            })
+    })
 }
 
 fn contains_inline_credential(command: &str, args: &[String]) -> bool {
-    if looks_like_credential(command)
-        || command
-            .split_whitespace()
-            .filter_map(|part| part.split_once('='))
-            .any(|(key, value)| sensitive_argument_name(key) && !value.is_empty())
-    {
-        return true;
-    }
+    let command_parts = command
+        .split_whitespace()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    looks_like_credential(command)
+        || arguments_contain_inline_credential(&command_parts)
+        || arguments_contain_inline_credential(args)
+}
+
+fn arguments_contain_inline_credential(args: &[String]) -> bool {
     args.iter().enumerate().any(|(index, argument)| {
         if looks_like_credential(argument) {
             return true;
@@ -429,9 +459,7 @@ fn contains_inline_credential(command: &str, args: &[String]) -> bool {
             .split_once('=')
             .map_or((argument.as_str(), None), |(key, value)| (key, Some(value)));
         if !sensitive_argument_name(key) {
-            return argument
-                .split_once('=')
-                .is_some_and(|(key, value)| sensitive_argument_name(key) && !value.is_empty());
+            return false;
         }
         value.is_some_and(|value| !value.is_empty())
             || args.get(index + 1).is_some_and(|next| !next.is_empty())
@@ -1386,11 +1414,20 @@ mod tests {
             vec!["--token".into(), "token-fixture-123".into()],
             vec!["--api-key=api-key-fixture".into()],
             vec!["ghp_secret_fixture".into()],
+            vec!["--endpoint=https://user:pass@example.org/mcp".into()],
+            vec!["--endpoint=https://mcp.example.org/?access_token=query-secret".into()],
         ] {
             let error = validate("Teste", "mcp-server", &args, &["TOKEN".into()])
                 .expect_err("segredo inline deve ser recusado");
             assert!(error.contains("Gerenciador de Credenciais"));
         }
+        assert!(validate(
+            "Teste",
+            "mcp-server --token command-secret",
+            &[],
+            &["TOKEN".into()]
+        )
+        .is_err());
         assert!(validate(
             "Teste",
             "mcp-server",
