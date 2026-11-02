@@ -156,7 +156,7 @@ describe('catálogo de habilidades', () => {
           onConfigurePublicMcp={async () => true}
           onTestPublicMcp={async () => true}
           onDisconnectGitHubOAuth={async () => null}
-          onRemovePublicMcp={async () => true}
+          onRemovePublicMcp={async () => null}
         />,
       );
       const card = markup.slice(

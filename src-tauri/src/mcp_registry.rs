@@ -1136,6 +1136,77 @@ pub async fn mcp_remove_server(
 }
 
 #[tauri::command]
+pub async fn mcp_disconnect_server(
+    app: tauri::AppHandle,
+    caller: tauri::WebviewWindow,
+    server_id: String,
+    runtime: State<'_, McpRuntime>,
+) -> Result<Option<String>, String> {
+    crate::require_main(&caller)?;
+    let db = crate::security::database(&app)?;
+    let server = find(&db, &server_id)?;
+    if server.transport != "streamable_http" {
+        return Err(
+            "A desconexão pela tela de serviços só está disponível para servidores HTTP.".into(),
+        );
+    }
+
+    let had_oauth = crate::mcp_oauth::load(&server_id)?.is_some();
+    let has_personal_token = match entry(&server_id, "http_bearer")?.get_password() {
+        Ok(_) => true,
+        Err(keyring::Error::NoEntry) => false,
+        Err(_) => {
+            return Err(
+                "Não foi possível verificar a credencial no Gerenciador do Windows.".into(),
+            )
+        }
+    };
+    let access_token = runtime
+        .1
+        .lock()
+        .map_err(|_| "Estado OAuth MCP indisponível.".to_string())?
+        .remove(&server_id)
+        .map(|access| access.value);
+    set_enabled_internal(&app, &server_id, false)?;
+    runtime.remove_connection(&server_id)?;
+
+    let server_id_for_revocation = server_id.clone();
+    let revoked = tokio::task::spawn_blocking(move || {
+        crate::mcp_oauth::revoke_before_remove(&server_id_for_revocation, access_token.as_deref())
+    })
+    .await
+    .unwrap_or(false);
+
+    let mut vault = WindowsVault;
+    for key in &server.env_names {
+        vault.erase(&server.id, key)?;
+    }
+    remove_http_token_with(&server, &mut vault)?;
+    crate::mcp_oauth::remove(&server_id)?;
+    let _ = app.emit("skills-updated", ());
+
+    Ok(disconnected_warning(had_oauth, revoked, has_personal_token))
+}
+
+fn disconnected_warning(
+    had_oauth: bool,
+    revoked: bool,
+    had_personal_token: bool,
+) -> Option<String> {
+    if had_oauth && !revoked {
+        Some(
+            "A conexão foi removida deste dispositivo, mas o provedor não confirmou a revogação do token. Revogue-o no painel do serviço, se necessário.".into(),
+        )
+    } else if had_personal_token {
+        Some(
+            "A conexão foi removida deste dispositivo, mas o token pessoal continua válido no serviço. Revogue-o nas configurações do provedor, se necessário.".into(),
+        )
+    } else {
+        None
+    }
+}
+
+#[tauri::command]
 pub async fn mcp_oauth_disconnect_github(
     app: tauri::AppHandle,
     caller: tauri::WebviewWindow,
@@ -1512,6 +1583,17 @@ mod tests {
 
         remove_http_token_with(&server, &mut vault).unwrap();
         assert!(!vault.0.contains_key("fake:http_bearer"));
+    }
+
+    #[test]
+    fn desconexao_avisa_quando_o_provedor_nao_confirma_revogacao() {
+        let warning = disconnected_warning(true, false, false).unwrap();
+        assert!(warning.contains("não confirmou a revogação"));
+        assert!(disconnected_warning(true, true, false).is_none());
+        assert!(disconnected_warning(false, true, true)
+            .unwrap()
+            .contains("token pessoal continua válido"));
+        assert!(disconnected_warning(false, true, false).is_none());
     }
 
     #[derive(Default)]

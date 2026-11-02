@@ -14,6 +14,7 @@ import { ComputerScreen } from './screens/Computer';
 import { SettingsModal } from './SettingsModal';
 import { PermissionsScreen } from './screens/Permissions';
 import { ActivityScreen } from './screens/Activity';
+import { ConfirmationProvider } from './ConfirmationProvider';
 import publicCatalogFixture from '../../src-tauri/resources/public-mcp-catalog.json';
 import type { CatalogSkill } from '../core/skills-catalog';
 
@@ -317,6 +318,7 @@ describe('renderização das telas principais', () => {
       PublicMcpCatalogEntry | undefined;
     if (!github) throw new Error('Serviço GitHub ausente do catálogo simulado.');
     const testConnection = vi.fn(async () => true);
+    const testInChat = vi.fn();
     render(
       <SkillsCatalogView
         skills={[
@@ -344,6 +346,7 @@ describe('renderização das telas principais', () => {
         onOverrideToggle={noop}
         onConfigurePublicMcp={async () => true}
         onTestPublicMcp={testConnection}
+        onTestInChat={testInChat}
       />,
     );
 
@@ -362,8 +365,11 @@ describe('renderização das telas principais', () => {
     expect(screen.getByRole('heading', { name: 'Informações' })).toBeTruthy();
     expect(screen.getByText('Permissões pedidas')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Gerenciar' })).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Testar' }));
-    await waitFor(() => expect(testConnection).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole('button', { name: 'Testar no chat' }));
+    expect(testInChat).toHaveBeenCalledWith(
+      'Teste a integração com GitHub: mostre o que posso fazer e peça aprovação antes de qualquer ação.',
+    );
+    expect(testConnection).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole('button', { name: 'Voltar aos serviços' }));
     expect(screen.getByRole('tab', { name: 'Público' }).getAttribute('aria-selected')).toBe('true');
@@ -373,6 +379,152 @@ describe('renderização das telas principais', () => {
         screen.getByRole('button', { name: 'Ver detalhes de GitHub' }),
       ),
     );
+  });
+
+  it('Conectar abre a configuração do serviço público', async () => {
+    const github = publicCatalogFixture.find((service) => service.id === 'github') as
+      PublicMcpCatalogEntry | undefined;
+    if (!github) throw new Error('Serviço GitHub ausente do catálogo simulado.');
+    render(
+      <SkillsCatalogView
+        skills={[]}
+        initialTab="publico"
+        publicServices={[github]}
+        onFamilyToggle={noop}
+        onSkillToggle={noop}
+        onOverrideToggle={noop}
+        onConfigurePublicMcp={async () => true}
+        onTestInChat={noop}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Ver detalhes de GitHub' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Conectar' }));
+    expect(await screen.findByLabelText('URL do servidor')).toBeTruthy();
+  });
+
+  it('Gerenciar desconecta chamando revogação e mostra aviso quando ela falha', async () => {
+    const github = publicCatalogFixture.find((service) => service.id === 'github') as
+      PublicMcpCatalogEntry | undefined;
+    if (!github) throw new Error('Serviço GitHub ausente do catálogo simulado.');
+    const revoke = vi.fn(
+      async () =>
+        'A conta foi desconectada deste dispositivo, mas o GitHub não confirmou a revogação do token.',
+    );
+    render(
+      <ConfirmationProvider>
+        <SkillsCatalogView
+          skills={[]}
+          initialTab="publico"
+          publicServices={[github]}
+          mcpServers={[
+            {
+              id: 'github-server',
+              name: 'GitHub',
+              endpoint: github.endpoint,
+              enabled: true,
+              status: 'Conectado',
+            },
+          ]}
+          githubOAuthAccount="conta-teste"
+          onFamilyToggle={noop}
+          onSkillToggle={noop}
+          onOverrideToggle={noop}
+          onDisconnectPublicMcp={revoke}
+          onRemovePublicMcp={async () => null}
+          onTestInChat={noop}
+        />
+      </ConfirmationProvider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Ver detalhes de GitHub' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Gerenciar' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Desconectar' }));
+    await waitFor(() =>
+      expect(revoke).toHaveBeenCalledWith(expect.objectContaining({ id: 'github-server' })),
+    );
+    expect((await screen.findByRole('alert')).textContent).toContain('não confirmou a revogação');
+  });
+
+  it('A tela de habilidades chama o comando de desconexão que revoga antes de apagar credenciais', async () => {
+    const github = publicCatalogFixture.find((service) => service.id === 'github');
+    if (!github) throw new Error('Serviço GitHub ausente do catálogo simulado.');
+    const server = {
+      id: 'github-server',
+      name: 'GitHub',
+      endpoint: github.endpoint,
+      enabled: true,
+      status: 'Conectado',
+    };
+    tauri.isTauri.mockReturnValue(true);
+    tauri.invoke.mockImplementation(async (command: string) => {
+      if (command === 'get_skills') return [];
+      if (command === 'mcp_public_catalog') return [github];
+      if (command === 'mcp_list_servers') return [server];
+      if (command === 'get_allowed_folders' || command === 'get_allowed_apps') return [];
+      if (command === 'mcp_oauth_github_account') return null;
+      if (command === 'mcp_disconnect_server') {
+        return 'A conexão foi removida deste dispositivo, mas o token pessoal continua válido no serviço.';
+      }
+      return null;
+    });
+    render(<SkillsScreen onOpenPrivacy={noop} onRemovePublicMcp={async () => null} />);
+    fireEvent.click(await screen.findByRole('tab', { name: 'Público' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Ver detalhes de GitHub' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Gerenciar' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Desconectar' }));
+    await waitFor(() =>
+      expect(tauri.invoke).toHaveBeenCalledWith('mcp_disconnect_server', {
+        serverId: 'github-server',
+      }),
+    );
+    await waitFor(() =>
+      expect(
+        screen
+          .getAllByRole('alert')
+          .some((alert) => alert.textContent?.includes('token pessoal continua válido')),
+      ).toBe(true),
+    );
+  });
+
+  it('Remover servidor pede confirmação e só então apaga a configuração', async () => {
+    const github = publicCatalogFixture.find((service) => service.id === 'github') as
+      PublicMcpCatalogEntry | undefined;
+    if (!github) throw new Error('Serviço GitHub ausente do catálogo simulado.');
+    const removeServer = vi.fn(async () => null);
+    render(
+      <ConfirmationProvider>
+        <SkillsCatalogView
+          skills={[]}
+          initialTab="publico"
+          publicServices={[github]}
+          mcpServers={[
+            {
+              id: 'github-server',
+              name: 'GitHub',
+              endpoint: github.endpoint,
+              enabled: true,
+              status: 'Conectado',
+            },
+          ]}
+          onFamilyToggle={noop}
+          onSkillToggle={noop}
+          onOverrideToggle={noop}
+          onDisconnectPublicMcp={async () => null}
+          onRemovePublicMcp={removeServer}
+          onTestInChat={noop}
+        />
+      </ConfirmationProvider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Ver detalhes de GitHub' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Gerenciar' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Remover servidor' }));
+    expect(removeServer).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByRole('button', { name: 'Confirmar' }));
+    await waitFor(() =>
+      expect(removeServer).toHaveBeenCalledWith(expect.objectContaining({ id: 'github-server' })),
+    );
+    expect(
+      (await screen.findAllByText('Servidor removido e credenciais locais apagadas.')).length,
+    ).toBeGreaterThan(0);
   });
 
   it('Conectores de IA monta sem conexões e informa falha ao consultar credenciais', async () => {

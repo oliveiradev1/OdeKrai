@@ -2328,6 +2328,9 @@ select:focus-visible {
   color: var(--color-text-muted);
   font-size: var(--font-size-12);
 }
+.public-mcp-manage-section > button {
+  margin: 0.35rem 0.5rem 0.35rem 0;
+}
 .public-mcp-detail-section,
 .skills-detail-applications,
 .skills-detail-information {

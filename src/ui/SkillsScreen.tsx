@@ -28,6 +28,7 @@ import { Icon } from './Icon';
 import { submitSecretForm } from './secret-form';
 import { RiskBadge } from './RiskBadge';
 import { PrivacyConfigurationSummary } from './PrivacyConfigurations';
+import { useConfirmation } from './ConfirmationProvider';
 import {
   canConnectToPublicOAuth,
   canConnectWithOAuth,
@@ -73,14 +74,16 @@ type SkillsCatalogViewProps = {
   ) => Promise<boolean>;
   onSaveGitHubToken?: (server: PublicMcpServer & { id: string }, token: string) => Promise<boolean>;
   onRemoveGitHubToken?: (server: PublicMcpServer & { id: string }) => Promise<boolean>;
-  onRemovePublicMcp?: (server: PublicMcpServer & { id: string }) => Promise<boolean>;
+  onRemovePublicMcp?: (server: PublicMcpServer & { id: string }) => Promise<string | null>;
   onConnectGitHubOAuth?: (
     server: (PublicMcpServer & { id: string }) | undefined,
     clientId: string,
     scopes: string,
   ) => Promise<boolean>;
   onDisconnectGitHubOAuth?: (server: PublicMcpServer & { id: string }) => Promise<string | null>;
+  onDisconnectPublicMcp?: (server: PublicMcpServer & { id: string }) => Promise<string | null>;
   onTestPublicMcp?: (server: PublicMcpServer & { id: string }) => Promise<boolean>;
+  onTestInChat?: (suggestion: string) => void;
 };
 
 type GoogleOAuthStatus = {
@@ -164,7 +167,9 @@ export function SkillsCatalogView({
   onRemovePublicMcp,
   onConnectGitHubOAuth,
   onDisconnectGitHubOAuth,
+  onDisconnectPublicMcp,
   onTestPublicMcp,
+  onTestInChat,
 }: SkillsCatalogViewProps) {
   const [query, setQuery] = useState('');
   const [tab, setTab] = useState<SkillsCatalogTab>(initialTab);
@@ -455,7 +460,8 @@ export function SkillsCatalogView({
                     onRemovePublicMcp={onRemovePublicMcp}
                     onConnectGitHubOAuth={onConnectGitHubOAuth}
                     onDisconnectGitHubOAuth={onDisconnectGitHubOAuth}
-                    onTest={onTestPublicMcp}
+                    onDisconnectPublicMcp={onDisconnectPublicMcp}
+                    onTestInChat={onTestInChat}
                   />
                 );
               })}
@@ -484,7 +490,8 @@ function PublicMcpServiceCard({
   onRemovePublicMcp,
   onConnectGitHubOAuth,
   onDisconnectGitHubOAuth,
-  onTest,
+  onDisconnectPublicMcp,
+  onTestInChat,
 }: {
   service: PublicMcpCatalogEntry;
   skills: CatalogSkill[];
@@ -502,7 +509,8 @@ function PublicMcpServiceCard({
   onRemovePublicMcp?: SkillsCatalogViewProps['onRemovePublicMcp'];
   onConnectGitHubOAuth?: SkillsCatalogViewProps['onConnectGitHubOAuth'];
   onDisconnectGitHubOAuth?: SkillsCatalogViewProps['onDisconnectGitHubOAuth'];
-  onTest?: SkillsCatalogViewProps['onTestPublicMcp'];
+  onDisconnectPublicMcp?: SkillsCatalogViewProps['onDisconnectPublicMcp'];
+  onTestInChat?: SkillsCatalogViewProps['onTestInChat'];
 }) {
   const formId = useId();
   const [expanded, setExpanded] = useState(false);
@@ -530,6 +538,8 @@ function PublicMcpServiceCard({
   const [githubAccount, setGithubAccount] = useState<string | null>(initialGitHubAccount ?? null);
   const [githubAccountLoading, setGithubAccountLoading] = useState(false);
   const [githubNotice, setGithubNotice] = useState('');
+  const [managing, setManaging] = useState(false);
+  const confirm = useConfirmation();
   const titleButtonRef = useRef<HTMLButtonElement | null>(null);
   const detailHeadingRef = useRef<HTMLHeadingElement | null>(null);
   const isGitHub = service.id === 'github';
@@ -575,18 +585,6 @@ function PublicMcpServiceCard({
     requestAnimationFrame(() => {
       if (titleButtonRef.current?.isConnected) titleButtonRef.current.focus();
     });
-  }
-
-  async function testConnection() {
-    if (!server || !onTest || busy || connecting) return;
-    setConnecting(true);
-    try {
-      await onTest(server);
-    } catch (cause) {
-      setGithubNotice(publicMcpErrorMessage(cause));
-    } finally {
-      setConnecting(false);
-    }
   }
 
   useEffect(() => {
@@ -747,7 +745,9 @@ function PublicMcpServiceCard({
           'Conta desconectada. As credenciais locais foram removidas do Gerenciador de Credenciais.',
       );
     } catch (cause) {
-      setGithubNotice(publicMcpErrorMessage(cause));
+      setGithubNotice(
+        `Não foi possível desconectar com segurança. ${publicMcpErrorMessage(cause)}`,
+      );
     }
   }
 
@@ -766,33 +766,47 @@ function PublicMcpServiceCard({
       setExpanded(true);
       return;
     }
-    if (
-      server &&
-      onTest &&
-      (status === 'connected' ||
-        !service.authenticationMethods.includes('oauth') ||
-        (status === 'configured' && server.enabled))
-    ) {
-      setConnecting(true);
-      try {
-        await onTest(server);
-      } catch (cause) {
-        setGithubNotice(publicMcpErrorMessage(cause));
-      } finally {
-        setConnecting(false);
-      }
-      return;
-    }
     setExpanded(true);
   }
 
   async function disconnectPublicService() {
-    if (!server || busy || !onRemovePublicMcp) return;
+    if (!server || busy) return;
     setConnecting(true);
+    setGithubNotice('');
     try {
-      if (await onRemovePublicMcp(server)) setGithubNotice('Servidor desconectado.');
+      const warning =
+        isGitHub && githubAccount && onDisconnectGitHubOAuth
+          ? await onDisconnectGitHubOAuth(server)
+          : onDisconnectPublicMcp
+            ? await onDisconnectPublicMcp(server)
+            : null;
+      setGithubAccount(null);
+      setGithubNotice(warning ?? 'Serviço desconectado. As credenciais locais foram removidas.');
     } catch (cause) {
-      setGithubNotice(publicMcpErrorMessage(cause));
+      setGithubNotice(
+        `Não foi possível desconectar com segurança. ${publicMcpErrorMessage(cause)}`,
+      );
+    } finally {
+      setConnecting(false);
+    }
+  }
+
+  async function removePublicService() {
+    if (!server || !onRemovePublicMcp || busy || connecting) return;
+    try {
+      const accepted = await confirm({
+        title: 'Remover servidor?',
+        message: `Remover ${service.name} e apagar as credenciais salvas neste dispositivo?`,
+        destructive: true,
+      });
+      if (!accepted) return;
+      setConnecting(true);
+      setGithubNotice('');
+      const warning = await onRemovePublicMcp(server);
+      setGithubAccount(null);
+      setGithubNotice(warning ?? 'Servidor removido e credenciais locais apagadas.');
+    } catch (cause) {
+      setGithubNotice(`Não foi possível remover o servidor. ${publicMcpErrorMessage(cause)}`);
     } finally {
       setConnecting(false);
     }
@@ -892,44 +906,113 @@ function PublicMcpServiceCard({
       {detailsPage && (
         <>
           <p className="public-mcp-detail-description">{service.whatItDoes}</p>
-          {!service.connectable && (
-            <p className="public-mcp-unavailable" role="status">
-              {service.unavailableMessage ?? service.whatItNeeds}
-            </p>
-          )}
           <div className="public-mcp-detail-actions">
-            {service.connectable && (
+            {status !== 'connected' && (
               <Button
                 type="button"
                 variant="primary"
-                disabled={busy || isConnecting}
-                onClick={() => {
-                  if (status === 'available') void connectOrConfigure();
-                  else {
-                    setAuthentication(isGitHub ? 'bearer' : 'oauth');
-                    setExpanded(true);
-                  }
-                }}
+                disabled={busy || isConnecting || !service.connectable}
+                onClick={() => void connectOrConfigure()}
               >
-                {isConnecting ? 'Conectando…' : status === 'available' ? 'Conectar' : 'Gerenciar'}
+                {isConnecting ? 'Conectando…' : 'Conectar'}
+              </Button>
+            )}
+            {server && (
+              <Button
+                type="button"
+                variant="secondary"
+                disabled={busy || isConnecting}
+                aria-expanded={managing}
+                aria-controls={`${formId}-manage`}
+                onClick={() => setManaging((open) => !open)}
+              >
+                Gerenciar
               </Button>
             )}
             <Button
               type="button"
               variant="secondary"
-              disabled={busy || isConnecting || !server || !onTest}
-              onClick={() => void testConnection()}
+              disabled={busy || isConnecting || !onTestInChat}
+              onClick={() =>
+                onTestInChat?.(
+                  `Teste a integração com ${service.name}: mostre o que posso fazer e peça aprovação antes de qualquer ação.`,
+                )
+              }
             >
-              Testar
+              Testar no chat
             </Button>
-            {(!server || !onTest) && (
-              <p role="status">
-                {!server
-                  ? 'Conecte o serviço antes de testar a conexão.'
-                  : 'O teste de conexão não está disponível nesta tela.'}
-              </p>
+            {!service.connectable && (
+              <p role="status">{service.unavailableMessage ?? service.whatItNeeds}</p>
             )}
+            {!onTestInChat && <p role="status">O teste no chat não está disponível nesta tela.</p>}
           </div>
+          {server && (
+            <section
+              id={`${formId}-manage`}
+              className="public-mcp-detail-section public-mcp-manage-section"
+              aria-labelledby={`${formId}-manage-title`}
+              hidden={!managing}
+            >
+              <h3 id={`${formId}-manage-title`}>Gerenciar conexão</h3>
+              <h4>Permissões</h4>
+              {service.permissions.length || service.oauthScopes?.length ? (
+                <ul>
+                  {[...service.permissions, ...(service.oauthScopes ?? [])].map((permission) => (
+                    <li key={permission}>{permission}</li>
+                  ))}
+                </ul>
+              ) : (
+                <p>Nenhuma permissão adicional está registrada para este serviço.</p>
+              )}
+              {onDisconnectPublicMcp && (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={busy || isConnecting}
+                  onClick={() => void disconnectPublicService()}
+                >
+                  Desconectar
+                </Button>
+              )}
+              {!onDisconnectPublicMcp && (
+                <p role="status">A desconexão não está disponível nesta tela.</p>
+              )}
+              {isGitHub && onRemoveGitHubToken && (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={busy || isConnecting}
+                  onClick={() => setExpanded(true)}
+                >
+                  Gerenciar token pessoal
+                </Button>
+              )}
+              {onRemovePublicMcp && (
+                <Button
+                  type="button"
+                  variant="danger"
+                  disabled={busy || isConnecting}
+                  onClick={() => void removePublicService()}
+                >
+                  Remover servidor
+                </Button>
+              )}
+              {!onRemovePublicMcp && (
+                <p role="status">A remoção do servidor não está disponível nesta tela.</p>
+              )}
+            </section>
+          )}
+          {githubNotice && (
+            <p
+              role={
+                githubNotice.includes('não confirmou') || githubNotice.includes('continua válido')
+                  ? 'alert'
+                  : 'status'
+              }
+            >
+              {githubNotice}
+            </p>
+          )}
           <section
             className="public-mcp-detail-section"
             aria-labelledby={`${formId}-applications-title`}
@@ -1270,8 +1353,8 @@ function PublicMcpServiceCard({
               )}
               {server &&
                 (isGitHub
-                  ? (githubAccount && onDisconnectGitHubOAuth) || onRemovePublicMcp
-                  : onRemovePublicMcp) && (
+                  ? (githubAccount && onDisconnectGitHubOAuth) || onDisconnectPublicMcp
+                  : onDisconnectPublicMcp) && (
                   <Button
                     type="button"
                     variant="secondary"
@@ -1955,10 +2038,12 @@ function SkillFamilyDetails({
 export function SkillsScreen({
   onOpenPrivacy,
   onRemovePublicMcp,
+  onTestInChat,
   initialFamily,
 }: {
   onOpenPrivacy: () => void;
   onRemovePublicMcp: (server: { id: string }) => Promise<string | null>;
+  onTestInChat?: (suggestion: string) => void;
   initialFamily?: SkillFamily;
 }) {
   const [skills, setSkills] = useState<CatalogSkill[]>([]);
@@ -2161,17 +2246,29 @@ export function SkillsScreen({
     }
   }
 
-  async function removePublicMcp(server: PublicMcpServer & { id: string }): Promise<boolean> {
+  async function disconnectPublicMcp(
+    server: PublicMcpServer & { id: string },
+  ): Promise<string | null> {
     setMcpBusy(true);
-    setError('');
+    try {
+      const warning = await invoke<string | null>('mcp_disconnect_server', {
+        serverId: server.id,
+      });
+      await refreshMcpServers().catch(() => undefined);
+      return warning;
+    } finally {
+      setMcpBusy(false);
+    }
+  }
+
+  async function removePublicMcp(server: PublicMcpServer & { id: string }): Promise<string | null> {
+    setMcpBusy(true);
     try {
       const warning = await onRemovePublicMcp(server);
-      if (warning) setError('A conexão foi removida, mas o provedor não confirmou a revogação.');
       await refreshMcpServers().catch(() => undefined);
-      return true;
+      return warning;
     } catch (cause) {
-      setError(publicMcpErrorMessage(cause));
-      return false;
+      throw new Error(publicMcpErrorMessage(cause));
     } finally {
       setMcpBusy(false);
     }
@@ -2258,8 +2355,10 @@ export function SkillsScreen({
       onRemoveGitHubToken={removeGitHubToken}
       onConnectGitHubOAuth={connectGitHubOAuth}
       onDisconnectGitHubOAuth={disconnectGitHubOAuth}
+      onDisconnectPublicMcp={disconnectPublicMcp}
       onRemovePublicMcp={removePublicMcp}
       onTestPublicMcp={testPublicMcp}
+      onTestInChat={onTestInChat}
       prerequisites={prerequisites}
       initialFamily={initialFamily}
       onFamilyToggle={(family, enabled) =>

@@ -2149,6 +2149,11 @@ function MainApp() {
                   key={requestedSkillFamily?.requestId ?? 'all-families'}
                   initialFamily={requestedSkillFamily?.family}
                   onOpenPrivacy={() => navigate('permissions')}
+                  onTestInChat={(suggestion) => {
+                    setDraft(suggestion);
+                    setChatMode(false);
+                    navigate('chat');
+                  }}
                   onRemovePublicMcp={async (server) =>
                     await invoke<string | null>('mcp_remove_server', { serverId: server.id })
                   }

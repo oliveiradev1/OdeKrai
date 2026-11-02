@@ -1297,6 +1297,7 @@ pub fn run() -> Result<(), tauri::Error> {
             mcp_registry::mcp_set_enabled,
             mcp_registry::mcp_test_connection,
             mcp_registry::mcp_remove_server,
+            mcp_registry::mcp_disconnect_server,
             mcp_registry::mcp_oauth_disconnect_github,
             google_oauth::google_oauth_connect,
             google_oauth::google_oauth_status,
