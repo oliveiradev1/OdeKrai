@@ -591,7 +591,12 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            requested_endpoint.lock().unwrap().as_ref().unwrap().host_str(),
+            requested_endpoint
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .host_str(),
             Some("mcp.example.org")
         );
     }
