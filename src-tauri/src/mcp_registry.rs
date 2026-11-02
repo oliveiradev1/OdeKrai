@@ -42,11 +42,14 @@ fn load_public_mcp_catalog() -> Result<Vec<serde_json::Value>, String> {
             "whatItNeeds",
             "nextStep",
         ]
-            .iter()
-            .all(|key| entry.get(key).and_then(serde_json::Value::as_str).is_some());
-        let required_lists = ["requirements", "permissions"]
-            .iter()
-            .all(|key| entry.get(key).and_then(serde_json::Value::as_array).is_some());
+        .iter()
+        .all(|key| entry.get(key).and_then(serde_json::Value::as_str).is_some());
+        let required_lists = ["requirements", "permissions"].iter().all(|key| {
+            entry
+                .get(key)
+                .and_then(serde_json::Value::as_array)
+                .is_some()
+        });
         if !valid_status || !valid_connections || !required_strings || !required_lists {
             return Err("O catálogo público de serviços está inválido.".to_string());
         }
@@ -55,9 +58,7 @@ fn load_public_mcp_catalog() -> Result<Vec<serde_json::Value>, String> {
 }
 
 #[tauri::command]
-pub fn mcp_public_catalog(
-    caller: tauri::WebviewWindow,
-) -> Result<Vec<serde_json::Value>, String> {
+pub fn mcp_public_catalog(caller: tauri::WebviewWindow) -> Result<Vec<serde_json::Value>, String> {
     crate::require_main(&caller)?;
     load_public_mcp_catalog()
 }
@@ -402,24 +403,29 @@ fn sensitive_argument_name(value: &str) -> bool {
         "bearer",
         "private_key",
     ]
-        .iter()
-        .any(|marker| key.contains(marker))
+    .iter()
+    .any(|marker| key.contains(marker))
 }
 
 fn looks_like_credential(value: &str) -> bool {
     let lower = value.to_ascii_lowercase();
     let known_token = [
-        "ghp_", "github_pat_", "glpat-", "xoxb-", "xoxp-", "xoxs-", "ya29.", "AIza", "sk-",
-        "bearer ", "-----begin ",
+        "ghp_",
+        "github_pat_",
+        "glpat-",
+        "xoxb-",
+        "xoxp-",
+        "xoxs-",
+        "ya29.",
+        "AIza",
+        "sk-",
+        "bearer ",
+        "-----begin ",
     ]
     .iter()
     .any(|marker| lower.contains(&marker.to_ascii_lowercase()));
-    let jwt = value.starts_with("eyJ")
-        && value
-            .split('.')
-            .filter(|part| !part.is_empty())
-            .count()
-            == 3;
+    let jwt =
+        value.starts_with("eyJ") && value.split('.').filter(|part| !part.is_empty()).count() == 3;
     let named_value = value
         .split(|character| matches!(character, '?' | '&' | ';' | ' '))
         .any(|part| {
@@ -434,9 +440,9 @@ fn url_contains_credential(value: &str) -> bool {
     url::Url::parse(value).ok().is_some_and(|url| {
         !url.username().is_empty()
             || url.password().is_some()
-            || url.query_pairs().any(|(key, secret)| {
-                sensitive_argument_name(&key) && !secret.is_empty()
-            })
+            || url
+                .query_pairs()
+                .any(|(key, secret)| sensitive_argument_name(&key) && !secret.is_empty())
     })
 }
 
@@ -1275,9 +1281,7 @@ pub async fn mcp_disconnect_server(
         Ok(_) => true,
         Err(keyring::Error::NoEntry) => false,
         Err(_) => {
-            return Err(
-                "Não foi possível verificar a credencial no Gerenciador do Windows.".into(),
-            )
+            return Err("Não foi possível verificar a credencial no Gerenciador do Windows.".into())
         }
     };
     let access_token = runtime
@@ -1383,7 +1387,10 @@ mod tests {
             assert!(ids.insert(entry["id"].as_str().unwrap()));
             assert!(entry["name"].as_str().is_some());
             assert!(entry["provider"].as_str().is_some());
-            assert!(entry["officialLink"].as_str().unwrap().starts_with("https://"));
+            assert!(entry["officialLink"]
+                .as_str()
+                .unwrap()
+                .starts_with("https://"));
             assert!(!entry["whatItDoes"].as_str().unwrap().trim().is_empty());
             assert!(!entry["whatItNeeds"].as_str().unwrap().trim().is_empty());
             assert!(!entry["nextStep"].as_str().unwrap().trim().is_empty());

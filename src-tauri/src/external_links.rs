@@ -148,17 +148,15 @@ pub(crate) fn open_google_oauth_authorization_url(
     value: &str,
 ) -> Result<(), String> {
     let validated = validate_google_oauth_authorization_url(value)?;
-    app.opener()
-        .open_url(validated, None::<&str>)
-        .map_err(|_| {
-            "Não foi possível abrir o navegador padrão para a autorização do Google.".to_string()
-        })
+    app.opener().open_url(validated, None::<&str>).map_err(|_| {
+        "Não foi possível abrir o navegador padrão para a autorização do Google.".to_string()
+    })
 }
 
 fn validate_google_oauth_authorization_url(value: &str) -> Result<String, String> {
     let validated = validate_external_url(value).map_err(str::to_string)?;
-    let parsed = Url::parse(&validated)
-        .map_err(|_| "O endereço de autorização é inválido.".to_string())?;
+    let parsed =
+        Url::parse(&validated).map_err(|_| "O endereço de autorização é inválido.".to_string())?;
     if parsed.scheme() != "https"
         || parsed.port_or_known_default() != Some(443)
         || parsed.host_str() != Some(GOOGLE_OAUTH_HOST)
@@ -249,8 +247,7 @@ fn validate_update_release_url(value: &str) -> Result<String, String> {
 mod tests {
     use super::{
         allowlist_domain, validate_cloud_link, validate_external_url,
-        validate_google_oauth_authorization_url, validate_update_release_url,
-        CLOUD_LINKS_MANIFEST,
+        validate_google_oauth_authorization_url, validate_update_release_url, CLOUD_LINKS_MANIFEST,
     };
     use serde::Deserialize;
 
@@ -274,7 +271,10 @@ mod tests {
             "http://accounts.google.com/o/oauth2/v2/auth?client_id=public",
             "https://accounts.google.com/other?client_id=public",
         ] {
-            assert!(validate_google_oauth_authorization_url(url).is_err(), "{url}");
+            assert!(
+                validate_google_oauth_authorization_url(url).is_err(),
+                "{url}"
+            );
         }
         assert!(include_str!("../capabilities/default.json")
             .contains("https://accounts.google.com/o/oauth2/v2/auth"));

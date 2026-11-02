@@ -165,8 +165,9 @@ pub fn agent_availability(
             .is_none()
         });
     if !provider_ready {
-        let reason = crate::providers::agent_provider_unavailable_reason(&app, &provider_id, &model)
-            .unwrap_or("Nenhum provedor configurado está disponível para o modo agente.");
+        let reason =
+            crate::providers::agent_provider_unavailable_reason(&app, &provider_id, &model)
+                .unwrap_or("Nenhum provedor configurado está disponível para o modo agente.");
         return Ok(AgentAvailability {
             available: false,
             reason: Some(reason.into()),
@@ -658,7 +659,9 @@ impl AgentBackend for RuntimeBackend<'_> {
                                 .map(str::to_owned);
                             card.result_summary = if card.code_review_id.is_some() {
                                 "Diff pronto para revisão; nenhuma alteração foi aplicada ao projeto original.".into()
-                            } else if card.diff.as_deref() == Some("(nenhuma alteração no worktree)") {
+                            } else if card.diff.as_deref()
+                                == Some("(nenhuma alteração no worktree)")
+                            {
                                 "A ferramenta não propôs mudanças; nada foi aplicado ao projeto original.".into()
                             } else {
                                 "Diff limitado; a aplicação automática foi desativada. Nenhuma alteração foi aplicada ao projeto original.".into()

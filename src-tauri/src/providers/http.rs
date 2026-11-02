@@ -158,7 +158,8 @@ fn partial_provider_error_codes(body: &str) -> Vec<String> {
                 } else if byte == b'\\' {
                     escaped = true;
                 } else if byte == b'\"' {
-                    if let Ok(code) = serde_json::from_str::<String>(&body[value_start..=value_end]) {
+                    if let Ok(code) = serde_json::from_str::<String>(&body[value_start..=value_end])
+                    {
                         codes.push(code.to_ascii_lowercase());
                     }
                     break;
@@ -254,9 +255,7 @@ pub(super) fn safe_transport_error(error: &reqwest::Error) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        provider_http_error_with_body, read_provider_error_body, safe_transport_error,
-    };
+    use super::{provider_http_error_with_body, read_provider_error_body, safe_transport_error};
     use std::{
         io::{Read, Write},
         net::TcpListener,
@@ -388,7 +387,10 @@ mod tests {
             .await
             .unwrap_err();
         let safe_timeout = safe_transport_error(&timeout_error);
-        assert_eq!(crate::agent::classify_provider_error(&safe_timeout).kind, "timeout");
+        assert_eq!(
+            crate::agent::classify_provider_error(&safe_timeout).kind,
+            "timeout"
+        );
         server.join().unwrap();
 
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -400,7 +402,10 @@ mod tests {
             .await
             .unwrap_err();
         let safe_network = safe_transport_error(&network_error);
-        assert_eq!(crate::agent::classify_provider_error(&safe_network).kind, "network");
+        assert_eq!(
+            crate::agent::classify_provider_error(&safe_network).kind,
+            "network"
+        );
     }
 
     #[tokio::test]

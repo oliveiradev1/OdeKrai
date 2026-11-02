@@ -27,8 +27,8 @@ mod http;
 mod llm_provider;
 use endpoint::provider_endpoint;
 use http::{
-    provider_client, provider_http_error, provider_http_error_with_body,
-    read_provider_error_body, safe_transport_error, AuthRequest,
+    provider_client, provider_http_error, provider_http_error_with_body, read_provider_error_body,
+    safe_transport_error, AuthRequest,
 };
 mod perplexity;
 mod selection;
@@ -239,8 +239,8 @@ pub(crate) fn select_agent_provider(
     daily_token_limit: u64,
 ) -> Result<AgentProviderSelection, String> {
     use selection::{
-        choose_provider, classify_task, task_needs, CandidateAvailability,
-        CandidateCapabilities, ProviderCandidate,
+        choose_provider, classify_task, task_needs, CandidateAvailability, CandidateCapabilities,
+        ProviderCandidate,
     };
 
     let primary = configured_targets
@@ -284,17 +284,15 @@ pub(crate) fn select_agent_provider(
             / 4)
         .min(u32::MAX as usize) as u32
     });
-    let primary_context = catalog_entry(primary_id)
-        .and_then(|entry| entry.capabilities.context_window_tokens);
+    let primary_context =
+        catalog_entry(primary_id).and_then(|entry| entry.capabilities.context_window_tokens);
     let required_context = primary_context
         .zip(estimated_context_tokens)
         .and_then(|(primary_capacity, required)| (required > primary_capacity).then_some(required));
     let needs = task_needs(kind, required_context);
     let used_today = crate::history::provider_usage_total_today(app)?;
-    let daily_quota_available = !crate::history::daily_token_limit_exceeded(
-        used_today,
-        daily_token_limit,
-    );
+    let daily_quota_available =
+        !crate::history::daily_token_limit_exceeded(used_today, daily_token_limit);
     let mut candidates = Vec::with_capacity(configured_targets.len());
     for target in &configured_targets {
         let Some(entry) = catalog_entry(&target.provider_id) else {
@@ -317,9 +315,8 @@ pub(crate) fn select_agent_provider(
         candidates.push(ProviderCandidate {
             id: target.provider_id.clone(),
             capabilities: CandidateCapabilities {
-                tools: effective.is_some_and(|capabilities| {
-                    capabilities.tools && capabilities.verified
-                }),
+                tools: effective
+                    .is_some_and(|capabilities| capabilities.tools && capabilities.verified),
                 vision: entry.capabilities.vision
                     && supports_vision_model(&target.provider_id, &target.model),
                 context_tokens: entry.capabilities.context_window_tokens,
@@ -328,10 +325,7 @@ pub(crate) fn select_agent_provider(
                 credential,
                 quota: daily_quota_available
                     && selection::is_quota_available(&target.provider_id, &target.model),
-                recent_failure: selection::is_recent_failure(
-                    &target.provider_id,
-                    &target.model,
-                ),
+                recent_failure: selection::is_recent_failure(&target.provider_id, &target.model),
             },
         });
     }

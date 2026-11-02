@@ -1520,7 +1520,10 @@ impl SkillTurnOffer {
             .iter()
             .filter(|(_, state)| *state == SkillOfferState::Offered)
             .map(|(skill, _)| {
-                format!("- {} — {}: {}", skill.id, skill.name, skill.model_description)
+                format!(
+                    "- {} — {}: {}",
+                    skill.id, skill.name, skill.model_description
+                )
             })
             .collect::<Vec<_>>();
         let mut offered = offered;
@@ -1624,10 +1627,7 @@ impl SkillTurnOffer {
         ] {
             let entries = list(state);
             if !entries.is_empty() {
-                context.push_str(&format!(
-                    "\n\nHabilidades {label}:\n{}",
-                    entries.join("\n")
-                ));
+                context.push_str(&format!("\n\nHabilidades {label}:\n{}", entries.join("\n")));
             }
         }
         if !context.is_empty() {
@@ -2857,8 +2857,7 @@ mod tests {
     #[test]
     fn visible_skill_groups_match_the_nine_catalog_families() {
         let skills = registry();
-        let groups: std::collections::HashSet<_> =
-            skills.iter().map(skill_group_key).collect();
+        let groups: std::collections::HashSet<_> = skills.iter().map(skill_group_key).collect();
         assert_eq!(
             groups,
             std::collections::HashSet::from([

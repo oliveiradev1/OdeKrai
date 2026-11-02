@@ -1,3 +1,4 @@
+use sha2::{Digest, Sha256};
 use std::{
     ffi::OsString,
     fs,
@@ -11,7 +12,6 @@ use std::{
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-use sha2::{Digest, Sha256};
 use tauri::Manager;
 use tokio_util::sync::CancellationToken;
 
@@ -492,7 +492,12 @@ pub async fn apply_code_diff(
 ) -> Result<bool, String> {
     crate::require_main(&caller)?;
     if !valid_review_id(&review_id)
-        || !crate::history::code_review_card_matches(&app, &conversation_id, &action_id, &review_id)?
+        || !crate::history::code_review_card_matches(
+            &app,
+            &conversation_id,
+            &action_id,
+            &review_id,
+        )?
     {
         return Err("Esta revisão não está mais pendente neste cartão.".into());
     }
@@ -583,7 +588,9 @@ fn apply_pending_review(review_id: &str, approved: bool) -> Result<(), String> {
         return Err("O projeto mudou desde a revisão. Gere um novo diff antes de aplicar.".into());
     }
     if !git_worktree_is_clean(&project)? {
-        return Err("O projeto tem alterações locais. Salve ou reverta-as antes de aplicar o diff.".into());
+        return Err(
+            "O projeto tem alterações locais. Salve ou reverta-as antes de aplicar o diff.".into(),
+        );
     }
     validate_patch_paths(&review.diff)?;
     git_apply(&project, &review.diff, true)?;
@@ -605,10 +612,17 @@ fn validate_patch_paths(diff: &str) -> Result<(), String> {
             .strip_prefix("diff --git ")
             .map(|value| value.split_whitespace().collect::<Vec<_>>())
             .or_else(|| {
-                ["+++ ", "--- ", "rename from ", "rename to ", "copy from ", "copy to "]
-                    .iter()
-                    .find_map(|prefix| line.strip_prefix(prefix))
-                    .map(|value| vec![value])
+                [
+                    "+++ ",
+                    "--- ",
+                    "rename from ",
+                    "rename to ",
+                    "copy from ",
+                    "copy to ",
+                ]
+                .iter()
+                .find_map(|prefix| line.strip_prefix(prefix))
+                .map(|value| vec![value])
             });
         let Some(paths) = paths else { continue };
         for path in paths {
@@ -637,7 +651,12 @@ fn validate_patch_paths(diff: &str) -> Result<(), String> {
 
 fn git_head(project: &Path) -> Result<String, String> {
     let output = git_command()
-        .args(["-C", project.to_string_lossy().as_ref(), "rev-parse", "HEAD"])
+        .args([
+            "-C",
+            project.to_string_lossy().as_ref(),
+            "rev-parse",
+            "HEAD",
+        ])
         .output()
         .map_err(|_| "Não foi possível conferir a revisão do projeto.".to_string())?;
     if !output.status.success() {
@@ -995,8 +1014,14 @@ mod tests {
 
     #[test]
     fn preview_has_complete_separate_arguments_and_quotes_task() {
-        let args = command_args(CodeTool::Codex, Path::new("C:\\Work Area\\repo"), "change safe");
-        assert!(args.iter().any(|arg| arg.to_string_lossy().contains("Não execute git commit, git push")));
+        let args = command_args(
+            CodeTool::Codex,
+            Path::new("C:\\Work Area\\repo"),
+            "change safe",
+        );
+        assert!(args.iter().any(|arg| arg
+            .to_string_lossy()
+            .contains("Não execute git commit, git push")));
         let command = preview_command(
             CodeTool::Codex,
             Path::new("C:\\Tools Folder\\codex.exe"),
@@ -1145,7 +1170,12 @@ mod tests {
         assert!(!project.join("generated.txt").exists());
         assert_no_extra_worktrees(&project);
         if let Some(review_id) = diff.review_id {
-            PENDING_REVIEWS.get().unwrap().lock().unwrap().remove(&review_id);
+            PENDING_REVIEWS
+                .get()
+                .unwrap()
+                .lock()
+                .unwrap()
+                .remove(&review_id);
         }
         fs::remove_dir_all(root).unwrap();
     }
@@ -1169,7 +1199,10 @@ mod tests {
         assert!(apply_pending_review(&review_id, false).is_err());
         assert!(!project.join("generated.txt").exists());
         apply_pending_review(&review_id, true).unwrap();
-        assert_eq!(fs::read_to_string(project.join("generated.txt")).unwrap(), "approved");
+        assert_eq!(
+            fs::read_to_string(project.join("generated.txt")).unwrap(),
+            "approved"
+        );
         assert_eq!(git_head(&project).unwrap(), head_before_apply);
         assert_no_extra_worktrees(&project);
         fs::remove_dir_all(root).unwrap();

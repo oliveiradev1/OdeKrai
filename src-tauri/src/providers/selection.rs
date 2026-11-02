@@ -131,17 +131,40 @@ pub(super) fn classify_task(text: &str, has_image: bool) -> TaskKind {
         TaskKind::Code
     } else if contains_any(
         &normalized,
-        &["agenda", "reunião", "reuniao", "compromisso", "calendário", "calendario", "lembrete"],
+        &[
+            "agenda",
+            "reunião",
+            "reuniao",
+            "compromisso",
+            "calendário",
+            "calendario",
+            "lembrete",
+        ],
     ) {
         TaskKind::Agenda
     } else if contains_any(
         &normalized,
-        &["arquivo", "pasta", "documento", "planilha", "ler o arquivo", "buscar no arquivo"],
+        &[
+            "arquivo",
+            "pasta",
+            "documento",
+            "planilha",
+            "ler o arquivo",
+            "buscar no arquivo",
+        ],
     ) {
         TaskKind::Files
     } else if contains_any(
         &normalized,
-        &["pesquise", "pesquisar", "pesquisa", "buscar na web", "fontes", "referências", "referencias"],
+        &[
+            "pesquise",
+            "pesquisar",
+            "pesquisa",
+            "buscar na web",
+            "fontes",
+            "referências",
+            "referencias",
+        ],
     ) {
         TaskKind::Research
     } else {
@@ -162,13 +185,16 @@ pub(super) fn choose_provider(
     candidates: &[ProviderCandidate],
     needs: TaskNeeds,
 ) -> Option<ProviderChoice> {
-    let primary_index = candidates.iter().position(|candidate| candidate.id == primary_id)?;
+    let primary_index = candidates
+        .iter()
+        .position(|candidate| candidate.id == primary_id)?;
 
     // Requests without a task-specific requirement preserve the selected provider.
     if !needs.tools && !needs.vision && needs.context_tokens.is_none() {
         return Some(ProviderChoice {
             index: primary_index,
-            reason: "nenhum requisito específico de capacidade se aplica; mantendo o provedor principal",
+            reason:
+                "nenhum requisito específico de capacidade se aplica; mantendo o provedor principal",
         });
     }
 
@@ -236,13 +262,12 @@ mod tests {
 
     #[test]
     fn code_task_prefers_available_provider_with_tools_when_primary_lacks_them() {
-        let candidates = [candidate("primary", false, true), candidate("tools", true, true)];
-        let choice = choose_provider(
-            "primary",
-            &candidates,
-            task_needs(TaskKind::Code, None),
-        )
-        .expect("primary exists");
+        let candidates = [
+            candidate("primary", false, true),
+            candidate("tools", true, true),
+        ];
+        let choice = choose_provider("primary", &candidates, task_needs(TaskKind::Code, None))
+            .expect("primary exists");
         assert_eq!(candidates[choice.index].id, "tools");
         assert!(choice.reason.contains("capacidade necessária"));
     }
@@ -252,24 +277,19 @@ mod tests {
         let mut primary = candidate("primary", true, true);
         primary.availability.recent_failure = true;
         let candidates = [primary, candidate("backup", true, true)];
-        let choice = choose_provider(
-            "primary",
-            &candidates,
-            task_needs(TaskKind::Code, None),
-        )
-        .expect("primary exists");
+        let choice = choose_provider("primary", &candidates, task_needs(TaskKind::Code, None))
+            .expect("primary exists");
         assert_eq!(candidates[choice.index].id, "backup");
     }
 
     #[test]
     fn primary_is_kept_when_no_alternative_is_available() {
-        let candidates = [candidate("primary", true, true), candidate("backup", true, false)];
-        let choice = choose_provider(
-            "primary",
-            &candidates,
-            task_needs(TaskKind::Code, None),
-        )
-        .expect("primary exists");
+        let candidates = [
+            candidate("primary", true, true),
+            candidate("backup", true, false),
+        ];
+        let choice = choose_provider("primary", &candidates, task_needs(TaskKind::Code, None))
+            .expect("primary exists");
         assert_eq!(candidates[choice.index].id, "primary");
         assert!(choice.reason.contains("provador principal"));
     }
@@ -279,8 +299,8 @@ mod tests {
         let mut primary = candidate("primary", false, false);
         primary.availability.quota = false;
         let candidates = [primary, candidate("backup", true, true)];
-        let choice = choose_provider("primary", &candidates, TaskNeeds::default())
-            .expect("primary exists");
+        let choice =
+            choose_provider("primary", &candidates, TaskNeeds::default()).expect("primary exists");
         assert_eq!(candidates[choice.index].id, "primary");
     }
 
@@ -311,22 +331,24 @@ mod tests {
         let mut vision = candidate("vision", true, true);
         vision.capabilities.vision = true;
         let candidates = [candidate("primary", false, true), no_quota, vision];
-        let choice = choose_provider(
-            "primary",
-            &candidates,
-            task_needs(TaskKind::Vision, None),
-        )
-        .expect("primary exists");
+        let choice = choose_provider("primary", &candidates, task_needs(TaskKind::Vision, None))
+            .expect("primary exists");
         assert_eq!(candidates[choice.index].id, "vision");
     }
 
     #[test]
     fn task_classifier_uses_explicit_content_type_hints() {
         assert_eq!(classify_task("Implemente um script", false), TaskKind::Code);
-        assert_eq!(classify_task("Pesquise fontes atuais", false), TaskKind::Research);
+        assert_eq!(
+            classify_task("Pesquise fontes atuais", false),
+            TaskKind::Research
+        );
         assert_eq!(classify_task("Marque uma reunião", false), TaskKind::Agenda);
         assert_eq!(classify_task("Leia este arquivo", false), TaskKind::Files);
-        assert_eq!(classify_task("O que aparece nesta imagem?", true), TaskKind::Vision);
+        assert_eq!(
+            classify_task("O que aparece nesta imagem?", true),
+            TaskKind::Vision
+        );
         assert_eq!(classify_task("Olá", false), TaskKind::Conversation);
     }
 
@@ -344,7 +366,11 @@ mod tests {
     fn quota_failure_is_unavailable_until_the_next_utc_day() {
         let provider = format!("test-quota-provider-{}", std::process::id());
         let model = "selection-quota-test";
-        record_result(&provider, model, Err("A cota ou o saldo da conta acabou (HTTP 429)."));
+        record_result(
+            &provider,
+            model,
+            Err("A cota ou o saldo da conta acabou (HTTP 429)."),
+        );
         assert!(!is_quota_available(&provider, model));
     }
 }
@@ -363,4 +389,3 @@ struct FailureState {
 }
 
 static PROVIDER_FAILURES: OnceLock<Mutex<HashMap<String, FailureState>>> = OnceLock::new();
-

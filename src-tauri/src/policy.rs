@@ -65,9 +65,7 @@ pub fn decide(
         Risk::Leitura if inside_workspace => Decision::Allow("workspace_read"),
         Risk::Leitura => Decision::Deny("outside_workspace"),
         Risk::EscritaReversivel => Decision::AskUser("write_requires_approval"),
-        Risk::ComunicacaoExterna => {
-            Decision::AskUser("external_communication_requires_approval")
-        }
+        Risk::ComunicacaoExterna => Decision::AskUser("external_communication_requires_approval"),
         Risk::DestrutivoFinanceiro => Decision::AskUser("destructive_action_requires_approval"),
         Risk::ExecucaoDeCodigo => Decision::AskUser("code_execution_requires_approval"),
         Risk::CapturaSensivel => Decision::AskUser("sensitive_capture_requires_approval"),
@@ -141,8 +139,12 @@ mod tests {
                         } else {
                             Decision::AskUser(match risk {
                                 Risk::EscritaReversivel => "write_requires_approval",
-                                Risk::ComunicacaoExterna => "external_communication_requires_approval",
-                                Risk::DestrutivoFinanceiro => "destructive_action_requires_approval",
+                                Risk::ComunicacaoExterna => {
+                                    "external_communication_requires_approval"
+                                }
+                                Risk::DestrutivoFinanceiro => {
+                                    "destructive_action_requires_approval"
+                                }
                                 Risk::ExecucaoDeCodigo => "code_execution_requires_approval",
                                 Risk::CapturaSensivel => "sensitive_capture_requires_approval",
                                 Risk::Leitura => unreachable!(),

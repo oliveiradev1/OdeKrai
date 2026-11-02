@@ -707,11 +707,7 @@ mod tests {
                 "invalid_credential",
                 "Conectores de IA",
             ),
-            (
-                "O limite de uso atingiu HTTP 429",
-                "rate_limit",
-                "Aguarde",
-            ),
+            ("O limite de uso atingiu HTTP 429", "rate_limit", "Aguarde"),
             (
                 "O limite diário de tokens foi atingido.",
                 "daily_token_limit",
@@ -807,7 +803,8 @@ mod tests {
         );
         assert_eq!(unsupported.kind, "unsupported_tools");
         assert!(unsupported.message.contains("Escolha outro modelo"));
-        let timeout = classify_provider_error("O provedor demorou para responder. Tente novamente.");
+        let timeout =
+            classify_provider_error("O provedor demorou para responder. Tente novamente.");
         assert_eq!(timeout.kind, "timeout");
         let network = classify_provider_error(
             "Não foi possível conectar ao provedor. Verifique sua conexão.",
