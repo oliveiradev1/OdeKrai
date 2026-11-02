@@ -432,6 +432,7 @@ fn parse_sse(bytes: &[u8]) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
     #[test]
     fn dns_rebinding_addresses_to_private_networks_are_rejected() {
@@ -479,22 +480,28 @@ mod tests {
             .contains("endereço local ou reservado"));
     }
 
-    struct MockServer(HttpReply);
+    struct MockServer {
+        reply: HttpReply,
+        requested_endpoint: Arc<Mutex<Option<Url>>>,
+    }
 
     impl HttpTransport for MockServer {
         fn post(
             &self,
-            _endpoint: &Url,
+            endpoint: &Url,
             _token: &str,
             _method: &str,
             _name: Option<&str>,
             _body: Value,
         ) -> Result<HttpReply, String> {
+            if let Ok(mut requested_endpoint) = self.requested_endpoint.lock() {
+                *requested_endpoint = Some(endpoint.clone());
+            }
             Ok(HttpReply {
-                status: self.0.status,
-                content_type: self.0.content_type.clone(),
-                final_url: self.0.final_url.clone(),
-                body: self.0.body.clone(),
+                status: self.reply.status,
+                content_type: self.reply.content_type.clone(),
+                final_url: self.reply.final_url.clone(),
+                body: self.reply.body.clone(),
             })
         }
     }
@@ -508,12 +515,15 @@ mod tests {
         McpHttpClient::with_transport(
             "https://mcp.example.org/mcp",
             "test-token",
-            Box::new(MockServer(HttpReply {
-                status,
-                content_type: content_type.into(),
-                final_url: Url::parse(final_url).unwrap(),
-                body,
-            })),
+            Box::new(MockServer {
+                reply: HttpReply {
+                    status,
+                    content_type: content_type.into(),
+                    final_url: Url::parse(final_url).unwrap(),
+                    body,
+                },
+                requested_endpoint: Arc::new(Mutex::new(None)),
+            }),
         )
     }
 
@@ -560,10 +570,30 @@ mod tests {
 
     #[test]
     fn server_host_is_not_a_request_parameter() {
-        let client =
-            McpHttpClient::connect("https://mcp.example.org/endpoint", "secret-token".into())
-                .unwrap();
-        assert_eq!(client.endpoint.host_str(), Some("mcp.example.org"));
+        let endpoint = "https://mcp.example.org/endpoint";
+        let requested_endpoint = Arc::new(Mutex::new(None));
+        let client = McpHttpClient::with_transport(
+            endpoint,
+            "secret-token",
+            Box::new(MockServer {
+                reply: HttpReply {
+                    status: StatusCode::OK,
+                    content_type: "application/json".into(),
+                    final_url: Url::parse(endpoint).unwrap(),
+                    body: br#"{"jsonrpc":"2.0","id":1,"result":{"content":[]}}"#.to_vec(),
+                },
+                requested_endpoint: requested_endpoint.clone(),
+            }),
+        );
+
+        client
+            .tools_call("lookup", json!({"host":"attacker.example"}))
+            .unwrap();
+
+        assert_eq!(
+            requested_endpoint.lock().unwrap().as_ref().unwrap().host_str(),
+            Some("mcp.example.org")
+        );
     }
 
     #[test]
