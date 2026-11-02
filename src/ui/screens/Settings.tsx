@@ -453,12 +453,12 @@ export function SettingsScreen({
               <strong>Sempre perguntar:</strong> solicita aprovação antes de ações que alteram algo.
             </li>
             <li>
-              <strong>Aprovar por mim:</strong> permite alterações reversíveis na pasta de trabalho;
-              pergunta para as demais ações permitidas.
+              <strong>Aprovar por mim:</strong> permite leituras em pastas autorizadas sem
+              perguntar; toda alteração e comunicação externa pede aprovação.
             </li>
             <li>
-              <strong>Controle total:</strong> permite mais ações sem perguntar, mantendo bloqueios
-              fixos e a confirmação nativa quando exigida.
+              <strong>Controle total:</strong> amplia as ações permitidas, mas toda alteração e
+              comunicação externa ainda pede aprovação. Bloqueios fixos continuam ativos.
             </li>
           </ul>
           <button

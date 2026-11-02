@@ -72,7 +72,7 @@ const modes: { id: Mode; title: string; description: string }[] = [
     id: 'aprovar_por_mim',
     title: 'Aprovar por mim',
     description:
-      'Leituras e alterações reversíveis em pastas permitidas seguem automaticamente. Mensagens e ações destrutivas pedem aprovação.',
+      'Leituras em pastas permitidas seguem automaticamente. Toda alteração e comunicação externa pede aprovação.',
   },
   {
     id: 'sempre_perguntar',
@@ -84,7 +84,7 @@ const modes: { id: Mode; title: string; description: string }[] = [
     id: 'controle_total',
     title: 'Controle total',
     description:
-      'Executa ações permitidas sem perguntar. Pagamentos, segredos e caminhos bloqueados continuam bloqueados ou exigem aprovação.',
+      'Amplia as ações permitidas, mas toda alteração e comunicação externa ainda pede aprovação. Bloqueios fixos continuam ativos.',
   },
 ];
 const risks: { id: RiskLevel; title: string }[] = [
