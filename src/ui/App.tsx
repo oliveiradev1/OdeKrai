@@ -11,7 +11,7 @@ import {
   type FormEvent,
   type SetStateAction,
 } from 'react';
-import { resolveConversationSelection } from '../core/chat';
+import { canRetryFailedPrompt, resolveConversationSelection } from '../core/chat';
 import { LatestRequestGate } from '../core/latest-request-gate';
 import { setActionCardUndoError } from '../core/agent-card';
 import { runOnceWhilePending } from '../core/single-flight';
@@ -249,6 +249,7 @@ function MainApp() {
   const [agentErrorDetails, setAgentErrorDetails] = useState('');
   const [agentAwaitingApproval, setAgentAwaitingApproval] = useState(false);
   const [agentActionCards, setAgentActionCards] = useState<AgentActionCardData[]>([]);
+  const [lastFailedPromptUsedAgent, setLastFailedPromptUsedAgent] = useState(false);
   const [agentProviderSelection, setAgentProviderSelection] = useState<string | null>(null);
   const [assistantPetState, setAssistantPetState] = useState<PetAnimationState>('idle');
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
@@ -1154,6 +1155,7 @@ function MainApp() {
     setAgentProviderSelection(null);
     const isNewConversation = options.newConversation ?? !conversationId;
     const useAgent = options.agentEnabled ?? agentEnabled;
+    setLastFailedPromptUsedAgent(false);
     if (useAgent && !agentAvailability.available) {
       setError(
         `Modo agente indisponível: ${agentAvailability.reason ?? 'verifique as configurações do agente.'}`,
@@ -1512,6 +1514,7 @@ function MainApp() {
       if (!stopped) {
         setMessages(next);
         setLastFailedPrompt(text);
+        setLastFailedPromptUsedAgent(useAgent);
         setError(
           typeof cause === 'string'
             ? cause
@@ -1529,6 +1532,7 @@ function MainApp() {
       } else {
         setMessages(next);
         setLastFailedPrompt('');
+        setLastFailedPromptUsedAgent(false);
       }
       return false;
     } finally {
@@ -2102,12 +2106,7 @@ function MainApp() {
                 setChatMode(false);
               }}
               onRetry={() => void sendMessage(lastFailedPrompt, true)}
-              canRetry={
-                Boolean(lastFailedPrompt) &&
-                /rede|conexão|limitou as solicitações|tempo limite|demorou para responder|serviço do provedor está indisponível/i.test(
-                  error,
-                )
-              }
+              canRetry={canRetryFailedPrompt(lastFailedPrompt, error, lastFailedPromptUsedAgent)}
               profile={profile}
               selectedPet={selectedPet}
               agentEnabled={agentEnabled}
