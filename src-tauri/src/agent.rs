@@ -428,24 +428,21 @@ fn fail_with_details(
 
 pub(crate) fn classify_provider_error(error: &str) -> ProviderFailure {
     let normalized = error.to_ascii_lowercase();
-    if normalized.contains("http 401") {
+    if normalized.contains("http 401")
+        || normalized.contains("http 403")
+        || normalized.contains("recusou a chave")
+    {
         return ProviderFailure {
             kind: "invalid_credential",
-            message: "O provedor recusou a credencial. Confira a chave em Conectores de IA.",
-            technical_details: "Etapa: autenticação do provedor; status HTTP: 401.",
-        };
-    }
-    if normalized.contains("http 403") || normalized.contains("negou permissão") {
-        return ProviderFailure {
-            kind: "permission_denied",
-            message:
-                "O provedor negou acesso a este modelo ou operação. Confira as permissões da chave.",
-            technical_details: "Etapa: autorização do provedor; status HTTP: 403.",
+            message: "O provedor recusou a chave ou o acesso. Confira se a chave está ativa e autorizada para este modelo em Conectores de IA.",
+            technical_details:
+                "Etapa: autenticação ou autorização do provedor; chave recusada; corpo da resposta omitido.",
         };
     }
     if normalized.contains("http 404")
         || normalized.contains("model not found")
         || normalized.contains("modelo n\u{00e3}o foi encontrado")
+        || normalized.contains("modelo n\u{00e3}o existe")
     {
         return ProviderFailure { kind: "model_not_found", message: "O modelo ou endpoint não foi encontrado. Confira o identificador em Conectores de IA.", technical_details: "Etapa: resposta do provedor; status HTTP: 404." };
     }
@@ -456,6 +453,16 @@ pub(crate) fn classify_provider_error(error: &str) -> ProviderFailure {
                 "O provedor rejeitou o nome de uma ferramenta. Confira a compatibilidade do modelo.",
             technical_details:
                 "Etapa: validação de ferramentas; status HTTP: 400; categoria: nome.",
+        };
+    }
+    if normalized.contains("não oferece suporte às ferramentas")
+        || normalized.contains("parâmetros de ferramenta foram recusados")
+    {
+        return ProviderFailure {
+            kind: "unsupported_tools",
+            message: "Este modelo não oferece suporte às ferramentas solicitadas. Escolha outro modelo compatível com ferramentas em Conectores de IA.",
+            technical_details:
+                "Etapa: validação de ferramentas pelo provedor; HTTP 400; corpo omitido.",
         };
     }
     if normalized.contains("schema de ferramenta") {
@@ -477,9 +484,10 @@ pub(crate) fn classify_provider_error(error: &str) -> ProviderFailure {
     }
     if normalized.contains("http 400") {
         return ProviderFailure {
-            kind: "invalid_request",
-            message: "O provedor rejeitou a solicitação (HTTP 400). Confira o modelo e os parâmetros enviados.",
-            technical_details: "Etapa: validação da solicitação; status HTTP: 400; corpo omitido.",
+            kind: "model_or_tools",
+            message: "O modelo ou o suporte às ferramentas foi recusado. Confira o identificador e escolha um modelo compatível com ferramentas em Conectores de IA.",
+            technical_details:
+                "Etapa: validação do modelo ou das ferramentas; status HTTP: 400; corpo omitido.",
         };
     }
     if normalized.contains("resposta inv\u{00e1}lida")
@@ -490,12 +498,55 @@ pub(crate) fn classify_provider_error(error: &str) -> ProviderFailure {
     {
         return ProviderFailure { kind: "invalid_response", message: "O provedor retornou uma resposta em formato inválido. Tente novamente ou confira o modelo selecionado.", technical_details: "Etapa: leitura do payload; resposta vazia ou estrutura inválida; corpo omitido." };
     }
-    if normalized.contains("http 408") {
-        return ProviderFailure { kind: "timeout", message: "O provedor demorou para responder. Tente novamente ou escolha outro provedor conectado.", technical_details: "Etapa: resposta do provedor; status HTTP: 408." };
+    if normalized.contains("http 408")
+        || normalized.contains("tempo limite")
+        || normalized.contains("demorou para responder")
+    {
+        return ProviderFailure {
+            kind: "timeout",
+            message: "A solicitação ao provedor excedeu o tempo limite. Tente novamente ou use outro provedor conectado.",
+            technical_details: "Etapa: comunicação com o provedor; tempo limite; corpo omitido.",
+        };
+    }
+    if normalized.contains("http 429")
+        && ["cota", "saldo", "insufficient_quota", "billing", "credit"]
+            .iter()
+            .any(|marker| normalized.contains(marker))
+    {
+        return ProviderFailure {
+            kind: "quota_or_balance",
+            message: "A cota ou o saldo da conta do provedor acabou. Confira o faturamento e os limites da sua conta.",
+            technical_details: "Etapa: resposta do provedor; HTTP 429; categoria de cota ou saldo; corpo omitido.",
+        };
+    }
+    if normalized.contains("http 429") {
+        return ProviderFailure {
+            kind: "rate_limit",
+            message: "O provedor limitou a frequência das requisições. Aguarde um pouco e tente novamente.",
+            technical_details: "Etapa: resposta do provedor; HTTP 429; limite de requisições; corpo omitido.",
+        };
     }
     if let Some(status) = (500..=599).find(|status| normalized.contains(&format!("http {status}")))
     {
         return ProviderFailure { kind: "provider_unavailable", message: "O serviço do provedor está indisponível. Tente novamente ou use outro provedor conectado.", technical_details: match status { 500 => "Etapa: resposta do provedor; status HTTP: 500.", 501 => "Etapa: resposta do provedor; status HTTP: 501.", 502 => "Etapa: resposta do provedor; status HTTP: 502.", 503 => "Etapa: resposta do provedor; status HTTP: 503.", 504 => "Etapa: resposta do provedor; status HTTP: 504.", _ => "Etapa: resposta do provedor; status HTTP: 5xx." } };
+    }
+    if normalized.contains("http ") {
+        return ProviderFailure {
+            kind: "provider_response",
+            message: "O provedor recusou a solicitação. Confira o endpoint e o modelo em Conectores de IA e tente novamente.",
+            technical_details: "Etapa: resposta HTTP não categorizada; corpo omitido.",
+        };
+    }
+    if normalized.contains("não foi possível conectar")
+        || normalized.contains("falha de rede")
+        || normalized.contains("comunicação segura")
+        || normalized.contains("conexão segura")
+    {
+        return ProviderFailure {
+            kind: "network",
+            message: "Não foi possível alcançar o provedor. Verifique sua conexão e as configurações de rede e tente novamente.",
+            technical_details: "Etapa: conexão com o provedor; falha de rede; corpo omitido.",
+        };
     }
     let (kind, message, technical_details) = classify_provider_error_legacy(error);
     ProviderFailure {
@@ -654,7 +705,7 @@ mod tests {
             (
                 "O limite de uso atingiu HTTP 429",
                 "rate_limit",
-                "limitou as solicitações",
+                "Aguarde",
             ),
             (
                 "O limite diário de tokens foi atingido.",
@@ -693,7 +744,7 @@ mod tests {
             ),
             (
                 "O provedor rejeitou os par\u{00e2}metros (HTTP 400).",
-                "invalid_request",
+                "model_or_tools",
                 "400",
             ),
             (
@@ -710,7 +761,7 @@ mod tests {
         for (technical, expected_kind) in [
             (
                 "O provedor negou permissão para esta operação (HTTP 403).",
-                "permission_denied",
+                "invalid_credential",
             ),
             (
                 "O provedor recusou o nome de uma ferramenta (HTTP 400).",
@@ -729,6 +780,28 @@ mod tests {
             assert_eq!(failure.kind, expected_kind);
             assert!(!failure.technical_details.contains("private-user-content"));
         }
+
+        let quota = classify_provider_error(
+            "A cota ou o saldo da conta do provedor acabou (HTTP 429). Confira o faturamento e os limites da sua conta.",
+        );
+        assert_eq!(quota.kind, "quota_or_balance");
+        assert!(quota.message.contains("faturamento"));
+        let rate_limit = classify_provider_error(
+            "O provedor limitou a frequência das requisições (HTTP 429). Aguarde um pouco e tente novamente.",
+        );
+        assert_eq!(rate_limit.kind, "rate_limit");
+        assert!(rate_limit.message.contains("Aguarde"));
+        let unsupported = classify_provider_error(
+            "Este modelo não oferece suporte às ferramentas solicitadas. Escolha um modelo compatível com ferramentas em Conectores de IA.",
+        );
+        assert_eq!(unsupported.kind, "unsupported_tools");
+        assert!(unsupported.message.contains("Escolha outro modelo"));
+        let timeout = classify_provider_error("O provedor demorou para responder. Tente novamente.");
+        assert_eq!(timeout.kind, "timeout");
+        let network = classify_provider_error(
+            "Não foi possível conectar ao provedor. Verifique sua conexão.",
+        );
+        assert_eq!(network.kind, "network");
     }
 
     struct FailingModelBackend;
@@ -741,7 +814,7 @@ mod tests {
             _: &'a CancellationToken,
         ) -> Pin<Box<dyn Future<Output = Result<ProviderReply, String>> + Send + 'a>> {
             Box::pin(async {
-                Err("O limite de uso deste provedor foi atingido (HTTP 429).".into())
+                Err("O provedor limitou a frequência das requisições (HTTP 429). Aguarde um pouco e tente novamente.".into())
             })
         }
 
@@ -774,7 +847,7 @@ mod tests {
             |event| events.push(event),
         )
         .await;
-        assert!(result.unwrap_err().contains("limitou as solicitações"));
+        assert!(result.unwrap_err().contains("Aguarde"));
         let Some(AgentEvent::Error {
             kind,
             message,
@@ -784,7 +857,7 @@ mod tests {
             panic!("expected a typed provider error event");
         };
         assert_eq!(kind, "rate_limit");
-        assert!(message.contains("limitou as solicitações"));
+        assert!(message.contains("Aguarde"));
         assert!(technical_details.as_deref().unwrap().contains("HTTP 429"));
         assert!(!technical_details
             .as_deref()

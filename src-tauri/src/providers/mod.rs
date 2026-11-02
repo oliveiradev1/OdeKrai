@@ -27,8 +27,8 @@ mod http;
 mod llm_provider;
 use endpoint::provider_endpoint;
 use http::{
-    provider_client, provider_http_error, provider_http_error_with_body, safe_transport_error,
-    AuthRequest,
+    provider_client, provider_http_error, provider_http_error_with_body,
+    read_provider_error_body, safe_transport_error, AuthRequest,
 };
 mod perplexity;
 mod stream;
@@ -1195,11 +1195,7 @@ async fn request_provider(
     let status = response.status();
     if !status.is_success() {
         let status_code = status.as_u16();
-        let response_body = if status_code == 400 {
-            response.text().await.unwrap_or_default()
-        } else {
-            String::new()
-        };
+        let response_body = read_provider_error_body(response).await;
         if status_code == 400
             && !request_data.tools.is_empty()
             && cache_unsupported_tools_response(status.as_u16(), true, &response_body, || {
@@ -1990,7 +1986,7 @@ mod tests {
             assert!(message.contains(expected));
             assert!(!message.contains("test-secret"));
         }
-        assert!(provider_http_error(429).contains("limite de uso"));
+        assert!(provider_http_error(429).contains("frequência das requisições"));
     }
 
     #[test]
