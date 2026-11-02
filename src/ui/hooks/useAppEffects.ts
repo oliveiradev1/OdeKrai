@@ -96,7 +96,10 @@ export async function startupInvoke<T>(
   }
 }
 
-export function useAppEffects(state: ReturnType<typeof useAppState>) {
+export function useAppEffects(
+  state: ReturnType<typeof useAppState>,
+  isConversationSelected: (conversationId: string | null) => boolean,
+) {
   const {
     settings,
     setPetVisible,
@@ -165,17 +168,19 @@ export function useAppEffects(state: ReturnType<typeof useAppState>) {
       if (credential.status === 'fulfilled')
         setKeySavedForSession(credential.value || provider?.id === 'local');
       if (history.status === 'fulfilled') {
-        setConversations(history.value);
-        if (history.value[0]) {
-          setConversationId(history.value[0].id);
+        if (isConversationSelected(null)) setConversations(history.value);
+        if (history.value[0] && isConversationSelected(null)) {
+          const initialConversationId = history.value[0].id;
+          setConversationId(initialConversationId);
           try {
-            setMessages(
-              await startupInvoke<ChatMessage[]>(
-                'load_conversation',
-                { conversationId: history.value[0].id },
-                reportSystemDiagnostic,
-              ),
+            const initialMessages = await startupInvoke<ChatMessage[]>(
+              'load_conversation',
+              { conversationId: initialConversationId },
+              reportSystemDiagnostic,
             );
+            if (current && isConversationSelected(initialConversationId)) {
+              setMessages(initialMessages);
+            }
           } catch {
             // O banner persistente identifica o comando que falhou.
           }

@@ -1,6 +1,7 @@
 import {
   lazy,
   Suspense,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -8,8 +9,10 @@ import {
   type CSSProperties,
   type ComponentType,
   type FormEvent,
+  type SetStateAction,
 } from 'react';
 import { resolveConversationSelection } from '../core/chat';
+import { LatestRequestGate } from '../core/latest-request-gate';
 import { setActionCardUndoError } from '../core/agent-card';
 import { runOnceWhilePending } from '../core/single-flight';
 import type { ChatMessage } from '../core/provider-messages';
@@ -260,6 +263,7 @@ function MainApp() {
   const reviewAlertHandler = useRef<(state: IslandReviewState) => void>(() => undefined);
   const quickSuggestionsRef = useRef<ReturnType<typeof islandSuggestions>>([]);
   const activeConversationRef = useRef<string | null>(null);
+  const conversationLoadGate = useRef(new LatestRequestGate());
   const [requestedSettingsEntry, setRequestedSettingsEntry] = useState<{
     section: import('../core/navigation').SettingsSection;
     anchor: string;
@@ -350,6 +354,19 @@ function MainApp() {
     request,
     companionStateTimer,
   } = appState;
+  const selectConversation = useCallback(
+    (next: SetStateAction<string | null>) => {
+      const id = typeof next === 'function' ? next(activeConversationRef.current) : next;
+      conversationLoadGate.current.invalidate();
+      activeConversationRef.current = id;
+      setConversationId(id);
+    },
+    [setConversationId],
+  );
+  const isConversationSelected = useCallback(
+    (id: string | null) => activeConversationRef.current === id,
+    [],
+  );
   const performanceStatus = usePerformanceMode(settings.performanceMode);
   useEffect(() => {
     if (!shouldAutomaticallyCheckForUpdates(settings.checkForUpdatesAutomatically, isTauri()))
@@ -777,7 +794,7 @@ function MainApp() {
         );
       } else if (payload === 'new-chat') {
         navigate('chat');
-        setConversationId(null);
+        selectConversation(null);
         setMessages([]);
         setDraft('');
       } else if (payload === 'stop') {
@@ -803,7 +820,7 @@ function MainApp() {
       disposed = true;
       unlisten?.();
     };
-  }, [setDraft, setMessages, navigate, setSettings, setConversationId, setToast]);
+  }, [setDraft, setMessages, navigate, setSettings, selectConversation, setToast]);
 
   useEffect(() => {
     if (!isTauri()) return;
@@ -919,7 +936,7 @@ function MainApp() {
     }
   }
 
-  useAppEffects(appState);
+  useAppEffects({ ...appState, setConversationId: selectConversation }, isConversationSelected);
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let disposed = false;
@@ -1093,7 +1110,7 @@ function MainApp() {
   }
 
   function startHomeConversation() {
-    setConversationId(null);
+    selectConversation(null);
     setMessages([]);
     setAgentActionCards([]);
     setAgentEnabled(agentAvailability.available);
@@ -1226,7 +1243,7 @@ function MainApp() {
           return [{ ...existing, preview: text }, ...items.filter((item) => item.id !== activeId)];
         });
       }
-      setConversationId(activeId);
+      selectConversation(activeId);
       if (isNewConversation)
         setConversations((items) => [
           {
@@ -1558,7 +1575,8 @@ function MainApp() {
     if (busy) return;
     const selectedId = resolveConversationSelection(conversations, id);
     if (!selectedId) return;
-    setConversationId(selectedId);
+    selectConversation(selectedId);
+    const loadRequest = conversationLoadGate.current.begin();
     setConversations((items) => {
       const selected = items.find((item) => item.id === selectedId);
       return selected ? [selected, ...items.filter((item) => item.id !== selectedId)] : items;
@@ -1572,12 +1590,17 @@ function MainApp() {
       invoke<AgentActionCardData[]>('load_agent_action_cards', { conversationId: selectedId }),
     ])
       .then(([loaded, enabled, cards]) => {
+        if (!conversationLoadGate.current.isCurrent(loadRequest)) return;
         setMessages(loaded);
         setAgentEnabled(enabled);
         setAgentActionCards(cards);
         setAgentProviderSelection(null);
       })
-      .catch(() => setError('Não foi possível abrir a conversa.'));
+      .catch(() => {
+        if (conversationLoadGate.current.isCurrent(loadRequest)) {
+          setError('Não foi possível abrir a conversa.');
+        }
+      });
   }
 
   openConversationHandler.current = openConversation;
@@ -1643,7 +1666,7 @@ function MainApp() {
       await invoke('delete_conversation', { conversationId: id });
       setConversations((items) => items.filter((item) => item.id !== id));
       if (conversationId === id) {
-        setConversationId(null);
+        selectConversation(null);
         setMessages([]);
       }
     } catch {
@@ -1659,7 +1682,7 @@ function MainApp() {
     try {
       await invoke('delete_all_conversations');
       setConversations([]);
-      setConversationId(null);
+      selectConversation(null);
       setMessages([]);
       setDraft('');
       setError('');
@@ -2010,7 +2033,7 @@ function MainApp() {
               onConversation={openConversation}
               onNewConversation={() => {
                 if (!busy) {
-                  setConversationId(null);
+                  selectConversation(null);
                   setMessages([]);
                   setAgentActionCards([]);
                   setAgentEnabled(agentAvailability.available);
