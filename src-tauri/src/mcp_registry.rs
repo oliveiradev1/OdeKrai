@@ -425,7 +425,7 @@ fn looks_like_credential(value: &str) -> bool {
         .any(|part| {
             part.split_once('=')
                 .is_some_and(|(key, secret)| sensitive_argument_name(key) && !secret.is_empty())
-        })
+        });
     let url_value = value.split_once('=').map_or(value, |(_, suffix)| suffix);
     known_token || jwt || named_value || url_contains_credential(url_value)
 }
