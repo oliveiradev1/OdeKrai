@@ -32,6 +32,9 @@ export type PublicMcpCatalogEntry = {
   endpointError?: string;
   serverMismatchError?: string;
   unavailableMessage?: string;
+  whatItDoes: string;
+  whatItNeeds: string;
+  nextStep: string;
 };
 
 export type PublicMcpStatus = 'available' | 'configured' | 'connecting' | 'connected' | 'error';

@@ -58,4 +58,12 @@ describe('guarda do catálogo MCP', () => {
       'Serviço esperado ausente do catálogo: GitHub',
     );
   });
+
+  it('exige resumo legível com o que faz, o que precisa e o próximo passo', () => {
+    const incomplete = structuredClone(catalog);
+    delete incomplete[0].nextStep;
+    expect(validateMcpCatalog(incomplete).join('\n')).toContain(
+      'resumo do serviço precisa explicar o que faz, o que precisa e o próximo passo',
+    );
+  });
 });

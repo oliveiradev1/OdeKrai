@@ -25,7 +25,7 @@
       "Pull requests: Read para consultar pull requests.",
       "Conceda permissões de escrita somente se quiser usar as ferramentas de escrita correspondentes; permissões adicionais dependem da ferramenta escolhida."
     ],
-    "oauthGuidance": "O OdeKrai pedirá somente read:user para identificar a conta. A conexão do servidor fica em modo somente leitura; não são solicitadas permissões de escrita. Confira as permissões exibidas pelo GitHub antes de autorizar. Sem permissões de repositório, dados privados podem não ficar disponíveis.",
+    "oauthGuidance": "A conexão pela conta do GitHub permite somente leitura. Confira as permissões apresentadas antes de autorizar.",
     "oauthClientRequirement": "Este aplicativo ainda precisa de um OAuth App registrado pelo desenvolvedor.",
     "oauthSecretLabel": "Segredo do cliente OAuth",
     "oauthSecretHelp": "O GitHub exige o segredo para trocar o código OAuth. Ele fica no Gerenciador de Credenciais e não volta a ser exibido. Use um app dedicado ao OdeKrai; o segredo fica acessível a quem usa este dispositivo.",
@@ -42,7 +42,10 @@
       "Pull requests: Read para consultar pull requests.",
       "Conceda permissões de escrita somente se quiser usar as ferramentas de escrita correspondentes; permissões adicionais dependem da ferramenta escolhida."
     ],
-    "serverMismatchError": "O endereço salvo não corresponde ao endereço oficial deste serviço."
+    "serverMismatchError": "O endereço salvo não corresponde ao endereço oficial deste serviço.",
+    "whatItDoes": "Permite consultar projetos e arquivos, relatos de problemas e propostas de alteração no GitHub.",
+    "whatItNeeds": "Uma conta GitHub para autorizar o acesso, ou um token pessoal com acesso de leitura. A entrada pela conta precisa ser configurada pelo desenvolvedor do OdeKrai.",
+    "nextStep": "Clique em Conectar. Se a entrada pela conta ainda não estiver configurada, informe um token pessoal de leitura."
   },
   {
     "name": "Figma",
@@ -57,13 +60,14 @@
     "connectionType": ["informational"],
     "connectable": false,
     "requirements": [
-      "O servidor remoto usa https://mcp.figma.com/mcp e pede login com uma conta Figma.",
-      "A Figma permite conexão somente de clientes listados no catálogo MCP.",
-      "Para adicionar o OdeKrai, o desenvolvedor precisa entrar na lista de espera da Figma; a conexão fica indisponível até essa inclusão.",
-      "A conexão permanece indisponível até o OdeKrai ser incluído no catálogo MCP do fornecedor."
+      "É necessário entrar em uma conta Figma.",
+      "A Figma precisa liberar o OdeKrai para conectar ao serviço."
     ],
     "permissions": [],
-    "unavailableMessage": "A conexão depende da inclusão do OdeKrai no catálogo MCP do fornecedor."
+    "unavailableMessage": "A Figma ainda precisa liberar o OdeKrai para conectar.",
+    "whatItDoes": "Permite acessar recursos oferecidos pelo Figma dentro do OdeKrai.",
+    "whatItNeeds": "Uma conta Figma e a liberação do OdeKrai pela Figma. Essa liberação ainda está pendente.",
+    "nextStep": "Abra o guia oficial para acompanhar como liberar o OdeKrai; a conexão ficará disponível depois disso."
   },
   {
     "name": "Gmail",
@@ -89,7 +93,10 @@
       "Leitura de mensagens: https://www.googleapis.com/auth/gmail.readonly",
       "Criar rascunhos: https://www.googleapis.com/auth/gmail.compose (o OdeKrai não oferece ferramenta de envio)"
     ],
-    "connectable": true
+    "connectable": true,
+    "whatItDoes": "Permite ler mensagens e criar rascunhos; o OdeKrai não envia e-mails.",
+    "whatItNeeds": "Inscrição no programa de prévia do Google e configuração de acesso pelo desenvolvedor do OdeKrai.",
+    "nextStep": "Peça ao desenvolvedor para configurar o acesso e, depois, autorize sua conta Google."
   },
   {
     "name": "Google Calendar",
@@ -116,7 +123,10 @@
       "https://www.googleapis.com/auth/calendar.events.freebusy",
       "https://www.googleapis.com/auth/calendar.events.readonly"
     ],
-    "connectable": true
+    "connectable": true,
+    "whatItDoes": "Permite consultar seus calendários, eventos e horários livres.",
+    "whatItNeeds": "Inscrição no programa de prévia do Google e configuração de acesso pelo desenvolvedor do OdeKrai.",
+    "nextStep": "Peça ao desenvolvedor para configurar o acesso e, depois, autorize sua conta Google."
   },
   {
     "name": "Google Sheets",
@@ -139,7 +149,10 @@
       "Copie o identificador e o segredo. O identificador precisa estar configurado nesta versão do OdeKrai; o segredo é salvo no Gerenciador de Credenciais."
     ],
     "permissions": ["Leitura de planilhas: https://www.googleapis.com/auth/spreadsheets.readonly"],
-    "connectable": true
+    "connectable": true,
+    "whatItDoes": "Permite consultar planilhas do Google.",
+    "whatItNeeds": "Inscrição no programa de prévia do Google e configuração de acesso pelo desenvolvedor do OdeKrai.",
+    "nextStep": "Peça ao desenvolvedor para configurar o acesso e, depois, autorize sua conta Google."
   },
   {
     "name": "Lovable",
@@ -161,7 +174,10 @@
       "Configure o endpoint e verifique as opções OAuth. Se o servidor anunciar registro dinâmico, conecte sem informar client ID ou segredo manual."
     ],
     "permissions": [],
-    "connectable": true
+    "connectable": true,
+    "whatItDoes": "Permite usar as ferramentas da Lovable oferecidas pelo serviço oficial.",
+    "whatItNeeds": "Uma conta Lovable para autorizar a conexão no navegador.",
+    "nextStep": "Clique em Conectar e entre na sua conta Lovable quando o navegador abrir."
   },
   {
     "name": "Notion",
@@ -183,6 +199,9 @@
       "Volte ao OdeKrai para testar a conexão MCP."
     ],
     "permissions": [],
-    "connectable": true
+    "connectable": true,
+    "whatItDoes": "Permite usar as ferramentas do Notion oferecidas pelo serviço oficial.",
+    "whatItNeeds": "Uma conta Notion para autorizar a conexão no navegador.",
+    "nextStep": "Clique em Conectar e autorize o OdeKrai no navegador."
   }
 ]

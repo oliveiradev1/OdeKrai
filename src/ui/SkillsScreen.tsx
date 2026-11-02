@@ -701,34 +701,33 @@ function PublicMcpServiceCard({
           {isConnecting ? publicMcpStatusLabels.connecting : publicMcpStatusLabels[status]}
         </span>
       </div>
-      {service.programStatus && (
-        <p className="public-mcp-program-status">{service.programStatus}</p>
+      {service.status === 'in_preview' && (
+        <p className="public-mcp-program-status">Em fase de testes</p>
       )}
       {status === 'error' && (
         <p className="public-mcp-error" role="alert">
           {publicMcpErrorMessage(server?.status)}
         </p>
       )}
-      {(service.requirements.length > 0 || service.permissions.length > 0) && (
-        <section className="public-mcp-service-setup" aria-label="Requisitos do serviço">
-          <h4>Requisitos e permissões</h4>
-          {service.requirements.length > 0 && (
-            <ul>
-              {service.requirements.map((requirement) => (
-                <li key={requirement}>{requirement}</li>
-              ))}
-            </ul>
-          )}
-          {service.permissions.length > 0 && (
-            <ul aria-label="Permissões">
-              {service.permissions.map((permission) => (
-                <li key={permission}>{permission}</li>
-              ))}
-            </ul>
-          )}
-          {linkError && <p role="alert">{linkError}</p>}
-        </section>
-      )}
+      <section className="public-mcp-service-summary" aria-label={`Sobre ${service.name}`}>
+        <p>
+          <strong>O que faz:</strong> {service.whatItDoes}
+        </p>
+        <p>
+          <strong>O que precisa:</strong> {service.whatItNeeds}
+        </p>
+        <p>
+          <strong>Próximo passo:</strong> {service.nextStep}
+        </p>
+        <Button
+          type="button"
+          variant="secondary"
+          onClick={() => void openOfficialLink(service.officialLink)}
+        >
+          Abrir guia oficial
+        </Button>
+        {linkError && <p role="alert">{linkError}</p>}
+      </section>
       {isGitHub && (
         <div className="public-mcp-github-oauth">
           <p>{service.oauthGuidance}</p>
@@ -809,10 +808,7 @@ function PublicMcpServiceCard({
             {!oauthClientSettings.clientId.trim() &&
               (!oauthClientSettings.dynamicRegistration ||
                 registrationOptions?.dynamicRegistration === false) && (
-                <p role="status">
-                  Este serviço ainda não foi configurado para o OdeKrai. Veja a documentação no menu
-                  Ações.
-                </p>
+                <p role="status">Peça ao desenvolvedor do OdeKrai para configurar este serviço.</p>
               )}
             {oauthClientSettings.clientSecretRequired &&
               (oauthClientSettings.clientId.trim() || oauthClientSettings.clientSecretSaved) && (
@@ -881,36 +877,16 @@ function PublicMcpServiceCard({
             {oauthError && <p role="alert">{oauthError}</p>}
           </div>
         )}
-      <dl>
-        <div>
-          <dt>Endereço oficial</dt>
-          <dd>{service.endpoint}</dd>
-        </div>
-        <div>
-          <dt>Transporte</dt>
-          <dd>{service.transport}</dd>
-        </div>
-        <div>
-          <dt>Autenticação</dt>
-          <dd>{service.authentication}</dd>
-        </div>
-      </dl>
       {service.tokenCreationUrl && service.permissions.length > 0 && (
-        <div className="public-mcp-token-guide">
+        <details className="public-mcp-token-guide">
+          <summary>Ver permissões sugeridas para o token pessoal</summary>
           <p>{service.personalTokenIntro}</p>
           <ul>
             {service.personalTokenPermissions?.map((permission) => (
               <li key={permission}>{permission}</li>
             ))}
           </ul>
-          {linkError && <p role="alert">{linkError}</p>}
-        </div>
-      )}
-      {!service.connectable && (
-        <p className="public-mcp-unavailable">
-          {service.unavailableMessage}
-          Consulte os requisitos pela documentação no menu Ações.
-        </p>
+        </details>
       )}
       <div className="public-mcp-card-actions">
         {(!service.connectable ||
@@ -924,7 +900,7 @@ function PublicMcpServiceCard({
             aria-busy={isConnecting}
             onClick={() => void connectOrConfigure()}
           >
-            {isConnecting ? 'Conectando…' : 'Conectar'}
+            {isConnecting ? 'Conectando…' : service.connectable ? 'Conectar' : 'Abrir guia oficial'}
           </Button>
         )}
         <details className="public-mcp-actions-menu">
@@ -1061,18 +1037,6 @@ function PublicMcpServiceCard({
           )}
           {authentication === 'oauth' && (
             <div className="public-mcp-oauth-options">
-              {service.oauthRegistrationNote && (
-                <div className="public-mcp-oauth-guide">
-                  <p>{service.oauthRegistrationNote}</p>
-                  {service.requirements.length > 0 && (
-                    <ol>
-                      {service.requirements.map((step) => (
-                        <li key={step}>{step}</li>
-                      ))}
-                    </ol>
-                  )}
-                </div>
-              )}
               {endpoint !== service.endpoint && (
                 <label>
                   Identificador do cliente OAuth
@@ -1112,10 +1076,7 @@ function PublicMcpServiceCard({
                 {checkingOAuth ? 'Verificando…' : 'Verificar opções OAuth'}
               </Button>
               {registrationOptions?.dynamicRegistration && (
-                <p role="status">
-                  Registro dinâmico disponível. O identificador será registrado e salvo com a
-                  autorização.
-                </p>
+                <p role="status">O OdeKrai configurará a conexão durante a autorização.</p>
               )}
               {oauthError && <p role="alert">{oauthError}</p>}
               {linkError && <p role="alert">{linkError}</p>}

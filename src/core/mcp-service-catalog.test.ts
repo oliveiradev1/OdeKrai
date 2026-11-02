@@ -70,7 +70,7 @@ describe('catálogo público de servidores MCP', () => {
     expect(figma.authenticationMethods).toEqual(['oauth']);
     expect(figma.authentication).toContain('NÃO VERIFICADO');
     expect(figma.status).toBe('configuration_pending');
-    expect(figma.requirements.join(' ')).toContain('lista de espera da Figma');
+    expect(figma.requirements.join(' ')).toContain('A Figma precisa liberar o OdeKrai');
   });
 
   it('oferece Lovable somente via OAuth e confirma registro dinâmico sem client ID manual', () => {

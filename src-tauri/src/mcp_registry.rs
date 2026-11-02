@@ -32,7 +32,15 @@ fn load_public_mcp_catalog() -> Result<Vec<serde_json::Value>, String> {
                         )
                     })
             });
-        let required_strings = ["id", "name", "provider", "officialLink"]
+        let required_strings = [
+            "id",
+            "name",
+            "provider",
+            "officialLink",
+            "whatItDoes",
+            "whatItNeeds",
+            "nextStep",
+        ]
             .iter()
             .all(|key| entry.get(key).and_then(serde_json::Value::as_str).is_some());
         let required_lists = ["requirements", "permissions"]
@@ -1186,6 +1194,9 @@ mod tests {
             assert!(entry["name"].as_str().is_some());
             assert!(entry["provider"].as_str().is_some());
             assert!(entry["officialLink"].as_str().unwrap().starts_with("https://"));
+            assert!(!entry["whatItDoes"].as_str().unwrap().trim().is_empty());
+            assert!(!entry["whatItNeeds"].as_str().unwrap().trim().is_empty());
+            assert!(!entry["nextStep"].as_str().unwrap().trim().is_empty());
             assert!(entry["requirements"].is_array());
             assert!(entry["permissions"].is_array());
             assert!(entry["connectionType"].is_array());

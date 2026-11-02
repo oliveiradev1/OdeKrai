@@ -128,6 +128,15 @@ export function validateMcpCatalog(catalog) {
       errors.push(`${location}: requisitos e permissões devem ser listas.`);
     }
     if (
+      !['whatItDoes', 'whatItNeeds', 'nextStep'].every(
+        (key) => typeof service[key] === 'string' && service[key].trim(),
+      )
+    ) {
+      errors.push(
+        `${location}: resumo do serviço precisa explicar o que faz, o que precisa e o próximo passo.`,
+      );
+    }
+    if (
       !Array.isArray(service.authenticationMethods) ||
       service.authenticationMethods.length === 0
     ) {

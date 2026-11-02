@@ -2,7 +2,7 @@
 
 O catálogo de serviços públicos tem uma única fonte de dados: [`public-mcp-catalog.json`](../src-tauri/resources/public-mcp-catalog.json). O backend valida o arquivo no comando `mcp_public_catalog` e o fornece à tela Habilidades. A interface não mantém cópia dos nomes, fornecedores, links, requisitos ou permissões dos serviços.
 
-Cada item contém os campos obrigatórios `id`, `name`, `provider`, `connectionType`, `status`, `officialLink`, `requirements` e `permissions`. O arquivo também contém metadados operacionais para os fluxos existentes, como endpoint fixo, métodos de autenticação e dados de configuração OAuth. Não coloque segredos nesse catálogo.
+Cada item contém os campos obrigatórios `id`, `name`, `provider`, `connectionType`, `status`, `officialLink`, `requirements` e `permissions`. Também contém `whatItDoes`, `whatItNeeds` e `nextStep`, que formam o resumo curto exibido no cartão. O arquivo ainda contém metadados operacionais para os fluxos existentes, como endpoint fixo, métodos de autenticação e dados de configuração. Não coloque segredos nesse catálogo.
 
 ## Tipos de conexão
 
