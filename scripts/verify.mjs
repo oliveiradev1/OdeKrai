@@ -14,6 +14,12 @@ export const verificationSteps = [
   { name: 'check:version', command: npm, args: ['run', 'check:version'], cwd: ROOT },
   { name: 'check:debug-command', command: npm, args: ['run', 'check:debug-command'], cwd: ROOT },
   {
+    name: 'check:blocking-commands',
+    command: npm,
+    args: ['run', 'check:blocking-commands'],
+    cwd: ROOT,
+  },
+  {
     name: 'check:tauri-window-commands',
     command: npm,
     args: ['run', 'check:tauri-window-commands'],
@@ -35,6 +41,12 @@ export const verificationSteps = [
     cwd: TAURI_DIR,
   },
   { name: 'cargo test --lib', command: 'cargo', args: ['test', '--lib'], cwd: TAURI_DIR },
+  {
+    name: 'cargo test --test mock_window --features mock-window-tests',
+    command: 'cargo',
+    args: ['test', '--test', 'mock_window', '--features', 'mock-window-tests'],
+    cwd: TAURI_DIR,
+  },
 ];
 
 function executeStep(step) {

@@ -46,6 +46,9 @@ jobs:
       - name: Verificar codificação dos arquivos
         run: npm run check:encoding
 
+      - name: Verificar funcionalidades não permitidas na release
+        run: npm run check:release-features
+
       - name: Verificar consistência da versão
         run: npm run check:version
 
