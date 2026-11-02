@@ -125,7 +125,7 @@ A janela `pet` é criada sem decorações, sombra, botão de fechar e foco inici
 
 O comando de status distingue pasta íntegra, ausente, com estrutura incompleta, inacessível e ainda não configurada. Quando a pasta configurada não existe, Identidade e memória permite escolher uma pasta existente ou criar outra sem sobrescrever `ODEKRAI.md`; a disponibilidade do modo agente é reavaliada ao focar a janela.
 
-O Rust compõe o prompt com regras fixas, preâmbulo local de data/hora/fuso/idioma, identidade aprovada, até 1.024 caracteres de `memory/estilo.md` e o modo efetivo lido do SQLite local. `agent_run` acrescenta apenas descrições de habilidades ativas. Anthropic recebe `system`, APIs Chat Completions recebem mensagem `system` e a Perplexity Agent API recebe `instructions`; provedores sem tool calling elegível são excluídos do loop. O chat textual existente continua disponível sem pasta configurada.
+O Rust compõe o prompt com regras fixas, preâmbulo local de data/hora/fuso/idioma, identidade aprovada, até 1.024 caracteres de `memory/estilo.md` e o modo efetivo lido do SQLite local. No chat sem modo agente, o Rust acrescenta o estado das habilidades no registro local (habilitadas, desativadas ou aguardando configuração) e informa que nenhuma ferramenta foi enviada nessa resposta. No modo agente, um snapshot por execução gera tanto as ferramentas efetivamente oferecidas quanto a lista correspondente no prompt e explica os motivos das indisponíveis. Anthropic recebe `system`, APIs Chat Completions recebem mensagem `system` e a Perplexity Agent API recebe `instructions`; provedores sem tool calling elegível são excluídos do loop. O chat textual existente continua disponível sem pasta configurada.
 
 ## Motor de permissões
 

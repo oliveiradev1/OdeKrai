@@ -1349,6 +1349,9 @@ pub(crate) fn discord_skill_state(enabled: bool, configured: bool) -> DiscordSki
 const DISCORD_NOT_CONFIGURED_GUIDANCE: &str = "Estado do Discord: não configurado. Se o usuário pedir uma ação pelo Discord, explique que falta cadastrar um webhook em Privacidade e permissões > Destinos do Discord. Não diga que a ferramenta não existe.";
 const DISCORD_ACTIVE_GUIDANCE: &str = "Estado do Discord: configurado e ativo. A ferramenta discord.send é oferecida ao modelo em todas as conversas no modo agente. Cada envio exige aprovação na janela nativa, em qualquer modo de permissão; nunca diga que um envio já foi feito antes da execução aprovada.";
 const DISCORD_BLOCKED_GUIDANCE: &str = "Estado do Discord: bloqueado porque a habilidade está desativada. Não afirme que a ferramenta está disponível nem que não existe; explique que o usuário pode ativá-la em Habilidades > Mensagens.";
+const REGULAR_CHAT_MODE_GUIDANCE: &str = "Modo agente não está ativo nesta resposta: nenhuma ferramenta foi enviada ao modelo e nenhuma ação pode ser executada nesta conversa. Não diga que uma capacidade listada como habilitada não existe. Para pedidos sobre a Agenda local, explique que ela existe; se calendar.create_event estiver habilitada, diga que é preciso ativar o modo agente para criar o evento. Nunca afirme que o evento foi criado sem resultado confirmado.";
+const REGULAR_CHAT_MCP_GUIDANCE: &str = "Ferramentas MCP e outras ações externas só estão disponíveis quando aparecem explicitamente na lista de ferramentas de uma execução do modo agente. Não presuma que estejam conectadas ou configuradas.";
+const UNAVAILABLE_SKILL_GUIDANCE: &str = "Explique o motivo mostrado para a habilidade solicitada e indique onde habilitá-la ou concluir sua configuração. Não diga que uma habilidade desativada ou pendente de configuração não existe.";
 
 impl SkillOfferState {
     fn catalog_status(self) -> &'static str {
@@ -1520,7 +1523,9 @@ impl SkillTurnOffer {
             .entries
             .iter()
             .filter(|(_, state)| *state == SkillOfferState::Offered)
-            .map(|(skill, _)| format!("- {}: {}", skill.name, skill.model_description))
+            .map(|(skill, _)| {
+                format!("- {} — {}: {}", skill.id, skill.name, skill.model_description)
+            })
             .collect::<Vec<_>>();
         let mut offered = offered;
         offered.extend(
@@ -1536,9 +1541,10 @@ impl SkillTurnOffer {
                 }),
         );
         let mut context = format!(
-            "Habilidades ativas para esta execução:\n{}",
+            "Habilidades ativas e enviadas ao modelo nesta execução:\n{}",
             offered.join("\n")
         );
+        context.push_str(&self.unavailable_context());
         if self
             .mcp_entries
             .iter()
@@ -1563,6 +1569,89 @@ impl SkillTurnOffer {
         }
         context
     }
+
+    pub(crate) fn regular_chat_context(&self) -> String {
+        let enabled = self
+            .entries
+            .iter()
+            .filter(|(_, state)| *state == SkillOfferState::Offered)
+            .map(|(skill, _)| format!("- {} — {}", skill.id, skill.name))
+            .collect::<Vec<_>>();
+        let mut context = format!(
+            "Habilidades habilitadas no registro local:\n{}",
+            if enabled.is_empty() {
+                "Nenhuma habilidade habilitada.".to_string()
+            } else {
+                enabled.join("\n")
+            }
+        );
+        context.push_str(&self.unavailable_context());
+        match self.discord_state {
+            Some(DiscordSkillState::NotConfigured) => {
+                context.push_str("\n\n");
+                context.push_str(DISCORD_NOT_CONFIGURED_GUIDANCE);
+            }
+            Some(DiscordSkillState::Active) => {
+                context.push_str("\n\n");
+                context.push_str(DISCORD_ACTIVE_GUIDANCE);
+            }
+            Some(DiscordSkillState::Blocked) => {
+                context.push_str("\n\n");
+                context.push_str(DISCORD_BLOCKED_GUIDANCE);
+            }
+            None => {}
+        }
+        context.push_str("\n\n");
+        context.push_str(REGULAR_CHAT_MODE_GUIDANCE);
+        context.push_str("\n\n");
+        context.push_str(REGULAR_CHAT_MCP_GUIDANCE);
+        context
+    }
+
+    fn unavailable_context(&self) -> String {
+        let list = |state: SkillOfferState| {
+            self.entries
+                .iter()
+                .filter(|(_, entry_state)| *entry_state == state)
+                .map(|(skill, _)| format!("- {} — {}", skill.id, skill.name))
+                .collect::<Vec<_>>()
+        };
+        let mut context = String::new();
+        for (state, label) in [
+            (SkillOfferState::Disabled, "desativadas pelo usuário"),
+            (SkillOfferState::Blocked, "bloqueadas"),
+            (
+                SkillOfferState::ConfigurationPending,
+                "aguardando configuração",
+            ),
+            (SkillOfferState::Unavailable, "indisponíveis nesta versão"),
+        ] {
+            let entries = list(state);
+            if !entries.is_empty() {
+                context.push_str(&format!(
+                    "\n\nHabilidades {label}:\n{}",
+                    entries.join("\n")
+                ));
+            }
+        }
+        if !context.is_empty() {
+            context.push('\n');
+            context.push_str(UNAVAILABLE_SKILL_GUIDANCE);
+        }
+        context
+    }
+}
+
+pub(crate) fn compose_regular_chat_system_prompt(
+    base_prompt: Option<&str>,
+    offer: &SkillTurnOffer,
+) -> String {
+    let mut prompt = base_prompt.unwrap_or_default().to_string();
+    if !prompt.is_empty() {
+        prompt.push_str("\n\n");
+    }
+    prompt.push_str(&offer.regular_chat_context());
+    prompt
 }
 
 pub(crate) fn skill_turn_offer(app: &tauri::AppHandle) -> Result<SkillTurnOffer, String> {
@@ -2838,6 +2927,63 @@ mod tests {
             let action = parse_action(id, &params).unwrap();
             assert_eq!(action_id(&action), id);
         }
+    }
+
+    #[test]
+    fn regular_chat_prompt_matches_the_skill_registry_and_explains_mode_and_status() {
+        let enabled = std::collections::HashSet::from([
+            "calendar.create_event".to_string(),
+            "files.read".to_string(),
+            "discord.send".to_string(),
+        ]);
+        let offer = SkillTurnOffer::from_registry(registry(), &enabled, false);
+        let prompt = compose_regular_chat_system_prompt(Some("regras locais"), &offer);
+        let enabled_section = prompt
+            .split("Habilidades habilitadas no registro local:\n")
+            .nth(1)
+            .unwrap()
+            .split("\n\n")
+            .next()
+            .unwrap();
+        let prompt_skill_ids = enabled_section
+            .lines()
+            .filter_map(|line| line.strip_prefix("- "))
+            .filter_map(|line| line.split_once(" — ").map(|(id, _)| id))
+            .collect::<Vec<_>>();
+        let expected_skill_ids = offer
+            .offered_skills()
+            .iter()
+            .map(|skill| skill.id)
+            .collect::<Vec<_>>();
+        assert_eq!(prompt_skill_ids, expected_skill_ids);
+        assert!(prompt_skill_ids.contains(&"calendar.create_event"));
+        assert!(prompt.contains("Modo agente não está ativo nesta resposta"));
+        assert!(prompt.contains("explique que ela existe"));
+        assert!(prompt.contains("Habilidades desativadas pelo usuário"));
+        assert!(prompt.contains("calendar.update_event"));
+        assert!(prompt.contains("Habilidades aguardando configuração"));
+        assert!(prompt.contains("discord.send"));
+        assert!(prompt.contains(DISCORD_NOT_CONFIGURED_GUIDANCE));
+
+        let agent_prompt = offer.system_context();
+        let active_section = agent_prompt
+            .split("Habilidades ativas e enviadas ao modelo nesta execução:\n")
+            .nth(1)
+            .unwrap()
+            .split("\n\n")
+            .next()
+            .unwrap();
+        let prompt_tool_ids = active_section
+            .lines()
+            .filter_map(|line| line.strip_prefix("- "))
+            .filter_map(|line| line.split_once(" — ").map(|(id, _)| id))
+            .collect::<Vec<_>>();
+        let agent_tools = offer.model_tools();
+        let offered_tool_ids = agent_tools
+            .iter()
+            .map(|tool| tool.name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(prompt_tool_ids, offered_tool_ids);
     }
 
     #[test]

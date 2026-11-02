@@ -742,6 +742,8 @@ pub async fn send_provider_message(
     if security.is_halted() {
         return Err("O OdeKrai está parado pelo kill switch.".into());
     }
+    let mut messages = messages;
+    append_regular_chat_system_context(&app, &mut messages)?;
     send_message_inner(
         app,
         state,
@@ -780,19 +782,11 @@ pub async fn stream_provider_message(
     if security.is_halted() {
         return Err("O OdeKrai está parado pelo kill switch.".into());
     }
+    if !tools.is_empty() {
+        return Err("Ferramentas só podem ser fornecidas pelo registro do modo agente.".into());
+    }
     let mut messages = messages;
-    if messages.iter().any(|message| message.role == "system") {
-        return Err("A mensagem de sistema só pode ser criada pelo aplicativo.".into());
-    }
-    if let Some(prompt) = super::agent_home::system_prompt(&app)? {
-        messages.insert(
-            0,
-            Message {
-                role: "system".into(),
-                blocks: vec![Block::Text { text: prompt }],
-            },
-        );
-    }
+    append_regular_chat_system_context(&app, &mut messages)?;
     send_message_inner(
         app,
         state,
@@ -800,7 +794,7 @@ pub async fn stream_provider_message(
         base_url,
         model,
         messages,
-        tools,
+        Vec::new(),
         fallbacks,
         daily_token_limit,
         request_id,
@@ -808,6 +802,28 @@ pub async fn stream_provider_message(
         security,
     )
     .await
+}
+
+fn append_regular_chat_system_context(
+    app: &tauri::AppHandle,
+    messages: &mut Vec<Message>,
+) -> Result<(), String> {
+    if messages.iter().any(|message| message.role == "system") {
+        return Err("A mensagem de sistema só pode ser criada pelo aplicativo.".into());
+    }
+    let skill_offer = crate::security::skills::skill_turn_offer(app)?;
+    let prompt = crate::security::skills::compose_regular_chat_system_prompt(
+        super::agent_home::system_prompt(app)?.as_deref(),
+        &skill_offer,
+    );
+    messages.insert(
+        0,
+        Message {
+            role: "system".into(),
+            blocks: vec![Block::Text { text: prompt }],
+        },
+    );
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
