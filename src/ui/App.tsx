@@ -240,6 +240,7 @@ function MainApp() {
     return () => window.clearTimeout(timer);
   }, [undoToast]);
   const [pendingApprovalCount, setPendingApprovalCount] = useState(0);
+  const [pendingApprovalCountError, setPendingApprovalCountError] = useState('');
   const [activityPanelOpen, setActivityPanelOpen] = useState(false);
   const activityPanelTriggerRef = useRef<HTMLButtonElement>(null);
   const [activityAuditRecords, setActivityAuditRecords] = useState<AuditEntry[]>([]);
@@ -299,7 +300,7 @@ function MainApp() {
     diagnostics,
     dismissDiagnostic,
     dismissDiagnostics,
-    reportDiagnostic,
+    reportSystemDiagnostic,
     chatMode,
     setChatMode,
     request,
@@ -366,7 +367,10 @@ function MainApp() {
   const emitCompanionState = (payload: { type: 'activity'; state: string; message: string }) => {
     setAssistantPetState(petAnimationForAssistantActivity(payload.state));
     void emit('companion-state', payload).catch(() =>
-      reportDiagnostic('companion-state', 'Não foi possível atualizar o estado visual do pet.'),
+      reportSystemDiagnostic(
+        'companion-state',
+        'Não foi possível atualizar o estado visual do pet.',
+      ),
     );
   };
   const usedProvider = usedProviderId
@@ -774,14 +778,16 @@ function MainApp() {
     const refresh = () => {
       void invoke<number>('get_pending_approval_count')
         .then((count) => {
-          if (!disposed) setPendingApprovalCount(count);
+          if (!disposed) {
+            setPendingApprovalCount(count);
+            setPendingApprovalCountError('');
+          }
         })
-        .catch(() =>
-          reportDiagnostic(
-            'get_pending_approval_count',
-            'Não foi possível atualizar a contagem de aprovações pendentes.',
-          ),
-        );
+        .catch(() => {
+          if (disposed) return;
+          setPendingApprovalCount(0);
+          setPendingApprovalCountError('Não foi possível atualizar as aprovações pendentes.');
+        });
     };
     void listen('approval-updated', refresh)
       .then((stop) => {
@@ -820,7 +826,7 @@ function MainApp() {
         }
       })
       .catch(() =>
-        reportDiagnostic(
+        reportSystemDiagnostic(
           'pet-security-state',
           'Não foi possível acompanhar a parada de emergência do mascote.',
         ),
@@ -830,7 +836,7 @@ function MainApp() {
       unlistenHalted?.();
       unlistenResumed?.();
     };
-  }, [reportDiagnostic]);
+  }, [reportSystemDiagnostic]);
 
   useEffect(() => {
     if (permissionIndicator?.halted) setAssistantPetState('paused');
@@ -2175,7 +2181,7 @@ function MainApp() {
                   initialNickname={profile.nickname}
                   profileValue={profile}
                   onProfileChange={setProfile}
-                  onStatus={() => reportDiagnostic('agent_home_status', '')}
+                  onStatus={() => reportSystemDiagnostic('agent_home_status', '')}
                 />
               )}
             </div>
@@ -2186,6 +2192,7 @@ function MainApp() {
         open={activityPanelOpen}
         triggerRef={activityPanelTriggerRef}
         pendingApprovalCount={pendingApprovalCount}
+        pendingApprovalError={pendingApprovalCountError}
         running={agentRunning}
         awaitingApproval={agentAwaitingApproval}
         currentAction={currentActivityAction}
@@ -2317,7 +2324,7 @@ function MainApp() {
         onDeleteAllHistory={deleteAllConversations}
         onOpenPage={(page) => navigate(page)}
         onOpenActivityFullPage={() => openLegacyScreen('activity')}
-        onAgentStatus={() => reportDiagnostic('agent_home_status', '')}
+        onAgentStatus={() => reportSystemDiagnostic('agent_home_status', '')}
         releaseNotesUrl={currentReleaseNotesUrl}
         onOpenReleaseNotes={() => void openResponseLink(currentReleaseNotesUrl)}
         onUpdateFound={(result) =>

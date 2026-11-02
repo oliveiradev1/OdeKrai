@@ -116,6 +116,20 @@ describe('painel lateral de atividade', () => {
     expect(markup).not.toMatch(/aprovar|negar/i);
   });
 
+  it('mostra uma falha ao consultar aprovações dentro da seção Aguardando você', () => {
+    const markup = panel({
+      pendingApprovalCount: 0,
+      pendingApprovalError: 'Falha ao consultar aprovações.',
+    });
+    const waitingSection = markup.slice(
+      markup.indexOf('Aguardando você'),
+      markup.indexOf('Agendado'),
+    );
+    expect(waitingSection).toContain('role="alert"');
+    expect(waitingSection).toContain('Falha ao consultar aprovações.');
+    expect(waitingSection).not.toContain('Nenhuma aprovação pendente');
+  });
+
   it('não renderiza o painel fechado e mantém o contador acessível no gatilho', () => {
     expect(panel({ open: false })).toBe('');
     const trigger = renderToStaticMarkup(

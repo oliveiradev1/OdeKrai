@@ -109,6 +109,7 @@ function auditStateLabel(status: string, decision: string) {
 export function ActivitySidePanel({
   open = true,
   pendingApprovalCount,
+  pendingApprovalError = '',
   running,
   awaitingApproval,
   currentAction,
@@ -135,6 +136,7 @@ export function ActivitySidePanel({
 }: {
   open?: boolean;
   pendingApprovalCount: number;
+  pendingApprovalError?: string;
   running: boolean;
   awaitingApproval: boolean;
   currentAction: AgentActionCardData | null;
@@ -275,7 +277,11 @@ export function ActivitySidePanel({
 
           <section aria-labelledby="activity-awaiting-title">
             <h3 id="activity-awaiting-title">Aguardando você</h3>
-            {pendingApprovalCount > 0 ? (
+            {pendingApprovalError ? (
+              <p className="activity-panel-empty" role="alert">
+                {pendingApprovalError}
+              </p>
+            ) : pendingApprovalCount > 0 ? (
               <div className="activity-panel-card">
                 <p>
                   {pendingApprovalCount}{' '}

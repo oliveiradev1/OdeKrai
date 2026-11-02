@@ -45,7 +45,7 @@ export function useAppState() {
   const request = useRef<string | null>(null);
   const companionStateTimer = useRef<number | undefined>(undefined);
   const appliedCloseBehavior = useRef<string | null>(null);
-  const reportDiagnostic = useCallback((command: string, message: string, details = '') => {
+  const reportSystemDiagnostic = useCallback((command: string, message: string, details = '') => {
     setDiagnostics((items) => upsertDiagnostic(items, command, message, details));
   }, []);
   const dismissDiagnostics = useCallback(() => setDiagnostics([]), []);
@@ -92,7 +92,7 @@ export function useAppState() {
         );
       })
       .catch(() => {
-        reportDiagnostic(
+        reportSystemDiagnostic(
           'set_close_behavior',
           'Não foi possível atualizar o comportamento ao fechar.',
         );
@@ -108,7 +108,7 @@ export function useAppState() {
           console.warn('[OdeKrai diagnóstico] Não foi possível persistir um evento local.'),
         );
       });
-  }, [settings.closeBehavior, reportDiagnostic]);
+  }, [settings.closeBehavior, reportSystemDiagnostic]);
 
   useEffect(() => {
     const refreshSettings = () => setSettings(loadSettings());
@@ -154,7 +154,7 @@ export function useAppState() {
     toast,
     setToast,
     diagnostics,
-    reportDiagnostic,
+    reportSystemDiagnostic,
     dismissDiagnostics,
     dismissDiagnostic,
     chatMode,
