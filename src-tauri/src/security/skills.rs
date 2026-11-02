@@ -143,10 +143,6 @@ pub enum SkillFamily {
     Computador,
     Codigo,
     Nuvem,
-    #[expect(
-        dead_code,
-        reason = "família reservada para habilidades MCP recebidas dinamicamente"
-    )]
     IntegracoesMcp,
 }
 
@@ -1813,19 +1809,20 @@ fn skill_category(id: &str) -> &'static str {
     }
 }
 
-fn skill_family_key(family: SkillFamily) -> &'static str {
-    match family {
-        SkillFamily::Arquivos => "arquivos",
-        SkillFamily::AbrirAplicativos => "abrir_aplicativos",
-        SkillFamily::AgendaLembretes => "agenda_lembretes",
-        SkillFamily::Google => "google",
-        SkillFamily::PlanilhasDocumentos => "planilhas_documentos",
-        SkillFamily::Mensagens => "mensagens",
-        SkillFamily::Web => "web",
-        SkillFamily::Computador => "computador",
-        SkillFamily::Codigo => "codigo",
-        SkillFamily::Nuvem => "nuvem",
-        SkillFamily::IntegracoesMcp => "integracoes_mcp",
+fn skill_group_key(skill: &Skill) -> &'static str {
+    match skill.id {
+        "app.launch" | "system.info" | "system.open_path" | "system.reveal_in_folder" => "sistema",
+        _ => match skill.family {
+            SkillFamily::Arquivos => "arquivos",
+            SkillFamily::AbrirAplicativos => "sistema",
+            SkillFamily::AgendaLembretes => "agenda_lembretes",
+            SkillFamily::Google | SkillFamily::Nuvem | SkillFamily::IntegracoesMcp => "integracoes",
+            SkillFamily::PlanilhasDocumentos => "planilhas_documentos",
+            SkillFamily::Mensagens => "mensagens",
+            SkillFamily::Web => "web",
+            SkillFamily::Computador => "computador",
+            SkillFamily::Codigo => "codigo",
+        },
     }
 }
 
@@ -1849,9 +1846,7 @@ pub(crate) fn seed_default_skill_settings(db: &rusqlite::Connection) -> rusqlite
 fn group_skill_ids(category: &str, discord_configured: bool, enabled: bool) -> Vec<&'static str> {
     registry()
         .into_iter()
-        .filter(|skill| {
-            skill_category(skill.id) == category || skill_family_key(skill.family) == category
-        })
+        .filter(|skill| skill_category(skill.id) == category || skill_group_key(skill) == category)
         .filter(|skill| skill_available(skill.id))
         .filter(|skill| skill.id != "discord.send" || discord_configured || !enabled)
         .map(|skill| skill.id)
@@ -1869,7 +1864,7 @@ pub fn set_skill_group_enabled(
     if !matches!(category.as_str(), "local" | "integration")
         && !registry()
             .iter()
-            .any(|skill| skill_family_key(skill.family) == category)
+            .any(|skill| skill_group_key(skill) == category)
     {
         return Err("Grupo de habilidades desconhecido.".into());
     }
@@ -2569,7 +2564,11 @@ mod tests {
             };
             assert_eq!(skill.risk(&json!({"vm_name":"VM"})).unwrap(), expected);
         }
-        assert!(skill_family_key(SkillFamily::Nuvem) == "nuvem");
+        let integrations = registry()
+            .into_iter()
+            .find(|skill| skill.id == "shardcloud.vm_list")
+            .expect("habilidade de nuvem registrada");
+        assert_eq!(skill_group_key(&integrations), "integracoes");
     }
 
     #[test]
@@ -2853,6 +2852,35 @@ mod tests {
                 configuration_required: true,
             }]
         );
+    }
+
+    #[test]
+    fn visible_skill_groups_match_the_nine_catalog_families() {
+        let skills = registry();
+        let groups: std::collections::HashSet<_> =
+            skills.iter().map(skill_group_key).collect();
+        assert_eq!(
+            groups,
+            std::collections::HashSet::from([
+                "arquivos",
+                "sistema",
+                "agenda_lembretes",
+                "planilhas_documentos",
+                "mensagens",
+                "web",
+                "computador",
+                "codigo",
+                "integracoes",
+            ])
+        );
+
+        let system_ids = group_skill_ids("sistema", true, true);
+        assert!(system_ids.contains(&"app.launch"));
+        assert!(system_ids.contains(&"system.info"));
+        let integrations = group_skill_ids("integracoes", true, true);
+        assert!(integrations.contains(&"google.calendar.list_events"));
+        assert!(integrations.contains(&"shardcloud.vm_list"));
+        assert!(integrations.contains(&"hostinger.vps_start"));
     }
 
     #[test]

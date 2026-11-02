@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   familyEnableTarget,
+  displaySkillFamily,
   filterSkills,
   groupSkillFamilies,
   nextSkillsTab,
@@ -101,6 +102,18 @@ describe('catálogo de habilidades', () => {
       },
     ]);
     expect(withUnavailable[0].highestRisk).toBe('escrita_reversivel');
+  });
+
+  it('consolida serviços externos e habilidades do sistema nas famílias visíveis do produto', () => {
+    expect(displaySkillFamily({ id: 'app.launch', family: 'abrir_aplicativos' })).toBe('sistema');
+    expect(displaySkillFamily({ id: 'system.info', family: 'computador' })).toBe('sistema');
+    expect(displaySkillFamily({ id: 'google.calendar.list_events', family: 'google' })).toBe(
+      'integracoes',
+    );
+    expect(displaySkillFamily({ id: 'shardcloud.vm_list', family: 'nuvem' })).toBe('integracoes');
+    expect(displaySkillFamily({ id: 'mcp.server.tool', family: 'integracoes_mcp' })).toBe(
+      'integracoes',
+    );
   });
 
   it('procura por nome, descrição, exemplo e família sem diferenciar caixa', () => {

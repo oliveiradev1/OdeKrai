@@ -7,6 +7,13 @@ estão disponíveis. As habilidades e decisões permanecem no registro e no moto
 
 O catálogo de provedores em `src-tauri/resources/provider-catalog.json` alimenta os metadados do frontend e do Rust. O Rust valida host e caminho, acessa credenciais e implementa listagem documentada de modelos. As preferências guardam configurações por `providerId`; perfil e histórico usam SQLite local. Avatar é processado no Rust e servido como data URL apenas para a interface principal.
 
+A aba Pessoal de Habilidades consolida o registro em nove grupos visíveis: Arquivos, Sistema,
+Agenda e lembretes, Planilhas e documentos, Mensagens, Web, Computador, Código e Integrações.
+Integrações reúne Google Calendar e provedores de nuvem; Sistema reúne informações do computador e
+abertura de aplicativos. O interruptor de grupo é aplicado no Rust
+em uma única operação, enquanto os interruptores individuais ficam na tela de detalhes da família.
+A busca considera nome, descrição, identificador, família e exemplos da habilidade.
+
 ## ShardCloud com ações limitadas e aprovação
 
 `src-tauri/src/shardcloud.rs` mantém a base HTTPS fixa, usa `Authorization: Bearer`, não segue

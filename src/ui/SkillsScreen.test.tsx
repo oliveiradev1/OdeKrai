@@ -417,7 +417,7 @@ describe('catálogo de habilidades', () => {
     expect(markup).toContain('Procurar habilidades');
     expect(markup).toContain('Computador');
     expect(markup).toContain('Computador');
-    expect(markup).not.toContain('Integrações MCP');
+    expect(markup).not.toContain('Integrações');
     expect(markup).not.toContain('Conexão com o Google');
     expect(markup).not.toContain('Captura de tela: indisponível');
     expect(markup).toContain('Abrir Privacidade e permissões');
@@ -509,7 +509,7 @@ describe('catálogo de habilidades', () => {
     const details = renderToStaticMarkup(
       <SkillsCatalogView
         skills={skills}
-        initialFamily="integracoes_mcp"
+        initialFamily="integracoes"
         onFamilyToggle={noOperation}
         onSkillToggle={noOperation}
         onOverrideToggle={noOperation}
@@ -519,7 +519,7 @@ describe('catálogo de habilidades', () => {
 
     expect(catalog.match(/class="skills-family-card"/g)).toHaveLength(4);
     expect(catalog).toContain('Risco: Destrutivo ou financeiro');
-    expect(catalog).toContain('Integrações MCP');
+    expect(catalog).toContain('Integrações');
     expect(details).toContain(longName);
     expect(details).toContain(longDescription);
     expect(details).toContain('Exemplo de solicitação longo');
@@ -930,7 +930,7 @@ describe('catálogo de habilidades', () => {
     const missingAppMarkup = renderToStaticMarkup(
       <SkillsCatalogView
         skills={[appSkill]}
-        initialFamily="abrir_aplicativos"
+        initialFamily="sistema"
         prerequisites={{ folderAvailable: true, appCount: 0, googleConnected: null }}
         onOpenPrivacy={noOperation}
         onFamilyToggle={noOperation}
@@ -975,7 +975,7 @@ describe('catálogo de habilidades', () => {
     const markup = renderToStaticMarkup(
       <SkillsCatalogView
         skills={[googleSkill]}
-        initialFamily="google"
+        initialFamily="integracoes"
         googleConnection={<section>Conexão com o Google</section>}
         onFamilyToggle={noOperation}
         onSkillToggle={noOperation}

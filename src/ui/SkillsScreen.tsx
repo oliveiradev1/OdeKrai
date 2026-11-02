@@ -383,8 +383,8 @@ export function SkillsCatalogView({
                     onOpenOfficialLink={openOfficialLink}
                     onTestPublicMcp={onTestPublicMcp}
                     googleConnection={
-                      selected.family === 'google' &&
-                      skills.some((skill) => skill.id.startsWith('google.calendar.'))
+                      selected.family === 'integracoes' &&
+                      selected.skills.some((skill) => skill.id.startsWith('google.calendar.'))
                         ? googleConnection
                         : undefined
                     }
@@ -404,7 +404,6 @@ export function SkillsCatalogView({
                     key={family.family}
                     family={family}
                     busy={busy}
-                    prerequisites={prerequisites}
                     onExpand={(trigger) => showFamily(family.family, trigger)}
                     onToggle={(enabled) => onFamilyToggle(family.family, enabled)}
                   />
@@ -1567,13 +1566,11 @@ function GitHubTokenManager({
 function SkillFamilyCard({
   family,
   busy,
-  prerequisites,
   onExpand,
   onToggle,
 }: {
   family: CatalogFamily;
   busy: boolean;
-  prerequisites: SkillPrerequisites;
   onExpand: (trigger: HTMLElement) => void;
   onToggle: (enabled: boolean) => void;
 }) {
@@ -1615,13 +1612,7 @@ function SkillFamilyCard({
         <Toggle
           checked={allEnabled}
           label={`${allEnabled ? 'Desativar' : 'Ativar'} todas as habilidades de ${family.name}`}
-          disabled={
-            busy ||
-            target === undefined ||
-            (target &&
-              family.skills.some((skill) => skill.id.startsWith('google.calendar.')) &&
-              prerequisites.googleConnected !== true)
-          }
+          disabled={busy || target === undefined}
           aria-describedby={`skills-family-${family.family}-description`}
           onClick={() => target !== undefined && onToggle(target)}
         />
@@ -1698,7 +1689,9 @@ function SkillFamilyDetails({
   );
   const familyServices = [
     ...publicServices.filter(
-      (service) => family.family === 'google' && service.provider === 'Google Workspace',
+      (service) =>
+        family.skills.some((skill) => skill.id.startsWith('google.calendar.')) &&
+        service.provider === 'Google Workspace',
     ),
     ...familyServers.flatMap((server) => {
       const service = publicServices.find(
