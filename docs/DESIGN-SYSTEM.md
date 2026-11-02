@@ -48,6 +48,10 @@ Com `data-performance="on"`, o CSS remove sombras, filtros, imagens de fundo e a
 
 ## Teclado e movimento
 
+### Detalhes de habilidades e serviços públicos
+
+O botão Gerenciar de uma família e o cartão de um serviço público abrem uma página de detalhes dentro da tela Habilidades. A página usa cabeçalho com ícone, nome, fornecedor e descrição; organiza Aplicativos, Habilidades e Informações; e mantém as ações de conexão ou gerenciamento no contexto do item. O teste de conexão fica disponível quando há um servidor cadastrado; sem servidor, a página explica por que o teste está desabilitado. Links oficiais usam o comando validado para abrir o navegador do sistema. Os controles de abertura e retorno são botões nativos do React, e o foco vai ao título ao entrar e volta ao acionador ao retornar. A busca e a aba ficam no estado da tela enquanto os detalhes estão abertos.
+
 No diálogo modal, o foco inicial vai para a pesquisa de configurações; a ordem de Tab segue o DOM, inclui o botão de fechar e os controles da seção, e permanece dentro do diálogo. `Escape` fecha e devolve o foco ao acionador. Em largura abaixo de 800 px, a navegação por seções usa uma lista suspensa rotulada. Controles interativos mantêm indicação `:focus-visible`.
 
 As animações devem respeitar `prefers-reduced-motion`; o CSS global desliga animações e transições nessa preferência. O modo `data-performance="on"` aplica as reduções visuais e remove os efeitos de maior custo listados acima. O Início usa o campo compartilhado: Enter envia, Shift+Enter insere linha, e as sugestões só preenchem o campo para revisão. A paleta usa combobox/listbox e `aria-activedescendant`; setas mudam a opção ativa, Enter executa e Escape fecha o modal. O painel de Atividade limita Tab/Shift+Tab, Escape fecha e o foco volta ao acionador.

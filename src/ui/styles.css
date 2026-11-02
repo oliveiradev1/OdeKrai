@@ -2233,6 +2233,9 @@ select:focus-visible {
   gap: var(--space-3);
   padding: var(--space-4);
 }
+.public-mcp-card[hidden] {
+  display: none;
+}
 .public-mcp-card-heading {
   display: flex;
   align-items: flex-start;
@@ -2242,6 +2245,11 @@ select:focus-visible {
 .public-mcp-card-heading h3 {
   margin: 0;
   font-size: var(--font-size-14);
+}
+.public-mcp-title-details {
+  justify-self: start;
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--font-size-11);
 }
 .public-mcp-card-heading p,
 .public-mcp-connected {
@@ -2267,6 +2275,117 @@ select:focus-visible {
   margin: 0;
   color: var(--color-text-secondary);
   font-size: var(--font-size-12);
+}
+.public-mcp-detail-page {
+  grid-column: 1 / -1;
+  padding: var(--space-4);
+}
+.public-mcp-detail-heading {
+  align-items: center;
+}
+.public-mcp-detail-heading > div {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-3);
+}
+.public-mcp-detail-heading h2 {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+}
+.public-mcp-detail-heading h2:focus-visible {
+  outline: 2px solid var(--color-accent-soft);
+  outline-offset: 3px;
+}
+.public-mcp-detail-eyebrow {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-12);
+  font-weight: 500;
+}
+.public-mcp-detail-icon {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-raised);
+}
+.public-mcp-detail-description {
+  margin: 0;
+  color: var(--color-text-secondary);
+}
+.public-mcp-detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+.public-mcp-detail-actions p {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-12);
+}
+.public-mcp-detail-section,
+.skills-detail-applications,
+.skills-detail-information {
+  display: grid;
+  gap: var(--space-2);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--color-border-subtle);
+}
+.public-mcp-detail-section h3,
+.skills-detail-applications h3,
+.skills-detail-information h3 {
+  margin: 0;
+  font-size: var(--font-size-14);
+}
+.public-mcp-detail-section ul,
+.skills-detail-applications ul,
+.skills-detail-information ul {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding-left: var(--space-4);
+  color: var(--color-text-secondary);
+}
+.public-mcp-detail-section dl {
+  display: grid;
+  gap: var(--space-3);
+  margin: 0;
+}
+.public-mcp-detail-section dl > div {
+  display: grid;
+  grid-template-columns: minmax(120px, 180px) minmax(0, 1fr);
+  gap: var(--space-3);
+}
+.public-mcp-detail-section dt,
+.skills-detail-information dt {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-12);
+}
+.public-mcp-detail-section dd,
+.skills-detail-information dd {
+  min-width: 0;
+  margin: 0;
+}
+.skills-details-provider {
+  margin: 0 0 var(--space-1);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-12);
+}
+.skills-detail-information {
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--color-border-subtle);
+}
+.skills-detail-information .skills-details-metadata {
+  display: grid;
+}
+.skills-detail-information .skills-details-metadata > div {
+  grid-template-columns: minmax(120px, 180px) minmax(0, 1fr);
+  align-items: start;
 }
 .public-mcp-status {
   border: 1px solid var(--color-border-subtle);
@@ -2433,6 +2552,18 @@ select:focus-visible {
   outline-offset: 2px;
 }
 @media (max-width: 760px) {
+  .public-mcp-detail-section dl > div,
+  .skills-detail-information .skills-details-metadata > div {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-1);
+  }
+  .public-mcp-detail-heading > div {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .public-mcp-detail-icon {
+    width: 38px;
+    height: 38px;
+  }
   .skills-family-grid {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -2537,7 +2668,14 @@ select:focus-visible {
 .skills-details-primary-action {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: var(--space-3);
+}
+.skills-details-primary-action p {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-12);
 }
 .skills-prerequisites {
   display: grid;

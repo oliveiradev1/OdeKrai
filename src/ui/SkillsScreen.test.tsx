@@ -869,7 +869,7 @@ describe('catálogo de habilidades', () => {
     );
     expect(markup).toContain('aria-label="Abrir detalhes de Arquivos"');
     expect(markup).toContain('Voltar às habilidades');
-    expect(markup).toContain('Habilidades desta família');
+    expect(markup).toContain('>Habilidades</h3>');
     expect(markup).toContain('Categoria');
     expect(markup).toContain('Origem: OdeKrai');
     expect(markup).toContain('Leia o relatório da pasta permitida.');
@@ -939,7 +939,7 @@ describe('catálogo de habilidades', () => {
       />,
     );
     expect(missingAppMarkup).toContain('nenhum aplicativo cadastrado');
-    expect(missingAppMarkup).toContain('Cadastrar aplicativo');
+    expect(missingAppMarkup).toContain('Conectar');
     expect(missingAppMarkup).toContain('Inicie o aplicativo cadastrado.');
     expect(missingAppMarkup).not.toContain('allowed-folder-list');
   });

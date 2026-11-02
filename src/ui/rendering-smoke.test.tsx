@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { defaultSettings } from '../core/settings';
 import { SETTINGS_MENU } from '../core/settings-navigation';
+import type { PublicMcpCatalogEntry } from '../core/mcp-service-catalog';
 import { Overview } from './screens/Overview';
 import { ConversationsScreen } from './screens/Conversations';
 import { SkillsCatalogView, SkillsScreen } from './SkillsScreen';
@@ -14,6 +15,7 @@ import { SettingsModal } from './SettingsModal';
 import { PermissionsScreen } from './screens/Permissions';
 import { ActivityScreen } from './screens/Activity';
 import publicCatalogFixture from '../../src-tauri/resources/public-mcp-catalog.json';
+import type { CatalogSkill } from '../core/skills-catalog';
 
 const tauri = vi.hoisted(() => ({
   invoke: vi.fn(),
@@ -38,6 +40,23 @@ vi.mock('@tauri-apps/plugin-dialog', () => ({ open: vi.fn(async () => null) }));
 
 const noop = () => undefined;
 const profile = { displayName: 'Pessoa', nickname: '', avatarDataUrl: null };
+const filesSkillFixture: CatalogSkill = {
+  id: 'files.read',
+  name: 'Ler arquivo',
+  description: 'Lê arquivos dentro da pasta de trabalho permitida.',
+  risk: 'leitura',
+  resultTrust: 'local',
+  enabled: true,
+  morePermissive: false,
+  fixedBlocked: false,
+  category: 'local',
+  status: 'installed',
+  configurationRequired: false,
+  family: 'arquivos',
+  icon: 'folder',
+  examples: ['Leia um arquivo.'],
+  origin: { kind: 'builtin' },
+};
 
 function overviewProps(overrides: Partial<ComponentProps<typeof Overview>> = {}) {
   return {
@@ -249,6 +268,110 @@ describe('renderização das telas principais', () => {
       expect(tauri.invoke).toHaveBeenCalledWith('open_external_link', {
         url: publicCatalogFixture[0].officialLink,
       }),
+    );
+  });
+
+  it('detalhes de família mostram as seções e voltar preserva busca e aba', async () => {
+    render(
+      <SkillsCatalogView
+        skills={[filesSkillFixture]}
+        initialTab="pessoal"
+        onFamilyToggle={noop}
+        onSkillToggle={noop}
+        onOverrideToggle={noop}
+        onOpenPrivacy={noop}
+      />,
+    );
+
+    const search = screen.getByRole('searchbox', { name: 'Procurar habilidades' });
+    fireEvent.change(search, { target: { value: 'arquivo' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Gerenciar Arquivos' }));
+
+    expect(await screen.findByRole('heading', { name: 'Arquivos', level: 2 })).toBeTruthy();
+    expect(document.activeElement?.textContent).toBe('Arquivos');
+    expect(screen.getByRole('heading', { name: 'Aplicativos' })).toBeTruthy();
+    expect(screen.getByText('Nenhum serviço externo associado a esta família.')).toBeTruthy();
+    expect(screen.getAllByRole('heading', { name: 'Habilidades' })).toHaveLength(2);
+    expect(screen.getByText('Lê arquivos dentro da pasta de trabalho permitida.')).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Informações' })).toBeTruthy();
+    expect(screen.getByText('Permissões pedidas')).toBeTruthy();
+    expect(screen.getByText('Leitura de dados')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Gerenciar' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Testar' }).hasAttribute('disabled')).toBe(true);
+    expect(screen.getByText('Esta família não tem um serviço conectado para testar.')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Voltar às habilidades' }));
+    expect(
+      (screen.getByRole('searchbox', { name: 'Procurar habilidades' }) as HTMLInputElement).value,
+    ).toBe('arquivo');
+    expect(screen.getByRole('tab', { name: 'Pessoal' }).getAttribute('aria-selected')).toBe('true');
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByRole('button', { name: 'Gerenciar Arquivos' }),
+      ),
+    );
+  });
+
+  it('detalhes de serviço público exibem ações, habilidades e informações e voltam à aba', async () => {
+    const github = publicCatalogFixture.find((service) => service.id === 'github') as
+      PublicMcpCatalogEntry | undefined;
+    if (!github) throw new Error('Serviço GitHub ausente do catálogo simulado.');
+    const testConnection = vi.fn(async () => true);
+    render(
+      <SkillsCatalogView
+        skills={[
+          {
+            ...filesSkillFixture,
+            id: 'mcp.github-server.search',
+            name: 'Pesquisar repositórios',
+            description: 'Pesquisa repositórios acessíveis no GitHub.',
+            origin: { kind: 'mcp', server: 'GitHub' },
+          },
+        ]}
+        initialTab="publico"
+        publicServices={[github]}
+        mcpServers={[
+          {
+            id: 'github-server',
+            name: 'GitHub',
+            endpoint: github.endpoint,
+            enabled: true,
+            status: 'Conectado',
+          },
+        ]}
+        onFamilyToggle={noop}
+        onSkillToggle={noop}
+        onOverrideToggle={noop}
+        onConfigurePublicMcp={async () => true}
+        onTestPublicMcp={testConnection}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Ver detalhes de GitHub' }));
+    expect(await screen.findByRole('button', { name: 'Voltar aos serviços' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: /GitHub/, level: 2 })).toBeTruthy();
+    expect((document.activeElement as HTMLElement).id).toContain('detail-title');
+    expect(
+      screen.getByText(
+        'Permite consultar projetos e arquivos, relatos de problemas e propostas de alteração no GitHub.',
+      ),
+    ).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Aplicativos' })).toBeTruthy();
+    expect(screen.getByText('Pesquisar repositórios')).toBeTruthy();
+    expect(screen.getAllByRole('heading', { name: 'Habilidades' })).toHaveLength(2);
+    expect(screen.getByRole('heading', { name: 'Informações' })).toBeTruthy();
+    expect(screen.getByText('Permissões pedidas')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Gerenciar' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Testar' }));
+    await waitFor(() => expect(testConnection).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Voltar aos serviços' }));
+    expect(screen.getByRole('tab', { name: 'Público' }).getAttribute('aria-selected')).toBe('true');
+    expect(screen.getByRole('heading', { name: 'Servidores MCP públicos' })).toBeTruthy();
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByRole('button', { name: 'Ver detalhes de GitHub' }),
+      ),
     );
   });
 
