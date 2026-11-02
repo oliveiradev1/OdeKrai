@@ -4,6 +4,8 @@ use tauri_plugin_opener::OpenerExt;
 use url::Url;
 
 const CLOUD_LINKS_MANIFEST: &str = include_str!("../../src/core/cloud-links.json");
+const GOOGLE_OAUTH_HOST: &str = "accounts.google.com";
+const GOOGLE_OAUTH_PATH: &str = "/o/oauth2/v2/auth";
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -141,6 +143,33 @@ pub(crate) fn open_oauth_authorization_url(app: &AppHandle, value: &str) -> Resu
         .map_err(|_| "Não foi possível abrir o navegador padrão.".to_string())
 }
 
+pub(crate) fn open_google_oauth_authorization_url(
+    app: &AppHandle,
+    value: &str,
+) -> Result<(), String> {
+    let validated = validate_google_oauth_authorization_url(value)?;
+    app.opener()
+        .open_url(validated, None::<&str>)
+        .map_err(|_| {
+            "Não foi possível abrir o navegador padrão para a autorização do Google.".to_string()
+        })
+}
+
+fn validate_google_oauth_authorization_url(value: &str) -> Result<String, String> {
+    let validated = validate_external_url(value).map_err(str::to_string)?;
+    let parsed = Url::parse(&validated)
+        .map_err(|_| "O endereço de autorização é inválido.".to_string())?;
+    if parsed.scheme() != "https"
+        || parsed.port_or_known_default() != Some(443)
+        || parsed.host_str() != Some(GOOGLE_OAUTH_HOST)
+        || parsed.path() != GOOGLE_OAUTH_PATH
+        || parsed.fragment().is_some()
+    {
+        return Err("A autorização do Google precisa usar o endpoint oficial permitido.".into());
+    }
+    Ok(validated)
+}
+
 fn validate_cloud_link(value: &str) -> Result<String, String> {
     let validated = validate_external_url(value).map_err(str::to_string)?;
     let parsed = Url::parse(&validated).map_err(|_| "O endereço do link é inválido.")?;
@@ -219,7 +248,8 @@ fn validate_update_release_url(value: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        allowlist_domain, validate_cloud_link, validate_external_url, validate_update_release_url,
+        allowlist_domain, validate_cloud_link, validate_external_url,
+        validate_google_oauth_authorization_url, validate_update_release_url,
         CLOUD_LINKS_MANIFEST,
     };
     use serde::Deserialize;
@@ -231,6 +261,23 @@ mod tests {
 
         let url = url::Url::parse("https://example.org/help").unwrap();
         assert_eq!(allowlist_domain(&url), Some("example.org"));
+    }
+
+    #[test]
+    fn google_oauth_is_limited_to_its_fixed_https_endpoint() {
+        assert!(validate_google_oauth_authorization_url(
+            "https://accounts.google.com/o/oauth2/v2/auth?client_id=public"
+        )
+        .is_ok());
+        for url in [
+            "https://accounts.google.com.evil.test/o/oauth2/v2/auth?client_id=public",
+            "http://accounts.google.com/o/oauth2/v2/auth?client_id=public",
+            "https://accounts.google.com/other?client_id=public",
+        ] {
+            assert!(validate_google_oauth_authorization_url(url).is_err(), "{url}");
+        }
+        assert!(include_str!("../capabilities/default.json")
+            .contains("https://accounts.google.com/o/oauth2/v2/auth"));
     }
 
     #[derive(Deserialize)]
