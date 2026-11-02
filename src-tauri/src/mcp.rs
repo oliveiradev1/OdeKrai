@@ -248,7 +248,7 @@ impl McpStdioClient {
     pub fn stderr_tail(&self) -> Vec<u8> {
         self.stderr
             .lock()
-            .map(|value| redact_secret_bytes(value, &self.redaction_secrets))
+            .map(|value| redact_secret_bytes(value.as_slice(), &self.redaction_secrets))
             .unwrap_or_default()
     }
 
