@@ -10,6 +10,7 @@ use reqwest::{
 use serde_json::{json, Value};
 use std::{
     io::Read,
+    net::{IpAddr, SocketAddr, ToSocketAddrs},
     sync::{atomic::Ordering, Mutex},
     time::Duration,
 };
@@ -38,6 +39,68 @@ pub fn validate_endpoint(raw: &str) -> Result<Url, String> {
         );
     }
     Ok(url)
+}
+
+fn is_public_address(address: SocketAddr) -> bool {
+    match address.ip() {
+        IpAddr::V4(ip) => {
+            !ip.is_private()
+                && !ip.is_loopback()
+                && !ip.is_link_local()
+                && !ip.is_unspecified()
+                && !ip.is_broadcast()
+                && !ip.is_multicast()
+                && ip.octets()[0] != 0
+                && ip.octets()[0] < 224
+        }
+        IpAddr::V6(ip) => {
+            !ip.is_loopback()
+                && !ip.is_unspecified()
+                && !ip.is_unique_local()
+                && !ip.is_unicast_link_local()
+                && !ip.is_multicast()
+                && ip
+                    .to_ipv4_mapped()
+                    .is_none_or(|mapped| is_public_address(SocketAddr::new(mapped.into(), address.port())))
+        }
+    }
+}
+
+fn resolve_public_endpoint(endpoint: &Url) -> Result<Vec<SocketAddr>, String> {
+    let host = endpoint
+        .host_str()
+        .ok_or("O servidor MCP não tem um host válido.")?;
+    let port = endpoint
+        .port_or_known_default()
+        .ok_or("O servidor MCP não tem uma porta HTTPS válida.")?;
+    let addresses = (host, port)
+        .to_socket_addrs()
+        .map_err(|_| "Não foi possível resolver o host do servidor MCP.".to_string())?
+        .collect::<Vec<_>>();
+    validate_resolved_addresses(&addresses)?;
+    Ok(addresses)
+}
+
+fn validate_resolved_addresses(addresses: &[SocketAddr]) -> Result<(), String> {
+    if addresses.is_empty() || addresses.iter().any(|address| !is_public_address(*address)) {
+        Err("O host do servidor MCP resolve para um endereço local ou reservado e foi recusado."
+            .into())
+    } else {
+        Ok(())
+    }
+}
+
+fn http_client(endpoint: &Url) -> Result<Client, String> {
+    let host = endpoint
+        .host_str()
+        .ok_or("O servidor MCP não tem um host válido.")?;
+    let addresses = resolve_public_endpoint(endpoint)?;
+    Client::builder()
+        .redirect(Policy::none())
+        .timeout(REQUEST_TIMEOUT)
+        .resolve_to_addrs(host, &addresses)
+        .build()
+        .map_err(|_| "Não foi possível preparar a conexão segura MCP.".to_string())
 }
 
 pub struct McpHttpClient {
@@ -135,11 +198,7 @@ impl McpHttpClient {
         if token.is_empty() || token.len() > 32_768 || token.chars().any(char::is_control) {
             return Err("Cadastre um token de acesso válido para o servidor MCP.".into());
         }
-        let client = Client::builder()
-            .redirect(Policy::none())
-            .timeout(REQUEST_TIMEOUT)
-            .build()
-            .map_err(|_| "Não foi possível preparar a conexão segura MCP.".to_string())?;
+        let client = http_client(&endpoint)?;
         Ok(Self {
             endpoint,
             auth: AuthMode::Personal(token),
@@ -162,11 +221,7 @@ impl McpHttpClient {
                     .into(),
             );
         }
-        let client = Client::builder()
-            .redirect(Policy::none())
-            .timeout(REQUEST_TIMEOUT)
-            .build()
-            .map_err(|_| "Não foi possível preparar a conexão segura MCP.".to_string())?;
+        let client = http_client(&endpoint)?;
         Ok(Self {
             endpoint,
             auth: AuthMode::OAuth {
@@ -359,6 +414,38 @@ fn parse_sse(bytes: &[u8]) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dns_rebinding_addresses_to_private_networks_are_rejected() {
+        for address in [
+            "127.0.0.1:443",
+            "10.0.0.5:443",
+            "172.16.0.4:443",
+            "192.168.1.2:443",
+            "169.254.2.4:443",
+            "0.0.0.0:443",
+            "224.0.0.1:443",
+            "[::1]:443",
+            "[fc00::1]:443",
+            "[fe80::1]:443",
+        ] {
+            let address = address.parse::<SocketAddr>().unwrap();
+            assert!(!is_public_address(address), "private DNS answer accepted: {address}");
+        }
+        for address in ["1.1.1.1:443", "[2606:4700:4700::1111]:443"] {
+            let address = address.parse::<SocketAddr>().unwrap();
+            assert!(is_public_address(address), "public DNS answer rejected: {address}");
+        }
+        let public = ["1.1.1.1:443".parse::<SocketAddr>().unwrap()];
+        assert!(validate_resolved_addresses(&public).is_ok());
+        let mixed = [
+            "1.1.1.1:443".parse::<SocketAddr>().unwrap(),
+            "127.0.0.1:443".parse::<SocketAddr>().unwrap(),
+        ];
+        assert!(validate_resolved_addresses(&mixed)
+            .unwrap_err()
+            .contains("endereço local ou reservado"));
+    }
 
     struct MockServer(HttpReply);
 
