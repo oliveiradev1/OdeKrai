@@ -1,7 +1,11 @@
 import { useEffect, useRef, type FormEvent, type ReactNode, type RefObject } from 'react';
 
-export function shouldSubmitMessageOnEnter(key: string, shiftKey: boolean): boolean {
-  return key === 'Enter' && !shiftKey;
+export function shouldSubmitMessageOnEnter(
+  key: string,
+  shiftKey: boolean,
+  isComposing = false,
+): boolean {
+  return key === 'Enter' && !shiftKey && !isComposing;
 }
 
 export function MessageComposer({
@@ -79,7 +83,9 @@ export function MessageComposer({
         value={draft}
         onChange={(event) => setDraft(event.target.value)}
         onKeyDown={(event) => {
-          if (shouldSubmitMessageOnEnter(event.key, event.shiftKey)) {
+          if (
+            shouldSubmitMessageOnEnter(event.key, event.shiftKey, event.nativeEvent.isComposing)
+          ) {
             event.preventDefault();
             event.currentTarget.form?.requestSubmit();
           }
