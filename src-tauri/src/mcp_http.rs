@@ -44,24 +44,40 @@ pub fn validate_endpoint(raw: &str) -> Result<Url, String> {
 fn is_public_address(address: SocketAddr) -> bool {
     match address.ip() {
         IpAddr::V4(ip) => {
+            let [a, b, c, _] = ip.octets();
             !ip.is_private()
                 && !ip.is_loopback()
                 && !ip.is_link_local()
                 && !ip.is_unspecified()
                 && !ip.is_broadcast()
                 && !ip.is_multicast()
-                && ip.octets()[0] != 0
-                && ip.octets()[0] < 224
+                && a != 0
+                && a < 224
+                // Special-purpose ranges are not public destinations even when
+                // `Ipv4Addr::is_private` returns false for them.
+                && !(a == 100 && (64..=127).contains(&b)) // Shared address space.
+                && !(a == 192 && b == 0 && c == 0) // IETF protocol assignments.
+                && !(a == 192 && b == 0 && c == 2) // Documentation.
+                && !(a == 192 && b == 88 && c == 99) // Deprecated 6to4 relay anycast.
+                && !(a == 198 && (b == 18 || b == 19)) // Benchmarking.
+                && !(a == 198 && b == 51 && c == 100) // Documentation.
+                && !(a == 203 && b == 0 && c == 113) // Documentation.
         }
         IpAddr::V6(ip) => {
+            let segments = ip.segments();
+            let is_global_unicast = (segments[0] & 0xe000) == 0x2000;
             !ip.is_loopback()
                 && !ip.is_unspecified()
                 && !ip.is_unique_local()
                 && !ip.is_unicast_link_local()
                 && !ip.is_multicast()
-                && ip
-                    .to_ipv4_mapped()
-                    .is_none_or(|mapped| is_public_address(SocketAddr::new(mapped.into(), address.port())))
+                && is_global_unicast
+                && !(segments[0] == 0x2001 && segments[1] <= 0x01ff) // IETF special-purpose.
+                && !(segments[0] == 0x2001 && segments[1] == 0x0db8) // Documentation.
+                && !(segments[0] == 0x3fff && (segments[1] & 0xf000) == 0) // Documentation.
+                && ip.to_ipv4_mapped().is_none_or(|mapped| {
+                    is_public_address(SocketAddr::new(mapped.into(), address.port()))
+                })
         }
     }
 }
@@ -422,19 +438,33 @@ mod tests {
             "10.0.0.5:443",
             "172.16.0.4:443",
             "192.168.1.2:443",
+            "100.64.0.1:443",
+            "192.0.2.1:443",
+            "198.18.0.1:443",
+            "198.51.100.1:443",
+            "203.0.113.1:443",
             "169.254.2.4:443",
             "0.0.0.0:443",
             "224.0.0.1:443",
             "[::1]:443",
             "[fc00::1]:443",
             "[fe80::1]:443",
+            "[2001:db8::1]:443",
+            "[2001:2::1]:443",
+            "[3fff::1]:443",
         ] {
             let address = address.parse::<SocketAddr>().unwrap();
-            assert!(!is_public_address(address), "private DNS answer accepted: {address}");
+            assert!(
+                !is_public_address(address),
+                "private DNS answer accepted: {address}"
+            );
         }
         for address in ["1.1.1.1:443", "[2606:4700:4700::1111]:443"] {
             let address = address.parse::<SocketAddr>().unwrap();
-            assert!(is_public_address(address), "public DNS answer rejected: {address}");
+            assert!(
+                is_public_address(address),
+                "public DNS answer rejected: {address}"
+            );
         }
         let public = ["1.1.1.1:443".parse::<SocketAddr>().unwrap()];
         assert!(validate_resolved_addresses(&public).is_ok());
