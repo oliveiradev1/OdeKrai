@@ -400,6 +400,8 @@ Não executar automaticamente:
 
 Essas ações exigem autorização explícita.
 
+Uma solicitação atual pode autorizar explicitamente a execução contínua de várias subfases de uma mesma missão. Quando isso estiver escrito na solicitação, avance entre as subfases cobertas sem pedir uma nova mensagem, mantendo commits e checkpoints. Pare apenas diante de decisão humana necessária, autorização externa ausente, risco destrutivo/irreversível, conflito com segurança/política ou bloqueio técnico; registre o bloqueio e continue o trabalho independente autorizado. Essa continuidade não amplia permissões nem substitui confirmação de ações perigosas. Push, merge, tags, releases, deploy e publicação continuam exigindo autorização explícita própria.
+
 No Codex Cloud, utilize a branch de trabalho fornecida pelo ambiente quando existir. Não modifique diretamente a branch oficial sem autorização.
 
 Não crie worktrees ou branches adicionais desnecessariamente.

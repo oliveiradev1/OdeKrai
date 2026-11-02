@@ -122,6 +122,7 @@ pub fn agent_availability(
     state: State<'_, SecurityState>,
     provider_id: String,
     model: String,
+    fallbacks: Vec<crate::history::ConversationProviderTarget>,
 ) -> Result<AgentAvailability, String> {
     crate::require_main(&caller)?;
     if state.is_halted() {
@@ -148,9 +149,25 @@ pub fn agent_availability(
             workspace_path: None,
         });
     }
-    if let Some(reason) =
-        crate::providers::agent_provider_unavailable_reason(&app, &provider_id, &model)
-    {
+    let primary_target = crate::history::ConversationProviderTarget {
+        provider_id: provider_id.clone(),
+        base_url: String::new(),
+        model: model.clone(),
+    };
+    let provider_ready = std::iter::once(primary_target)
+        .chain(fallbacks.into_iter().take(15))
+        .any(|target| {
+            crate::providers::agent_provider_unavailable_reason(
+                &app,
+                &target.provider_id,
+                &target.model,
+            )
+            .is_none()
+        });
+    if !provider_ready {
+        let reason =
+            crate::providers::agent_provider_unavailable_reason(&app, &provider_id, &model)
+                .unwrap_or("Nenhum provedor configurado está disponível para o modo agente.");
         return Ok(AgentAvailability {
             available: false,
             reason: Some(reason.into()),
@@ -181,6 +198,8 @@ struct RuntimeBackend<'a> {
     active_skills: Vec<OfferedSkill>,
     events: Channel<AgentEvent>,
     daily_token_limit: u64,
+    selected_provider_id: String,
+    provider_selection_reason: &'static str,
     plan_card: Option<crate::history::AgentActionCard>,
 }
 
@@ -267,6 +286,9 @@ impl AgentBackend for RuntimeBackend<'_> {
                 messages,
                 tools,
                 self.daily_token_limit,
+                &self.selected_provider_id,
+                self.provider_selection_reason,
+                self.events.clone(),
             )
             .await
         })
@@ -345,6 +367,7 @@ impl AgentBackend for RuntimeBackend<'_> {
                 untrusted_result,
                 undo_descriptor: None,
                 plan: None,
+                code_review_id: None,
                 created_at: std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
@@ -630,7 +653,19 @@ impl AgentBackend for RuntimeBackend<'_> {
                                 .get("diff")
                                 .and_then(serde_json::Value::as_str)
                                 .map(str::to_owned);
-                            card.result_summary = "Diff pronto para revisão; nenhuma alteração foi aplicada ao projeto original.".into();
+                            card.code_review_id = value
+                                .get("reviewId")
+                                .and_then(serde_json::Value::as_str)
+                                .map(str::to_owned);
+                            card.result_summary = if card.code_review_id.is_some() {
+                                "Diff pronto para revisão; nenhuma alteração foi aplicada ao projeto original.".into()
+                            } else if card.diff.as_deref()
+                                == Some("(nenhuma alteração no worktree)")
+                            {
+                                "A ferramenta não propôs mudanças; nada foi aplicado ao projeto original.".into()
+                            } else {
+                                "Diff limitado; a aplicação automática foi desativada. Nenhuma alteração foi aplicada ao projeto original.".into()
+                            };
                         }
                     }
                 }
@@ -770,7 +805,7 @@ async fn agent_run_inner(context: AgentRunContext<'_>) -> Result<String, String>
     if state.is_halted() {
         return Err("O agente está parado pelo kill switch.".into());
     }
-    let (provider_id, model, enabled, targets, _) =
+    let (provider_id, _model, enabled, targets, _) =
         crate::history::load_agent_context(&app, &conversation_id)?;
     if !enabled {
         return Err("Modo agente indisponível: ele está desativado nesta conversa. Ative-o nas configurações da conversa.".into());
@@ -789,11 +824,6 @@ async fn agent_run_inner(context: AgentRunContext<'_>) -> Result<String, String>
         );
     }
     let active_skills = skill_offer.offered_agent_skills();
-    if let Some(reason) =
-        crate::providers::agent_provider_unavailable_reason(&app, &provider_id, &model)
-    {
-        return Err(reason.into());
-    }
     let prompt = crate::agent_home::system_prompt(&app)?
         .ok_or("Configure a pasta e a identidade aprovada do agente.")?;
     messages.insert(
@@ -810,6 +840,20 @@ async fn agent_run_inner(context: AgentRunContext<'_>) -> Result<String, String>
         },
     );
     let tools = skill_offer.model_tools();
+    let selection = crate::providers::select_agent_provider(
+        &app,
+        &provider_id,
+        targets,
+        &messages,
+        daily_token_limit,
+    )?;
+    if let Some(reason) = crate::providers::agent_provider_unavailable_reason(
+        &app,
+        &selection.provider_id,
+        &selection.model,
+    ) {
+        return Err(reason.into());
+    }
     let token = CancellationToken::new();
     {
         let mut runs = state.agent_runs.lock().await;
@@ -822,10 +866,12 @@ async fn agent_run_inner(context: AgentRunContext<'_>) -> Result<String, String>
         app: app.clone(),
         security: state,
         conversation_id: conversation_id.clone(),
-        targets,
+        targets: selection.targets,
         active_skills,
         events: on_event.clone(),
         daily_token_limit,
+        selected_provider_id: selection.provider_id,
+        provider_selection_reason: selection.reason,
         plan_card: None,
     };
     let result = agent::run_agent(

@@ -6,7 +6,7 @@ import { validateMcpCatalog, verifyExamples } from './check-mcp-catalog.mjs';
 
 const catalogPath = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
-  '../src/core/mcp-service-catalog.json',
+  '../src-tauri/resources/public-mcp-catalog.json',
 );
 const catalog = JSON.parse(await readFile(catalogPath, 'utf8'));
 
@@ -30,7 +30,7 @@ describe('guarda do catálogo MCP', () => {
 
   it('exige o domínio oficial esperado para a página de documentação', () => {
     const changed = structuredClone(catalog);
-    changed[1].documentationUrl = 'https://figma-help.example/mcp';
+    changed[1].officialLink = 'https://figma-help.example/mcp';
     expect(validateMcpCatalog(changed).join('\n')).toContain('domínio deve ser help.figma.com');
   });
 
@@ -50,12 +50,20 @@ describe('guarda do catálogo MCP', () => {
 
   it('exige fonte oficial e todos os serviços esperados', () => {
     const noSource = structuredClone(catalog);
-    delete noSource[0].documentationUrl;
+    delete noSource[0].officialLink;
     expect(validateMcpCatalog(noSource).join('\n')).toContain(
       'link de documentação oficial ausente',
     );
     expect(validateMcpCatalog(catalog.slice(1)).join('\n')).toContain(
       'Serviço esperado ausente do catálogo: GitHub',
+    );
+  });
+
+  it('exige resumo legível com o que faz, o que precisa e o próximo passo', () => {
+    const incomplete = structuredClone(catalog);
+    delete incomplete[0].nextStep;
+    expect(validateMcpCatalog(incomplete).join('\n')).toContain(
+      'resumo do serviço precisa explicar o que faz, o que precisa e o próximo passo',
     );
   });
 });

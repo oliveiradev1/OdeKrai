@@ -4,14 +4,66 @@ use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use std::{
     collections::{BTreeMap, HashMap},
+    fmt,
     sync::{Arc, Mutex},
     time::Duration,
 };
 use tauri::{Emitter, Manager, State};
 
 const SERVICE: &str = "site.anceryx.odekrai.mcp";
+const PUBLIC_MCP_CATALOG: &str = include_str!("../resources/public-mcp-catalog.json");
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+fn load_public_mcp_catalog() -> Result<Vec<serde_json::Value>, String> {
+    let entries: Vec<serde_json::Value> = serde_json::from_str(PUBLIC_MCP_CATALOG)
+        .map_err(|_| "O catálogo público de serviços está inválido.".to_string())?;
+    for entry in &entries {
+        let valid_status = matches!(
+            entry.get("status").and_then(serde_json::Value::as_str),
+            Some("available" | "in_preview" | "configuration_pending" | "not_verified")
+        );
+        let valid_connections = entry
+            .get("connectionType")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|types| {
+                !types.is_empty()
+                    && types.iter().all(|value| {
+                        matches!(
+                            value.as_str(),
+                            Some("one_click" | "client_id" | "personal_token" | "informational")
+                        )
+                    })
+            });
+        let required_strings = [
+            "id",
+            "name",
+            "provider",
+            "officialLink",
+            "whatItDoes",
+            "whatItNeeds",
+            "nextStep",
+        ]
+        .iter()
+        .all(|key| entry.get(key).and_then(serde_json::Value::as_str).is_some());
+        let required_lists = ["requirements", "permissions"].iter().all(|key| {
+            entry
+                .get(key)
+                .and_then(serde_json::Value::as_array)
+                .is_some()
+        });
+        if !valid_status || !valid_connections || !required_strings || !required_lists {
+            return Err("O catálogo público de serviços está inválido.".to_string());
+        }
+    }
+    Ok(entries)
+}
+
+#[tauri::command]
+pub fn mcp_public_catalog(caller: tauri::WebviewWindow) -> Result<Vec<serde_json::Value>, String> {
+    crate::require_main(&caller)?;
+    load_public_mcp_catalog()
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct McpServer {
     pub id: String,
@@ -24,6 +76,24 @@ pub struct McpServer {
     pub enabled: bool,
     pub status: String,
     pub error: Option<String>,
+}
+
+impl fmt::Debug for McpServer {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("McpServer")
+            .field("id", &self.id)
+            .field("name", &"[oculto]")
+            .field("command", &"[oculto]")
+            .field("args_count", &self.args.len())
+            .field("env_names", &self.env_names)
+            .field("transport", &self.transport)
+            .field("endpoint", &"[oculto]")
+            .field("enabled", &self.enabled)
+            .field("status", &self.status)
+            .field("error", &"[oculto]")
+            .finish()
+    }
 }
 
 enum RuntimeStatus {
@@ -299,6 +369,9 @@ fn validate(
     {
         return Err("Os argumentos excedem o limite permitido.".into());
     }
+    if contains_inline_credential(command, args) {
+        return Err("Não coloque tokens, senhas ou chaves no comando ou nos argumentos MCP. Use uma variável de ambiente guardada no Gerenciador de Credenciais do Windows.".into());
+    }
     if env_names.len() > 32
         || env_names.iter().any(|key| !valid_env_name(key))
         || env_names
@@ -310,6 +383,100 @@ fn validate(
         return Err("Use nomes de variáveis únicos no formato A-Z, 0-9 e _.".into());
     }
     Ok(())
+}
+
+fn sensitive_argument_name(value: &str) -> bool {
+    let key = value
+        .trim_start_matches('-')
+        .split_once('=')
+        .map_or(value.trim_start_matches('-'), |(key, _)| key)
+        .to_ascii_lowercase()
+        .replace('-', "_");
+    [
+        "token",
+        "secret",
+        "password",
+        "passwd",
+        "api_key",
+        "apikey",
+        "authorization",
+        "bearer",
+        "private_key",
+    ]
+    .iter()
+    .any(|marker| key.contains(marker))
+}
+
+fn looks_like_credential(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    let known_token = [
+        "ghp_",
+        "github_pat_",
+        "glpat-",
+        "xoxb-",
+        "xoxp-",
+        "xoxs-",
+        "ya29.",
+        "AIza",
+        "sk-",
+        "bearer ",
+        "-----begin ",
+    ]
+    .iter()
+    .any(|marker| lower.contains(&marker.to_ascii_lowercase()));
+    let jwt =
+        value.starts_with("eyJ") && value.split('.').filter(|part| !part.is_empty()).count() == 3;
+    let named_value = value.split(['?', '&', ';', ' ']).any(|part| {
+        part.split_once('=')
+            .is_some_and(|(key, secret)| sensitive_argument_name(key) && !secret.is_empty())
+    });
+    let url_value = value.split_once('=').map_or(value, |(_, suffix)| suffix);
+    known_token || jwt || named_value || url_contains_credential(url_value)
+}
+
+fn url_contains_credential(value: &str) -> bool {
+    url::Url::parse(value).ok().is_some_and(|url| {
+        !url.username().is_empty()
+            || url.password().is_some()
+            || url
+                .query_pairs()
+                .any(|(key, secret)| sensitive_argument_name(&key) && !secret.is_empty())
+    })
+}
+
+fn contains_inline_credential(command: &str, args: &[String]) -> bool {
+    let command_parts = command
+        .split_whitespace()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    looks_like_credential(command)
+        || arguments_contain_inline_credential(&command_parts)
+        || arguments_contain_inline_credential(args)
+}
+
+fn arguments_contain_inline_credential(args: &[String]) -> bool {
+    args.iter().enumerate().any(|(index, argument)| {
+        if looks_like_credential(argument) {
+            return true;
+        }
+        let (key, value) = argument
+            .split_once('=')
+            .map_or((argument.as_str(), None), |(key, value)| (key, Some(value)));
+        if !sensitive_argument_name(key) {
+            return false;
+        }
+        value.is_some_and(|value| !value.is_empty())
+            || args.get(index + 1).is_some_and(|next| !next.is_empty())
+    })
+}
+
+fn redact_inline_credential_config(server: &mut McpServer) {
+    if contains_inline_credential(&server.command, &server.args) {
+        server.command = "[cadastro ocultado]".into();
+        server.args.clear();
+        server.status = "Erro".into();
+        server.error = Some("Cadastro antigo contém credencial no comando ou nos argumentos. Remova esse valor e use uma variável de ambiente protegida.".into());
+    }
 }
 
 fn entry(server_id: &str, key: &str) -> Result<Entry, String> {
@@ -537,6 +704,9 @@ fn inspect(
         };
         let result = client.tools_list()?;
         return Ok((client, result));
+    }
+    if contains_inline_credential(&server.command, &server.args) {
+        return Err("Cadastro antigo contém credencial no comando ou nos argumentos. Remova esse valor e use uma variável de ambiente protegida.".into());
     }
     let mut env = BTreeMap::new();
     for key in &server.env_names {
@@ -830,6 +1000,9 @@ pub fn mcp_list_servers(
             states.insert(server.id.clone(), RuntimeStatus::Error(status));
         }
     }
+    for server in &mut servers {
+        redact_inline_credential_config(server);
+    }
     Ok(servers)
 }
 
@@ -1086,6 +1259,75 @@ pub async fn mcp_remove_server(
 }
 
 #[tauri::command]
+pub async fn mcp_disconnect_server(
+    app: tauri::AppHandle,
+    caller: tauri::WebviewWindow,
+    server_id: String,
+    runtime: State<'_, McpRuntime>,
+) -> Result<Option<String>, String> {
+    crate::require_main(&caller)?;
+    let db = crate::security::database(&app)?;
+    let server = find(&db, &server_id)?;
+    if server.transport != "streamable_http" {
+        return Err(
+            "A desconexão pela tela de serviços só está disponível para servidores HTTP.".into(),
+        );
+    }
+
+    let had_oauth = crate::mcp_oauth::load(&server_id)?.is_some();
+    let has_personal_token = match entry(&server_id, "http_bearer")?.get_password() {
+        Ok(_) => true,
+        Err(keyring::Error::NoEntry) => false,
+        Err(_) => {
+            return Err("Não foi possível verificar a credencial no Gerenciador do Windows.".into())
+        }
+    };
+    let access_token = runtime
+        .1
+        .lock()
+        .map_err(|_| "Estado OAuth MCP indisponível.".to_string())?
+        .remove(&server_id)
+        .map(|access| access.value);
+    set_enabled_internal(&app, &server_id, false)?;
+    runtime.remove_connection(&server_id)?;
+
+    let server_id_for_revocation = server_id.clone();
+    let revoked = tokio::task::spawn_blocking(move || {
+        crate::mcp_oauth::revoke_before_remove(&server_id_for_revocation, access_token.as_deref())
+    })
+    .await
+    .unwrap_or(false);
+
+    let mut vault = WindowsVault;
+    for key in &server.env_names {
+        vault.erase(&server.id, key)?;
+    }
+    remove_http_token_with(&server, &mut vault)?;
+    crate::mcp_oauth::remove(&server_id)?;
+    let _ = app.emit("skills-updated", ());
+
+    Ok(disconnected_warning(had_oauth, revoked, has_personal_token))
+}
+
+fn disconnected_warning(
+    had_oauth: bool,
+    revoked: bool,
+    had_personal_token: bool,
+) -> Option<String> {
+    if had_oauth && !revoked {
+        Some(
+            "A conexão foi removida deste dispositivo, mas o provedor não confirmou a revogação do token. Revogue-o no painel do serviço, se necessário.".into(),
+        )
+    } else if had_personal_token {
+        Some(
+            "A conexão foi removida deste dispositivo, mas o token pessoal continua válido no serviço. Revogue-o nas configurações do provedor, se necessário.".into(),
+        )
+    } else {
+        None
+    }
+}
+
+#[tauri::command]
 pub async fn mcp_oauth_disconnect_github(
     app: tauri::AppHandle,
     caller: tauri::WebviewWindow,
@@ -1134,6 +1376,28 @@ pub async fn mcp_oauth_disconnect_github(
 mod tests {
     use super::*;
 
+    #[test]
+    fn public_service_catalog_has_required_metadata_and_unique_ids() {
+        let catalog = load_public_mcp_catalog().expect("catálogo público válido");
+        let mut ids = std::collections::HashSet::new();
+        assert!(!catalog.is_empty());
+        for entry in &catalog {
+            assert!(ids.insert(entry["id"].as_str().unwrap()));
+            assert!(entry["name"].as_str().is_some());
+            assert!(entry["provider"].as_str().is_some());
+            assert!(entry["officialLink"]
+                .as_str()
+                .unwrap()
+                .starts_with("https://"));
+            assert!(!entry["whatItDoes"].as_str().unwrap().trim().is_empty());
+            assert!(!entry["whatItNeeds"].as_str().unwrap().trim().is_empty());
+            assert!(!entry["nextStep"].as_str().unwrap().trim().is_empty());
+            assert!(entry["requirements"].is_array());
+            assert!(entry["permissions"].is_array());
+            assert!(entry["connectionType"].is_array());
+        }
+    }
+
     fn server_for_catalog() -> McpServer {
         McpServer {
             id: "fake".into(),
@@ -1147,6 +1411,55 @@ mod tests {
             status: "Conectado".into(),
             error: None,
         }
+    }
+
+    #[test]
+    fn cadastro_mcp_recusa_segredos_inline_e_orienta_credencial_protegida() {
+        for args in [
+            vec!["--token".into(), "token-fixture-123".into()],
+            vec!["--api-key=api-key-fixture".into()],
+            vec!["ghp_secret_fixture".into()],
+            vec!["--endpoint=https://user:pass@example.org/mcp".into()],
+            vec!["--endpoint=https://mcp.example.org/?access_token=query-secret".into()],
+        ] {
+            let error = validate("Teste", "mcp-server", &args, &["TOKEN".into()])
+                .expect_err("segredo inline deve ser recusado");
+            assert!(error.contains("Gerenciador de Credenciais"));
+        }
+        assert!(validate(
+            "Teste",
+            "mcp-server --token command-secret",
+            &[],
+            &["TOKEN".into()]
+        )
+        .is_err());
+        assert!(validate(
+            "Teste",
+            "mcp-server",
+            &["--project".into(), "demo".into()],
+            &["TOKEN".into()]
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn legado_com_segredo_e_ocultado_da_interface_e_debug() {
+        let mut server = server_for_catalog();
+        server.command = "mcp-server".into();
+        server.args = vec!["--token=legacy-secret-fixture".into()];
+        let debug = format!("{server:?}");
+        assert!(!debug.contains("legacy-secret-fixture"));
+
+        redact_inline_credential_config(&mut server);
+        let serialized = serde_json::to_string(&server).unwrap();
+        assert!(!serialized.contains("legacy-secret-fixture"));
+        assert!(!serialized.contains("--token"));
+        assert_eq!(server.status, "Erro");
+        assert!(server
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("variável de ambiente protegida"));
     }
 
     #[test]
@@ -1443,6 +1756,17 @@ mod tests {
 
         remove_http_token_with(&server, &mut vault).unwrap();
         assert!(!vault.0.contains_key("fake:http_bearer"));
+    }
+
+    #[test]
+    fn desconexao_avisa_quando_o_provedor_nao_confirma_revogacao() {
+        let warning = disconnected_warning(true, false, false).unwrap();
+        assert!(warning.contains("não confirmou a revogação"));
+        assert!(disconnected_warning(true, true, false).is_none());
+        assert!(disconnected_warning(false, true, true)
+            .unwrap()
+            .contains("token pessoal continua válido"));
+        assert!(disconnected_warning(false, true, false).is_none());
     }
 
     #[derive(Default)]

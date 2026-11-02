@@ -8,7 +8,6 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{sync::Mutex, time::Duration};
 use tauri::State;
-use tauri_plugin_opener::OpenerExt;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,
@@ -240,9 +239,7 @@ pub async fn google_oauth_connect(
         .append_pair("code_challenge", &pkce_challenge(&verifier))
         .append_pair("code_challenge_method", "S256")
         .append_pair("access_type", "offline");
-    app.opener()
-        .open_url(auth.as_str(), None::<&str>)
-        .map_err(|_| "Não foi possível abrir o navegador padrão para a autorização.".to_string())?;
+    crate::external_links::open_google_oauth_authorization_url(&app, auth.as_str())?;
     let code = receive_callback(listener, &state_value).await?;
     let http = safe_http()?;
     let mut form = vec![

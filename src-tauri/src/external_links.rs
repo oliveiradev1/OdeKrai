@@ -4,6 +4,8 @@ use tauri_plugin_opener::OpenerExt;
 use url::Url;
 
 const CLOUD_LINKS_MANIFEST: &str = include_str!("../../src/core/cloud-links.json");
+const GOOGLE_OAUTH_HOST: &str = "accounts.google.com";
+const GOOGLE_OAUTH_PATH: &str = "/o/oauth2/v2/auth";
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -95,6 +97,14 @@ fn valid_mailto_address(path: &str) -> bool {
     !local.is_empty() && !domain.is_empty() && !domain.contains('@')
 }
 
+fn allowlist_domain(url: &Url) -> Option<&str> {
+    url.host_str().or_else(|| {
+        (url.scheme() == "mailto")
+            .then(|| url.path().rsplit_once('@').map(|(_, domain)| domain))
+            .flatten()
+    })
+}
+
 #[tauri::command]
 pub fn open_external_link(
     app: AppHandle,
@@ -104,10 +114,10 @@ pub fn open_external_link(
     crate::require_main(&caller)?;
     let validated = validate_external_url(&url).map_err(str::to_string)?;
     let parsed = Url::parse(&validated).map_err(|_| "O endereço do link é inválido.")?;
-    if let Some(host) = parsed.host_str() {
-        if !crate::security::external_domain_is_trusted(&app, host)? {
-            return Err("Confirme este domínio em Links externos antes de abrir o link.".into());
-        }
+    let domain = allowlist_domain(&parsed)
+        .ok_or("Este endereço não tem um domínio que possa ser autorizado.")?;
+    if !crate::security::external_domain_is_trusted(&app, domain)? {
+        return Err("Confirme este domínio em Links externos antes de abrir o link.".into());
     }
     app.opener()
         .open_url(validated, None::<&str>)
@@ -131,6 +141,31 @@ pub(crate) fn open_oauth_authorization_url(app: &AppHandle, value: &str) -> Resu
     app.opener()
         .open_url(validated, None::<&str>)
         .map_err(|_| "Não foi possível abrir o navegador padrão.".to_string())
+}
+
+pub(crate) fn open_google_oauth_authorization_url(
+    app: &AppHandle,
+    value: &str,
+) -> Result<(), String> {
+    let validated = validate_google_oauth_authorization_url(value)?;
+    app.opener().open_url(validated, None::<&str>).map_err(|_| {
+        "Não foi possível abrir o navegador padrão para a autorização do Google.".to_string()
+    })
+}
+
+fn validate_google_oauth_authorization_url(value: &str) -> Result<String, String> {
+    let validated = validate_external_url(value).map_err(str::to_string)?;
+    let parsed =
+        Url::parse(&validated).map_err(|_| "O endereço de autorização é inválido.".to_string())?;
+    if parsed.scheme() != "https"
+        || parsed.port_or_known_default() != Some(443)
+        || parsed.host_str() != Some(GOOGLE_OAUTH_HOST)
+        || parsed.path() != GOOGLE_OAUTH_PATH
+        || parsed.fragment().is_some()
+    {
+        return Err("A autorização do Google precisa usar o endpoint oficial permitido.".into());
+    }
+    Ok(validated)
 }
 
 fn validate_cloud_link(value: &str) -> Result<String, String> {
@@ -211,10 +246,39 @@ fn validate_update_release_url(value: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        validate_cloud_link, validate_external_url, validate_update_release_url,
-        CLOUD_LINKS_MANIFEST,
+        allowlist_domain, validate_cloud_link, validate_external_url,
+        validate_google_oauth_authorization_url, validate_update_release_url, CLOUD_LINKS_MANIFEST,
     };
     use serde::Deserialize;
+
+    #[test]
+    fn mailto_recipient_domain_is_checked_by_the_external_link_allowlist() {
+        let url = url::Url::parse("mailto:pessoa@example.org?subject=oi").unwrap();
+        assert_eq!(allowlist_domain(&url), Some("example.org"));
+
+        let url = url::Url::parse("https://example.org/help").unwrap();
+        assert_eq!(allowlist_domain(&url), Some("example.org"));
+    }
+
+    #[test]
+    fn google_oauth_is_limited_to_its_fixed_https_endpoint() {
+        assert!(validate_google_oauth_authorization_url(
+            "https://accounts.google.com/o/oauth2/v2/auth?client_id=public"
+        )
+        .is_ok());
+        for url in [
+            "https://accounts.google.com.evil.test/o/oauth2/v2/auth?client_id=public",
+            "http://accounts.google.com/o/oauth2/v2/auth?client_id=public",
+            "https://accounts.google.com/other?client_id=public",
+        ] {
+            assert!(
+                validate_google_oauth_authorization_url(url).is_err(),
+                "{url}"
+            );
+        }
+        assert!(include_str!("../capabilities/default.json")
+            .contains("https://accounts.google.com/o/oauth2/v2/auth"));
+    }
 
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]

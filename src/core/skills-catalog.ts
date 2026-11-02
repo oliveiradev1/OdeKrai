@@ -2,14 +2,7 @@ export type SkillStatus =
   'installed' | 'available' | 'blocked' | 'configuration_required' | 'unavailable';
 export type DiscordSkillState = 'not_configured' | 'active' | 'blocked';
 export type SkillCategory = 'local' | 'integration';
-export type SkillRisk =
-  | 'leitura'
-  | 'escrita_reversivel'
-  | 'comunicacao_externa'
-  | 'destrutivo_financeiro'
-  | 'execucao_de_codigo'
-  | 'captura_sensivel';
-export type SkillFamily =
+export type SkillRegistryFamily =
   | 'arquivos'
   | 'abrir_aplicativos'
   | 'agenda_lembretes'
@@ -21,6 +14,23 @@ export type SkillFamily =
   | 'codigo'
   | 'nuvem'
   | 'integracoes_mcp';
+export type SkillRisk =
+  | 'leitura'
+  | 'escrita_reversivel'
+  | 'comunicacao_externa'
+  | 'destrutivo_financeiro'
+  | 'execucao_de_codigo'
+  | 'captura_sensivel';
+export type SkillFamily =
+  | 'arquivos'
+  | 'sistema'
+  | 'agenda_lembretes'
+  | 'planilhas_documentos'
+  | 'mensagens'
+  | 'web'
+  | 'computador'
+  | 'codigo'
+  | 'integracoes';
 export type SkillOrigin = { kind: 'builtin' } | { kind: 'mcp'; server: string };
 export type SkillsCatalogTab = 'pessoal' | 'publico';
 
@@ -46,7 +56,7 @@ export type CatalogSkill = {
   statusReason?: string | null;
   configurationRequired: boolean;
   discordState?: DiscordSkillState;
-  family: SkillFamily;
+  family: SkillRegistryFamily;
   icon: string;
   examples: string[];
   origin: SkillOrigin;
@@ -66,17 +76,13 @@ export const skillFamilyPresentation: Record<
     name: 'Arquivos',
     description: 'Leitura, organização e gravação em locais permitidos.',
   },
-  abrir_aplicativos: {
-    name: 'Abertura e aplicativos',
-    description: 'Abertura de aplicativos cadastrados pelo usuário.',
+  sistema: {
+    name: 'Sistema',
+    description: 'Informações e ações disponíveis no computador e nos aplicativos cadastrados.',
   },
   agenda_lembretes: {
     name: 'Agenda e lembretes',
     description: 'Eventos e lembretes da agenda local do OdeKrai.',
-  },
-  google: {
-    name: 'Google',
-    description: 'Habilidades conectadas ao Google Calendar.',
   },
   planilhas_documentos: {
     name: 'Planilhas e documentos',
@@ -92,10 +98,9 @@ export const skillFamilyPresentation: Record<
     description: 'Controles e informações disponíveis neste computador.',
   },
   codigo: { name: 'Código', description: 'Execução assistida de tarefas de código.' },
-  nuvem: { name: 'Nuvem', description: 'Consulta e gerenciamento aprovado das VMs conectadas.' },
-  integracoes_mcp: {
-    name: 'Integrações MCP',
-    description: 'Ferramentas fornecidas por servidores MCP cadastrados.',
+  integracoes: {
+    name: 'Integrações',
+    description: 'Serviços externos disponíveis, como Google Calendar e provedores de nuvem.',
   },
 };
 
@@ -106,6 +111,32 @@ export type CatalogFamily = SkillFamilyPresentation & {
   status: 'active' | 'disabled' | 'configuration_required' | 'unavailable';
   highestRisk: SkillRisk;
 };
+
+const displayFamilyByRegistryFamily: Record<SkillRegistryFamily, SkillFamily> = {
+  arquivos: 'arquivos',
+  abrir_aplicativos: 'sistema',
+  agenda_lembretes: 'agenda_lembretes',
+  google: 'integracoes',
+  planilhas_documentos: 'planilhas_documentos',
+  mensagens: 'mensagens',
+  web: 'web',
+  computador: 'computador',
+  codigo: 'codigo',
+  nuvem: 'integracoes',
+  integracoes_mcp: 'integracoes',
+};
+
+export function displaySkillFamily(skill: Pick<CatalogSkill, 'id' | 'family'>): SkillFamily {
+  if (
+    skill.id === 'app.launch' ||
+    skill.id === 'system.info' ||
+    skill.id === 'system.open_path' ||
+    skill.id === 'system.reveal_in_folder'
+  ) {
+    return 'sistema';
+  }
+  return displayFamilyByRegistryFamily[skill.family];
+}
 
 export type SkillCommand = (command: string, args?: Record<string, unknown>) => Promise<unknown>;
 
@@ -150,7 +181,7 @@ export function filterSkills<T extends CatalogSkill>(skills: T[], query: string)
       skill.name,
       skill.description,
       skill.id,
-      skillFamilyPresentation[skill.family].name,
+      skillFamilyPresentation[displaySkillFamily(skill)].name,
       ...skill.examples,
     ]
       .join(' ')
@@ -162,9 +193,10 @@ export function filterSkills<T extends CatalogSkill>(skills: T[], query: string)
 export function groupSkillFamilies(skills: CatalogSkill[]): CatalogFamily[] {
   const families = new Map<SkillFamily, CatalogSkill[]>();
   for (const skill of skills) {
-    const members = families.get(skill.family) ?? [];
+    const family = displaySkillFamily(skill);
+    const members = families.get(family) ?? [];
     members.push(skill);
-    families.set(skill.family, members);
+    families.set(family, members);
   }
 
   return [...families].map(([family, members]) => {

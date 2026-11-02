@@ -1,7 +1,44 @@
-import catalog from './mcp-service-catalog.json';
+export type PublicConnectionType = 'one_click' | 'client_id' | 'personal_token' | 'informational';
+export type PublicCatalogStatus =
+  'available' | 'in_preview' | 'configuration_pending' | 'not_verified';
 
-export type PublicMcpCatalogEntry = (typeof catalog)[number];
+export type PublicMcpCatalogEntry = {
+  id: string;
+  name: string;
+  provider: string;
+  connectionType: PublicConnectionType[];
+  status: PublicCatalogStatus;
+  officialLink: string;
+  endpoint: string;
+  transport: string;
+  authentication: string;
+  authenticationMethods: ('oauth' | 'bearer')[];
+  requirements: string[];
+  permissions: string[];
+  connectable: boolean;
+  oauthClientKey?: string;
+  oauthScopes?: string[];
+  programStatus?: string;
+  tokenCreationUrl?: string;
+  personalTokenPermissions?: string[];
+  sourceCodeUrl?: string;
+  oauthRegistrationNote?: string;
+  oauthGuidance?: string;
+  oauthClientRequirement?: string;
+  oauthSecretLabel?: string;
+  oauthSecretHelp?: string;
+  personalTokenIntro?: string;
+  personalTokenLabel?: string;
+  endpointError?: string;
+  serverMismatchError?: string;
+  unavailableMessage?: string;
+  whatItDoes: string;
+  whatItNeeds: string;
+  nextStep: string;
+};
+
 export type PublicMcpStatus = 'available' | 'configured' | 'connecting' | 'connected' | 'error';
+export type PublicMcpPrimaryAction = 'connect' | 'configure' | 'details' | 'connecting';
 export type OAuthRegistrationOptions = { dynamicRegistration: boolean };
 export type PublicOAuthClientSettings = {
   service: string;
@@ -13,8 +50,7 @@ export type PublicOAuthClientSettings = {
 };
 
 export function publicOAuthServiceKey(service: PublicMcpCatalogEntry): string {
-  if (service.supplier === 'Google Workspace') return 'google';
-  return service.name.toLocaleLowerCase('en-US');
+  return service.oauthClientKey ?? service.id;
 }
 
 export function canConnectWithOAuth(
@@ -42,7 +78,7 @@ export function oauthClientIdHelp(
   options: OAuthRegistrationOptions | null,
 ): string | null {
   if (!options || options.dynamicRegistration) return null;
-  return `Este serviço ainda não foi configurado para o OdeKrai. Veja o guia (${service.documentationUrl}).`;
+  return `Este serviço ainda não foi configurado para o OdeKrai. Veja o guia (${service.officialLink}).`;
 }
 
 export type PublicMcpServer = {
@@ -51,8 +87,6 @@ export type PublicMcpServer = {
   enabled: boolean;
   status: string;
 };
-
-export const publicMcpCatalog: readonly PublicMcpCatalogEntry[] = catalog;
 
 export function getPublicMcpStatus(
   service: PublicMcpCatalogEntry,
@@ -67,7 +101,9 @@ export function getPublicMcpStatus(
     if (/error|erro|falha/i.test(configuredServer.status)) return 'error';
     return 'configured';
   }
-  return service.status === 'available_to_configure' ? 'available' : 'configured';
+  return service.status === 'available' || service.status === 'in_preview'
+    ? 'available'
+    : 'configured';
 }
 
 export const publicMcpStatusLabels: Record<PublicMcpStatus, string> = {
@@ -76,6 +112,23 @@ export const publicMcpStatusLabels: Record<PublicMcpStatus, string> = {
   connecting: 'Conectando',
   connected: 'Conectado',
   error: 'Erro',
+};
+
+export function getPublicMcpPrimaryAction(
+  service: PublicMcpCatalogEntry,
+  status: PublicMcpStatus,
+): PublicMcpPrimaryAction {
+  if (status === 'connecting') return 'connecting';
+  if (!service.connectable || status === 'connected') return 'details';
+  if (status === 'configured' || status === 'error') return 'configure';
+  return 'connect';
+}
+
+export const publicMcpPrimaryActionLabels: Record<PublicMcpPrimaryAction, string> = {
+  connect: 'Conectar',
+  configure: 'Configurar',
+  details: 'Ver detalhes',
+  connecting: 'Conectando…',
 };
 
 export function publicMcpErrorMessage(cause: unknown): string {

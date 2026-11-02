@@ -1,13 +1,13 @@
 import { resolveAgentReason } from './navigation';
-import type { SkillFamily } from './skills-catalog';
+import type { SkillRegistryFamily } from './skills-catalog';
 import type { ConversationSummary } from './chat';
 import type { Section } from '../ui/screens/types';
 
-export type HomeSkill = { id: string; family: SkillFamily; name: string };
+export type HomeSkill = { id: string; family: SkillRegistryFamily; name: string };
 export type HomeEvent = { id: string; title: string; start: string };
 export type HomeSuggestionRequirement =
   | { type: 'skill'; id: string }
-  | { type: 'skill-family'; family: SkillFamily }
+  | { type: 'skill-family'; family: SkillRegistryFamily }
   | { type: 'agent' }
   | { type: 'event'; id: string }
   | { type: 'reminder' }
@@ -30,7 +30,7 @@ export type HomeContext = {
   recentConversations: ConversationSummary[];
 };
 
-const familyLabels: Record<SkillFamily, string> = {
+const familyLabels: Record<SkillRegistryFamily, string> = {
   arquivos: 'Arquivos',
   abrir_aplicativos: 'Abertura e aplicativos',
   agenda_lembretes: 'Agenda e lembretes',

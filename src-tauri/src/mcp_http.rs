@@ -10,6 +10,7 @@ use reqwest::{
 use serde_json::{json, Value};
 use std::{
     io::Read,
+    net::{IpAddr, SocketAddr, ToSocketAddrs},
     sync::{atomic::Ordering, Mutex},
     time::Duration,
 };
@@ -38,6 +39,86 @@ pub fn validate_endpoint(raw: &str) -> Result<Url, String> {
         );
     }
     Ok(url)
+}
+
+fn is_public_address(address: SocketAddr) -> bool {
+    match address.ip() {
+        IpAddr::V4(ip) => {
+            let [a, b, c, _] = ip.octets();
+            !ip.is_private()
+                && !ip.is_loopback()
+                && !ip.is_link_local()
+                && !ip.is_unspecified()
+                && !ip.is_broadcast()
+                && !ip.is_multicast()
+                && a != 0
+                && a < 224
+                // Special-purpose ranges are not public destinations even when
+                // `Ipv4Addr::is_private` returns false for them.
+                && !(a == 100 && (64..=127).contains(&b)) // Shared address space.
+                && !(a == 192 && b == 0 && c == 0) // IETF protocol assignments.
+                && !(a == 192 && b == 0 && c == 2) // Documentation.
+                && !(a == 192 && b == 88 && c == 99) // Deprecated 6to4 relay anycast.
+                && !(a == 198 && (b == 18 || b == 19)) // Benchmarking.
+                && !(a == 198 && b == 51 && c == 100) // Documentation.
+                && !(a == 203 && b == 0 && c == 113) // Documentation.
+        }
+        IpAddr::V6(ip) => {
+            let segments = ip.segments();
+            let is_global_unicast = (segments[0] & 0xe000) == 0x2000;
+            !ip.is_loopback()
+                && !ip.is_unspecified()
+                && !ip.is_unique_local()
+                && !ip.is_unicast_link_local()
+                && !ip.is_multicast()
+                && is_global_unicast
+                && !(segments[0] == 0x2001 && segments[1] <= 0x01ff) // IETF special-purpose.
+                && !(segments[0] == 0x2001 && segments[1] == 0x0db8) // Documentation.
+                && !(segments[0] == 0x3fff && (segments[1] & 0xf000) == 0) // Documentation.
+                && ip.to_ipv4_mapped().is_none_or(|mapped| {
+                    is_public_address(SocketAddr::new(mapped.into(), address.port()))
+                })
+        }
+    }
+}
+
+fn resolve_public_endpoint(endpoint: &Url) -> Result<Vec<SocketAddr>, String> {
+    let host = endpoint
+        .host_str()
+        .ok_or("O servidor MCP não tem um host válido.")?;
+    let port = endpoint
+        .port_or_known_default()
+        .ok_or("O servidor MCP não tem uma porta HTTPS válida.")?;
+    let addresses = (host, port)
+        .to_socket_addrs()
+        .map_err(|_| "Não foi possível resolver o host do servidor MCP.".to_string())?
+        .collect::<Vec<_>>();
+    validate_resolved_addresses(&addresses)?;
+    Ok(addresses)
+}
+
+fn validate_resolved_addresses(addresses: &[SocketAddr]) -> Result<(), String> {
+    if addresses.is_empty() || addresses.iter().any(|address| !is_public_address(*address)) {
+        Err(
+            "O host do servidor MCP resolve para um endereço local ou reservado e foi recusado."
+                .into(),
+        )
+    } else {
+        Ok(())
+    }
+}
+
+fn http_client(endpoint: &Url) -> Result<Client, String> {
+    let host = endpoint
+        .host_str()
+        .ok_or("O servidor MCP não tem um host válido.")?;
+    let addresses = resolve_public_endpoint(endpoint)?;
+    Client::builder()
+        .redirect(Policy::none())
+        .timeout(REQUEST_TIMEOUT)
+        .resolve_to_addrs(host, &addresses)
+        .build()
+        .map_err(|_| "Não foi possível preparar a conexão segura MCP.".to_string())
 }
 
 pub struct McpHttpClient {
@@ -135,11 +216,7 @@ impl McpHttpClient {
         if token.is_empty() || token.len() > 32_768 || token.chars().any(char::is_control) {
             return Err("Cadastre um token de acesso válido para o servidor MCP.".into());
         }
-        let client = Client::builder()
-            .redirect(Policy::none())
-            .timeout(REQUEST_TIMEOUT)
-            .build()
-            .map_err(|_| "Não foi possível preparar a conexão segura MCP.".to_string())?;
+        let client = http_client(&endpoint)?;
         Ok(Self {
             endpoint,
             auth: AuthMode::Personal(token),
@@ -162,11 +239,7 @@ impl McpHttpClient {
                     .into(),
             );
         }
-        let client = Client::builder()
-            .redirect(Policy::none())
-            .timeout(REQUEST_TIMEOUT)
-            .build()
-            .map_err(|_| "Não foi possível preparar a conexão segura MCP.".to_string())?;
+        let client = http_client(&endpoint)?;
         Ok(Self {
             endpoint,
             auth: AuthMode::OAuth {
@@ -359,23 +432,76 @@ fn parse_sse(bytes: &[u8]) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
-    struct MockServer(HttpReply);
+    #[test]
+    fn dns_rebinding_addresses_to_private_networks_are_rejected() {
+        for address in [
+            "127.0.0.1:443",
+            "10.0.0.5:443",
+            "172.16.0.4:443",
+            "192.168.1.2:443",
+            "100.64.0.1:443",
+            "192.0.2.1:443",
+            "198.18.0.1:443",
+            "198.51.100.1:443",
+            "203.0.113.1:443",
+            "169.254.2.4:443",
+            "0.0.0.0:443",
+            "224.0.0.1:443",
+            "[::1]:443",
+            "[fc00::1]:443",
+            "[fe80::1]:443",
+            "[2001:db8::1]:443",
+            "[2001:2::1]:443",
+            "[3fff::1]:443",
+        ] {
+            let address = address.parse::<SocketAddr>().unwrap();
+            assert!(
+                !is_public_address(address),
+                "private DNS answer accepted: {address}"
+            );
+        }
+        for address in ["1.1.1.1:443", "[2606:4700:4700::1111]:443"] {
+            let address = address.parse::<SocketAddr>().unwrap();
+            assert!(
+                is_public_address(address),
+                "public DNS answer rejected: {address}"
+            );
+        }
+        let public = ["1.1.1.1:443".parse::<SocketAddr>().unwrap()];
+        assert!(validate_resolved_addresses(&public).is_ok());
+        let mixed = [
+            "1.1.1.1:443".parse::<SocketAddr>().unwrap(),
+            "127.0.0.1:443".parse::<SocketAddr>().unwrap(),
+        ];
+        assert!(validate_resolved_addresses(&mixed)
+            .unwrap_err()
+            .contains("endereço local ou reservado"));
+    }
+
+    struct MockServer {
+        reply: HttpReply,
+        requested_endpoint: Arc<Mutex<Option<Url>>>,
+    }
 
     impl HttpTransport for MockServer {
         fn post(
             &self,
-            _endpoint: &Url,
+            endpoint: &Url,
             _token: &str,
             _method: &str,
             _name: Option<&str>,
             _body: Value,
         ) -> Result<HttpReply, String> {
+            if let Ok(mut requested_endpoint) = self.requested_endpoint.lock() {
+                *requested_endpoint = Some(endpoint.clone());
+            }
             Ok(HttpReply {
-                status: self.0.status,
-                content_type: self.0.content_type.clone(),
-                final_url: self.0.final_url.clone(),
-                body: self.0.body.clone(),
+                status: self.reply.status,
+                content_type: self.reply.content_type.clone(),
+                final_url: self.reply.final_url.clone(),
+                body: self.reply.body.clone(),
             })
         }
     }
@@ -389,12 +515,15 @@ mod tests {
         McpHttpClient::with_transport(
             "https://mcp.example.org/mcp",
             "test-token",
-            Box::new(MockServer(HttpReply {
-                status,
-                content_type: content_type.into(),
-                final_url: Url::parse(final_url).unwrap(),
-                body,
-            })),
+            Box::new(MockServer {
+                reply: HttpReply {
+                    status,
+                    content_type: content_type.into(),
+                    final_url: Url::parse(final_url).unwrap(),
+                    body,
+                },
+                requested_endpoint: Arc::new(Mutex::new(None)),
+            }),
         )
     }
 
@@ -441,10 +570,35 @@ mod tests {
 
     #[test]
     fn server_host_is_not_a_request_parameter() {
-        let client =
-            McpHttpClient::connect("https://mcp.example.org/endpoint", "secret-token".into())
-                .unwrap();
-        assert_eq!(client.endpoint.host_str(), Some("mcp.example.org"));
+        let endpoint = "https://mcp.example.org/endpoint";
+        let requested_endpoint = Arc::new(Mutex::new(None));
+        let client = McpHttpClient::with_transport(
+            endpoint,
+            "secret-token",
+            Box::new(MockServer {
+                reply: HttpReply {
+                    status: StatusCode::OK,
+                    content_type: "application/json".into(),
+                    final_url: Url::parse(endpoint).unwrap(),
+                    body: br#"{"jsonrpc":"2.0","id":1,"result":{"content":[]}}"#.to_vec(),
+                },
+                requested_endpoint: requested_endpoint.clone(),
+            }),
+        );
+
+        client
+            .tools_call("lookup", json!({"host":"attacker.example"}))
+            .unwrap();
+
+        assert_eq!(
+            requested_endpoint
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .host_str(),
+            Some("mcp.example.org")
+        );
     }
 
     #[test]

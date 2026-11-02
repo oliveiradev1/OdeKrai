@@ -86,6 +86,7 @@ export function validateMcpCatalog(catalog) {
   if (!Array.isArray(catalog)) return ['O catálogo MCP deve ser uma lista.'];
 
   const seenNames = new Set();
+  const seenIds = new Set();
   for (const [index, service] of catalog.entries()) {
     const location = `serviços[${index}]`;
     if (!service || typeof service !== 'object') {
@@ -103,8 +104,37 @@ export function validateMcpCatalog(catalog) {
     if (seenNames.has(service.name))
       errors.push(`${location}: serviço duplicado (${service.name}).`);
     seenNames.add(service.name);
-    if (typeof service.supplier !== 'string' || !service.supplier.trim()) {
+    if (typeof service.id !== 'string' || !service.id.trim() || seenIds.has(service.id)) {
+      errors.push(`${location}: identificador ausente ou duplicado.`);
+    }
+    seenIds.add(service.id);
+    if (typeof service.provider !== 'string' || !service.provider.trim()) {
       errors.push(`${location}: fornecedor ausente.`);
+    }
+    const allowedConnectionTypes = ['one_click', 'client_id', 'personal_token', 'informational'];
+    if (
+      !Array.isArray(service.connectionType) ||
+      !service.connectionType.length ||
+      service.connectionType.some((type) => !allowedConnectionTypes.includes(type))
+    ) {
+      errors.push(`${location}: tipo de conexão inválido ou ausente.`);
+    }
+    if (
+      !['available', 'in_preview', 'configuration_pending', 'not_verified'].includes(service.status)
+    ) {
+      errors.push(`${location}: status do catálogo inválido ou ausente.`);
+    }
+    if (!Array.isArray(service.requirements) || !Array.isArray(service.permissions)) {
+      errors.push(`${location}: requisitos e permissões devem ser listas.`);
+    }
+    if (
+      !['whatItDoes', 'whatItNeeds', 'nextStep'].every(
+        (key) => typeof service[key] === 'string' && service[key].trim(),
+      )
+    ) {
+      errors.push(
+        `${location}: resumo do serviço precisa explicar o que faz, o que precisa e o próximo passo.`,
+      );
     }
     if (
       !Array.isArray(service.authenticationMethods) ||
@@ -120,16 +150,11 @@ export function validateMcpCatalog(catalog) {
       }
     }
 
-    const documentation = parseUrl(
-      service.documentationUrl,
-      `${location}.documentationUrl`,
-      errors,
-    );
-    if (!service.documentationUrl)
-      errors.push(`${location}: link de documentação oficial ausente.`);
+    const documentation = parseUrl(service.officialLink, `${location}.officialLink`, errors);
+    if (!service.officialLink) errors.push(`${location}: link de documentação oficial ausente.`);
     if (documentation && documentation.hostname !== policy.documentationHost) {
       errors.push(
-        `${location}.documentationUrl: domínio deve ser ${policy.documentationHost}, conforme a fonte oficial citada.`,
+        `${location}.officialLink: domínio deve ser ${policy.documentationHost}, conforme a fonte oficial citada.`,
       );
     }
 
@@ -190,7 +215,7 @@ export function verifyExamples(catalog) {
 }
 
 async function main() {
-  const catalogPath = path.join(root, 'src/core/mcp-service-catalog.json');
+  const catalogPath = path.join(root, 'src-tauri/resources/public-mcp-catalog.json');
   const catalog = JSON.parse(await readFile(catalogPath, 'utf8'));
   verifyExamples(catalog);
   const errors = validateMcpCatalog(catalog);

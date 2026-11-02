@@ -89,9 +89,9 @@ pub async fn inspect_local_models(
         .map_err(|_| "Não foi possível consultar os downloads ativos.".to_string())?
         .clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let folder = PathBuf::from(destination)
-            .canonicalize()
-            .map_err(|_| "A pasta de modelos não existe ou não pode ser acessada.".to_string())?;
+        let Some(folder) = resolve_inventory_folder(&PathBuf::from(destination))? else {
+            return Ok(Vec::new());
+        };
         let manifest: Manifest =
             serde_json::from_str(include_str!("../resources/local-models.json"))
                 .map_err(|_| "O catálogo de modelos está inválido.".to_string())?;
@@ -99,6 +99,31 @@ pub async fn inspect_local_models(
     })
     .await
     .map_err(|_| "Não foi possível concluir a consulta dos modelos locais.".to_string())?
+}
+
+fn resolve_inventory_folder(path: &Path) -> Result<Option<PathBuf>, String> {
+    resolve_inventory_folder_result(path.canonicalize())
+}
+
+fn resolve_inventory_folder_result(
+    result: std::io::Result<PathBuf>,
+) -> Result<Option<PathBuf>, String> {
+    match result {
+        Ok(folder) => Ok(Some(folder)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            Err(inventory_folder_error(error.kind()).into())
+        }
+        Err(_) => Ok(None),
+    }
+}
+
+fn inventory_folder_error(kind: std::io::ErrorKind) -> &'static str {
+    if kind == std::io::ErrorKind::PermissionDenied {
+        "Sem permissão para acessar a pasta de modelos."
+    } else {
+        "A pasta de modelos não pode ser acessada."
+    }
 }
 
 fn inventory_models(
@@ -125,6 +150,11 @@ fn inventory_models(
                     Err(partial_error) if partial_error.kind() == std::io::ErrorKind::NotFound => {
                         (0, "NAO_BAIXADO")
                     }
+                    Err(partial_error)
+                        if partial_error.kind() == std::io::ErrorKind::PermissionDenied =>
+                    {
+                        return Err(inventory_folder_error(partial_error.kind()).into());
+                    }
                     Ok(meta) if !meta.file_type().is_file() => (meta.len(), "ERRO"),
                     Ok(meta) if meta.len() > model.size_bytes.unwrap_or_default() => {
                         (meta.len(), "ERRO")
@@ -133,6 +163,9 @@ fn inventory_models(
                     Ok(meta) => (meta.len(), "PARCIAL"),
                     Err(_) => (0, "ERRO"),
                 }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                return Err(inventory_folder_error(error.kind()).into());
             }
             Err(_) => (0, "ERRO"),
             Ok(metadata) if !metadata.file_type().is_file() => (metadata.len(), "ERRO"),
@@ -736,6 +769,30 @@ fn manifest_model(id: &str) -> Result<Model, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_inventory_folder_is_an_empty_state() {
+        let folder = std::env::temp_dir().join(format!(
+            "odekrai-model-folder-missing-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        assert!(matches!(resolve_inventory_folder(&folder), Ok(None)));
+    }
+
+    #[test]
+    fn permission_denied_for_inventory_folder_has_a_clear_message() {
+        assert_eq!(
+            resolve_inventory_folder_result(Err(std::io::Error::from(
+                std::io::ErrorKind::PermissionDenied,
+            ))),
+            Err("Sem permissão para acessar a pasta de modelos.".into())
+        );
+    }
+
     #[test]
     fn manifest_download_hosts_are_https_allowlisted() {
         let model = manifest_model("qwen35-2b-q4km").unwrap();

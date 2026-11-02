@@ -92,6 +92,7 @@ describe('ConversationsScreen', () => {
         agentRunning={false}
         agentAwaitingApproval={false}
         agentActionCards={[]}
+        agentProviderSelection="Usando Groq porque oferece ferramentas compatíveis e está disponível."
         onReviewApproval={() => undefined}
         onUndo={() => undefined}
         onOpenArtifact={() => undefined}
@@ -120,6 +121,9 @@ describe('ConversationsScreen', () => {
     expect(markup).toContain('>Ouvir</button>');
     expect(markup).toContain('Detalhes técnicos');
     expect(markup).toContain('class="chat-error-message"');
+    expect(markup).toContain(
+      'Usando Groq porque oferece ferramentas compatíveis e está disponível.',
+    );
     expect(markup).toContain('<pre>Verificação local da pasta pessoal falhou.</pre>');
     expect(markup).toContain('Resolver pasta');
   });

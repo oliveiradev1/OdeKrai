@@ -7,6 +7,13 @@ estão disponíveis. As habilidades e decisões permanecem no registro e no moto
 
 O catálogo de provedores em `src-tauri/resources/provider-catalog.json` alimenta os metadados do frontend e do Rust. O Rust valida host e caminho, acessa credenciais e implementa listagem documentada de modelos. As preferências guardam configurações por `providerId`; perfil e histórico usam SQLite local. Avatar é processado no Rust e servido como data URL apenas para a interface principal.
 
+A aba Pessoal de Habilidades consolida o registro em nove grupos visíveis: Arquivos, Sistema,
+Agenda e lembretes, Planilhas e documentos, Mensagens, Web, Computador, Código e Integrações.
+Integrações reúne Google Calendar e provedores de nuvem; Sistema reúne informações do computador e
+abertura de aplicativos. O interruptor de grupo é aplicado no Rust
+em uma única operação, enquanto os interruptores individuais ficam na tela de detalhes da família.
+A busca considera nome, descrição, identificador, família e exemplos da habilidade.
+
 ## ShardCloud com ações limitadas e aprovação
 
 `src-tauri/src/shardcloud.rs` mantém a base HTTPS fixa, usa `Authorization: Bearer`, não segue
@@ -74,8 +81,21 @@ são limitados pelo motor. O roteador só troca de provedor em falhas transitór
 saída. A tabela `agent_messages` registra tipo, habilidade, id de auditoria e hashes; argumentos e
 resultados brutos não são persistidos.
 
-`AgentEvent` é o contrato serializado do canal: `step`, `toolCall`, `actionCard`, `awaitingApproval`,
-`toolResult`, `finalResponse`, `error` e `stopped`. Cartões guardam descrição, risco, decisão,
+No início de uma execução do agente, `providers::select_agent_provider` classifica o pedido em
+conversa, pesquisa, código, arquivos, agenda ou visão e usa a capacidade do catálogo, a credencial,
+o limite de uso diário e o estado recente de falha para ordenar os destinos configurados. Código,
+pesquisa, arquivos, agenda e visão pedem capacidades de ferramenta; visão também exige um modelo
+explicitamente permitido. Se nenhuma regra de capacidade se aplicar, preserva-se a ordem do usuário
+com o provedor principal primeiro. Quando uma alternativa é escolhida, o evento
+`ProviderSelection` mostra na conversa qual provedor foi usado e por quê. Falha transitória marca
+provedor/modelo indisponível por 60 segundos; erro de cota/saldo os mantém indisponíveis até a
+próxima meia-noite UTC. Janelas de contexto são aceitas pelo seletor somente quando declaradas no
+catálogo; atualmente estão desconhecidas (`null`) para os provedores, portanto essa regra não troca
+provedor com base em contexto até os valores serem verificados e cadastrados. O failover durante a
+chamada mantém a regra anterior: só tenta outro provedor antes de observar saída.
+
+`AgentEvent` é o contrato serializado do canal: `providerSelection`, `step`, `toolCall`, `actionCard`,
+`awaitingApproval`, `toolResult`, `finalResponse`, `error` e `stopped`. Cartões guardam descrição, risco, decisão,
 status e um resumo sem parâmetros ou resultados brutos. `agent_cancel(conversation_id)` cancela uma
 execução; o kill switch para todas. `approval_respond` apenas resolve a decisão pendente; o loop
 retoma a ação após receber o canal.
@@ -100,9 +120,9 @@ O componente `PetSprite` renderiza o PNG selecionado e animações CSS associada
 
 ## Ilha, áudio e armazenamento
 
-O SQLite também soma tokens de entrada e saída por provedor e dia UTC. A interface consulta os totais do dia e dos últimos sete dias; o limite diário é configurado pelo usuário e zero desativa o limite.
+O SQLite também soma tokens de entrada e saída por provedor e dia UTC. Conectores de IA consulta os totais por provedor do dia e dos últimos sete dias; Configurações mantém apenas o limite diário total, que zero desativa.
 
-`src/core/island.ts` implementa transições e prioridades. `src/core/sounds.ts` carrega sons sob demanda, mantém cache, limita repetições, aplica volume e ignora arquivos ausentes ou inválidos. Preferências não secretas ficam no armazenamento local do WebView; chaves de API não são salvas. O histórico de conversas fica em SQLite na pasta de dados do aplicativo, acessado somente pelos comandos Rust da janela principal.
+`src/core/island.ts` implementa transições e prioridades. `src/core/sounds.ts` carrega sons sob demanda, mantém cache, limita repetições, aplica volume e ignora arquivos ausentes ou inválidos. Preferências não secretas ficam no armazenamento local do WebView; chaves de API são gerenciadas somente em Conectores de IA e ficam no Credential Manager quando suportado. Configurações contém preferências globais, incluindo limite total de tokens e provedor principal, com acesso à central de Conectores; a seleção do provedor principal é compartilhada entre as duas telas e persiste nas mesmas preferências do aplicativo. Conectores concentra edição de credenciais, modelos, configuração específica por provedor, alternativas e status: credencial salva, teste, principal, suporte a ferramentas, plano gratuito verificado e serviço local. O histórico de conversas fica em SQLite na pasta de dados do aplicativo, acessado somente pelos comandos Rust da janela principal.
 
 Conversas apresenta uma lista pesquisável com título, data e prévia; o SQLite armazena título,
 mensagens, modo agente e cartões de ação. A tela permite selecionar, renomear e apagar uma conversa.
@@ -125,7 +145,7 @@ A janela `pet` é criada sem decorações, sombra, botão de fechar e foco inici
 
 O comando de status distingue pasta íntegra, ausente, com estrutura incompleta, inacessível e ainda não configurada. Quando a pasta configurada não existe, Identidade e memória permite escolher uma pasta existente ou criar outra sem sobrescrever `ODEKRAI.md`; a disponibilidade do modo agente é reavaliada ao focar a janela.
 
-O Rust compõe o prompt com regras fixas, preâmbulo local de data/hora/fuso/idioma, identidade aprovada, até 1.024 caracteres de `memory/estilo.md` e o modo efetivo lido do SQLite local. `agent_run` acrescenta apenas descrições de habilidades ativas. Anthropic recebe `system`, APIs Chat Completions recebem mensagem `system` e a Perplexity Agent API recebe `instructions`; provedores sem tool calling elegível são excluídos do loop. O chat textual existente continua disponível sem pasta configurada.
+O Rust compõe o prompt com regras fixas, preâmbulo local de data/hora/fuso/idioma, identidade aprovada, até 1.024 caracteres de `memory/estilo.md` e o modo efetivo lido do SQLite local. No chat sem modo agente, o Rust acrescenta o estado das habilidades no registro local (habilitadas, desativadas ou aguardando configuração) e informa que nenhuma ferramenta foi enviada nessa resposta. No modo agente, um snapshot por execução gera tanto as ferramentas efetivamente oferecidas quanto a lista correspondente no prompt e explica os motivos das indisponíveis. Anthropic recebe `system`, APIs Chat Completions recebem mensagem `system` e a Perplexity Agent API recebe `instructions`; provedores sem tool calling elegível são excluídos do loop. O chat textual existente continua disponível sem pasta configurada.
 
 ## Motor de permissões
 

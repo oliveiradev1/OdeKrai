@@ -109,6 +109,8 @@ pub struct AgentActionCard {
     pub undo_descriptor: Option<UndoDescriptor>,
     #[serde(default)]
     pub plan: Option<AgentPlan>,
+    #[serde(default)]
+    pub code_review_id: Option<String>,
     pub created_at: i64,
 }
 
@@ -132,6 +134,10 @@ pub(crate) fn save_agent_action_card(
         || card.summary.len() > 500
         || card.result_summary.len() > 500
         || card.diff.as_ref().is_some_and(|diff| diff.len() > 16_000)
+        || card
+            .code_review_id
+            .as_ref()
+            .is_some_and(|id| id.is_empty() || id.len() > 128 || id.chars().any(char::is_control))
         || card
             .preview
             .as_ref()
@@ -192,8 +198,8 @@ pub(crate) fn save_agent_action_card(
         return Err("Cartão de ação inválido.".into());
     }
     let changed = database(app)?.execute(
-        "INSERT INTO agent_action_cards(conversation_id,id,skill_id,title,risk,decision,status,summary,result_summary,diff,preview,artifacts,timeline,duration_ms,approval_expires_at,untrusted_result,undo_descriptor,plan) SELECT ?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18 WHERE EXISTS(SELECT 1 FROM conversations WHERE id=?1) ON CONFLICT(conversation_id,id) DO UPDATE SET decision=excluded.decision,status=excluded.status,result_summary=excluded.result_summary,diff=excluded.diff,preview=excluded.preview,artifacts=excluded.artifacts,timeline=excluded.timeline,duration_ms=excluded.duration_ms,approval_expires_at=excluded.approval_expires_at,untrusted_result=excluded.untrusted_result,undo_descriptor=excluded.undo_descriptor,plan=excluded.plan",
-        params![conversation_id,card.id,card.skill_id,card.title,card.risk,card.decision,card.status,card.summary,card.result_summary,card.diff,card.preview,serde_json::to_string(&card.artifacts).unwrap_or_else(|_| "[]".into()),serde_json::to_string(&card.timeline).unwrap_or_else(|_| "[]".into()),card.duration_ms,card.approval_expires_at,card.untrusted_result,card.undo_descriptor.as_ref().and_then(|undo| serde_json::to_string(undo).ok()),card.plan.as_ref().and_then(|plan| serde_json::to_string(plan).ok())],
+        "INSERT INTO agent_action_cards(conversation_id,id,skill_id,title,risk,decision,status,summary,result_summary,diff,preview,artifacts,timeline,duration_ms,approval_expires_at,untrusted_result,undo_descriptor,plan,code_review_id) SELECT ?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19 WHERE EXISTS(SELECT 1 FROM conversations WHERE id=?1) ON CONFLICT(conversation_id,id) DO UPDATE SET decision=excluded.decision,status=excluded.status,result_summary=excluded.result_summary,diff=excluded.diff,preview=excluded.preview,artifacts=excluded.artifacts,timeline=excluded.timeline,duration_ms=excluded.duration_ms,approval_expires_at=excluded.approval_expires_at,untrusted_result=excluded.untrusted_result,undo_descriptor=excluded.undo_descriptor,plan=excluded.plan,code_review_id=excluded.code_review_id",
+        params![conversation_id,card.id,card.skill_id,card.title,card.risk,card.decision,card.status,card.summary,card.result_summary,card.diff,card.preview,serde_json::to_string(&card.artifacts).unwrap_or_else(|_| "[]".into()),serde_json::to_string(&card.timeline).unwrap_or_else(|_| "[]".into()),card.duration_ms,card.approval_expires_at,card.untrusted_result,card.undo_descriptor.as_ref().and_then(|undo| serde_json::to_string(undo).ok()),card.plan.as_ref().and_then(|plan| serde_json::to_string(plan).ok()),card.code_review_id],
     ).map_err(|_| "Não foi possível salvar o cartão da ação.".to_string())?;
     if changed == 1 {
         Ok(())
@@ -215,6 +221,40 @@ pub(crate) fn clear_undo_descriptor_for_state(
     Ok(())
 }
 
+pub(crate) fn code_review_card_matches(
+    app: &tauri::AppHandle,
+    conversation_id: &str,
+    card_id: &str,
+    review_id: &str,
+) -> Result<bool, String> {
+    database(app)?
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM agent_action_cards WHERE conversation_id=?1 AND id=?2 AND skill_id='code.delegate' AND code_review_id=?3 AND status='Concluída')",
+            params![conversation_id, card_id, review_id],
+            |row| row.get(0),
+        )
+        .map_err(|_| "Não foi possível validar a revisão da delegação.".into())
+}
+
+pub(crate) fn mark_code_review_applied(
+    app: &tauri::AppHandle,
+    conversation_id: &str,
+    card_id: &str,
+    review_id: &str,
+) -> Result<(), String> {
+    let changed = database(app)?
+        .execute(
+            "UPDATE agent_action_cards SET code_review_id=NULL,result_summary='Alterações aplicadas ao projeto após aprovação explícita.' WHERE conversation_id=?1 AND id=?2 AND skill_id='code.delegate' AND code_review_id=?3 AND status='Concluída'",
+            params![conversation_id, card_id, review_id],
+        )
+        .map_err(|_| "Não foi possível atualizar o cartão da revisão.".to_string())?;
+    if changed == 1 {
+        Ok(())
+    } else {
+        Err("A revisão não está mais pendente neste cartão.".into())
+    }
+}
+
 #[tauri::command]
 pub fn load_agent_action_cards(
     app: tauri::AppHandle,
@@ -227,7 +267,7 @@ pub fn load_agent_action_cards(
     }
     let db = database(&app)?;
     let mut statement = db
-        .prepare("SELECT id,skill_id,title,risk,decision,status,summary,result_summary,diff,created_at,preview,artifacts,timeline,duration_ms,approval_expires_at,untrusted_result,undo_descriptor,plan FROM agent_action_cards WHERE conversation_id=?1 ORDER BY created_at,id LIMIT 200")
+        .prepare("SELECT id,skill_id,title,risk,decision,status,summary,result_summary,diff,created_at,preview,artifacts,timeline,duration_ms,approval_expires_at,untrusted_result,undo_descriptor,plan,code_review_id FROM agent_action_cards WHERE conversation_id=?1 ORDER BY created_at,id LIMIT 200")
         .map_err(|_| "Não foi possível ler as ações da conversa.".to_string())?;
     let rows = statement
         .query_map([conversation_id], |row| {
@@ -266,6 +306,7 @@ pub fn load_agent_action_cards(
                     .ok()
                     .flatten()
                     .and_then(|value| serde_json::from_str(&value).ok()),
+                code_review_id: row.get(18)?,
             })
         })
         .map_err(|_| "Não foi possível ler as ações da conversa.".to_string())?;
@@ -291,7 +332,7 @@ fn init_schema(db: &Connection) -> Result<(), String> {
         CREATE TABLE IF NOT EXISTS conversations (id TEXT PRIMARY KEY, title TEXT NOT NULL, created_at INTEGER NOT NULL DEFAULT (unixepoch()), provider_id TEXT NOT NULL DEFAULT '', model TEXT NOT NULL DEFAULT '', agent_enabled INTEGER NOT NULL DEFAULT 0 CHECK(agent_enabled IN (0,1)), provider_targets TEXT NOT NULL DEFAULT '[]');
         CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY, conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE, role TEXT NOT NULL CHECK(role IN ('user','assistant')), content TEXT NOT NULL, created_at INTEGER NOT NULL DEFAULT (unixepoch()));
         CREATE TABLE IF NOT EXISTS agent_messages (id INTEGER PRIMARY KEY, conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE, role TEXT NOT NULL CHECK(role IN ('tool_call','tool_result')), skill_id TEXT NOT NULL, audit_id TEXT, content TEXT NOT NULL, created_at INTEGER NOT NULL DEFAULT (unixepoch()));
-        CREATE TABLE IF NOT EXISTS agent_action_cards (conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE, id TEXT NOT NULL, skill_id TEXT NOT NULL, title TEXT NOT NULL, risk TEXT NOT NULL, decision TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NOT NULL, result_summary TEXT NOT NULL DEFAULT '', diff TEXT, created_at INTEGER NOT NULL DEFAULT (unixepoch()), preview TEXT, artifacts TEXT NOT NULL DEFAULT '[]', timeline TEXT NOT NULL DEFAULT '[]', duration_ms INTEGER, approval_expires_at INTEGER, untrusted_result INTEGER NOT NULL DEFAULT 0, undo_descriptor TEXT, plan TEXT, PRIMARY KEY(conversation_id,id));
+        CREATE TABLE IF NOT EXISTS agent_action_cards (conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE, id TEXT NOT NULL, skill_id TEXT NOT NULL, title TEXT NOT NULL, risk TEXT NOT NULL, decision TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NOT NULL, result_summary TEXT NOT NULL DEFAULT '', diff TEXT, created_at INTEGER NOT NULL DEFAULT (unixepoch()), preview TEXT, artifacts TEXT NOT NULL DEFAULT '[]', timeline TEXT NOT NULL DEFAULT '[]', duration_ms INTEGER, approval_expires_at INTEGER, untrusted_result INTEGER NOT NULL DEFAULT 0, undo_descriptor TEXT, plan TEXT, code_review_id TEXT, PRIMARY KEY(conversation_id,id));
         CREATE INDEX IF NOT EXISTS messages_conversation ON messages(conversation_id, id);
         CREATE TABLE IF NOT EXISTS pet_preferences (key TEXT PRIMARY KEY, value TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS provider_tool_support (
@@ -340,6 +381,7 @@ fn init_schema(db: &Connection) -> Result<(), String> {
         ("untrusted_result", "INTEGER NOT NULL DEFAULT 0"),
         ("undo_descriptor", "TEXT"),
         ("plan", "TEXT"),
+        ("code_review_id", "TEXT"),
     ] {
         let exists: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('agent_action_cards') WHERE name = ?1)", [column], |row| row.get(0)).map_err(|_| "Não foi possível verificar os cartões de ação.".to_string())?;
         if !exists {
@@ -1150,6 +1192,7 @@ mod tests {
         assert!(legacy.artifacts.is_empty());
         assert!(legacy.undo_descriptor.is_none());
         assert!(legacy.plan.is_none());
+        assert!(legacy.code_review_id.is_none());
         assert_eq!(legacy.status, "Concluída");
 
         let db = Connection::open_in_memory().unwrap();
@@ -1165,6 +1208,8 @@ mod tests {
         assert!(has_undo_column);
         let has_plan_column: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('agent_action_cards') WHERE name='plan')", [], |row| row.get(0)).unwrap();
         assert!(has_plan_column);
+        let has_code_review_column: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('agent_action_cards') WHERE name='code_review_id')", [], |row| row.get(0)).unwrap();
+        assert!(has_code_review_column);
     }
 
     #[test]

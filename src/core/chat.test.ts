@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { filterConversations, presentMessages, resolveConversationSelection } from './chat';
+import {
+  canRetryFailedPrompt,
+  filterConversations,
+  presentMessages,
+  resolveConversationSelection,
+} from './chat';
 
 const conversations = [
   { id: 'one', title: 'Viagem', preview: 'roteiro para Recife', created_at: 10 },
@@ -23,5 +28,11 @@ describe('workspace de conversas', () => {
       { message: { role: 'user', content: 'pergunta' }, side: 'right' },
       { message: { role: 'assistant', content: 'resposta' }, side: 'left' },
     ]);
+  });
+
+  it('não repete uma execução do agente ao tentar novamente após falha de rede', () => {
+    expect(canRetryFailedPrompt('envie a mensagem', 'Falha de rede', true)).toBe(false);
+    expect(canRetryFailedPrompt('pergunta simples', 'Falha de rede', false)).toBe(true);
+    expect(canRetryFailedPrompt('pergunta simples', 'Erro de configuração', false)).toBe(false);
   });
 });

@@ -98,9 +98,11 @@ export function ConversationsScreen({
   agentRunning,
   agentAwaitingApproval,
   agentActionCards,
+  agentProviderSelection,
   onReviewApproval,
   onConfigureDiscord,
   onUndo,
+  onApplyCodeDiff,
   onOpenArtifact,
   onRevealArtifact,
   onToggleAgent,
@@ -151,9 +153,11 @@ export function ConversationsScreen({
   agentRunning: boolean;
   agentAwaitingApproval: boolean;
   agentActionCards: AgentActionCardData[];
+  agentProviderSelection?: string | null;
   onReviewApproval: () => void;
   onConfigureDiscord?: () => void;
   onUndo: (action: AgentActionCardData) => void;
+  onApplyCodeDiff?: (action: AgentActionCardData) => Promise<void>;
   onOpenArtifact: (path: string) => void;
   onRevealArtifact: (path: string) => void;
   onToggleAgent: (enabled: boolean) => void;
@@ -858,6 +862,11 @@ export function ConversationsScreen({
                   {speechError}
                 </p>
               )}
+              {agentProviderSelection && (
+                <article className="agent-provider-selection" role="status">
+                  {agentProviderSelection}
+                </article>
+              )}
               {agentActionCards.map((action) => (
                 <AgentActionCard
                   action={action}
@@ -869,6 +878,7 @@ export function ConversationsScreen({
                   onOpenArtifact={onOpenArtifact}
                   onRevealArtifact={onRevealArtifact}
                   onUndo={() => onUndo(action)}
+                  onApplyCodeDiff={onApplyCodeDiff}
                 />
               ))}
               {busy && !agentAwaitingApproval && (

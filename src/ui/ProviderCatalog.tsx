@@ -20,6 +20,7 @@ import {
   saveProviderDirectoryTab,
   localServiceStatus,
   parseLocalProbePort,
+  moveFallbackProvider,
   type ProviderDirectoryTab,
 } from '../core/provider-directory';
 import { PageHeader } from './DesignSystem';
@@ -38,6 +39,7 @@ type Props = {
   selectedId: string;
   onSelect: (provider: AiProvider) => void;
   onSetPrimary: (providerId: string) => void;
+  onSetFallbacks?: (providerIds: string[]) => void;
   onToggleEnabled: (providerId: string, enabled: boolean) => void;
   onSave: (provider: ProviderSettings) => void;
   onChat: () => void;
@@ -50,6 +52,14 @@ type Props = {
 type LocalDiscovery = {
   onlineEndpoints: string[];
   models: { baseUrl: string; model: { id: string; name: string } }[];
+};
+
+type ProviderUsage = {
+  providerId: string;
+  todayInput: number;
+  todayOutput: number;
+  sevenDayInput: number;
+  sevenDayOutput: number;
 };
 
 function localModelKey(baseUrl: string, modelId: string) {
@@ -69,6 +79,7 @@ export function ProviderCatalog({
   selectedId,
   onSelect,
   onSetPrimary,
+  onSetFallbacks,
   onToggleEnabled,
   onSave,
   onChat,
@@ -88,6 +99,8 @@ export function ProviderCatalog({
   const [secret, setSecret] = useState('');
   const [showKey, setShowKey] = useState(false);
   const [search, setSearch] = useState('');
+  const [fallbackToAdd, setFallbackToAdd] = useState('');
+  const [usage, setUsage] = useState<ProviderUsage[]>([]);
   const [tab, setTab] = useState<ProviderDirectoryTab>(
     () =>
       initialTab ??
@@ -173,9 +186,17 @@ export function ProviderCatalog({
         setCredentialChecksComplete(true);
         setCredentialCheckFailed(result.failedIds.size > 0);
       });
+      void invoke<ProviderUsage[]>('get_provider_usage')
+        .then((items) => {
+          if (current) setUsage(items);
+        })
+        .catch(() => {
+          if (current) setUsage([]);
+        });
     } else {
       setCredentialChecksComplete(true);
       setLocalServiceChecked(true);
+      setUsage([]);
     }
     return () => {
       current = false;
@@ -602,6 +623,138 @@ export function ProviderCatalog({
           </button>
         )}
       </div>
+      <section
+        className="settings-panel settings-section provider-global-routing"
+        aria-labelledby="provider-fallback-heading"
+      >
+        <h2 id="provider-fallback-heading">Provedores alternativos</h2>
+        <p>
+          Se o principal estiver temporariamente indisponível, o OdeKrai tentará os próximos desta
+          lista. Provedores sem credencial ou capacidade compatível serão ignorados.
+        </p>
+        {onSetFallbacks ? (
+          <>
+            <div className="fallback-provider-add">
+              <label htmlFor="fallback-provider-select">Adicionar provedor alternativo</label>
+              <select
+                id="fallback-provider-select"
+                value={fallbackToAdd}
+                onChange={(event) => setFallbackToAdd(event.target.value)}
+              >
+                <option value="">Selecione</option>
+                {AI_PROVIDERS.filter(
+                  (provider) =>
+                    provider.integration !== 'guide' &&
+                    provider.id !== settings.activeProviderId &&
+                    settings.providers[provider.id]?.enabled !== false &&
+                    !settings.fallbackProviderIds.includes(provider.id),
+                ).map((provider) => (
+                  <option key={provider.id} value={provider.id}>
+                    {provider.name}
+                  </option>
+                ))}
+              </select>
+              <button
+                className="secondary-button small-button"
+                type="button"
+                disabled={!fallbackToAdd}
+                onClick={() => {
+                  onSetFallbacks([...settings.fallbackProviderIds, fallbackToAdd]);
+                  setFallbackToAdd('');
+                }}
+              >
+                Adicionar
+              </button>
+            </div>
+            {settings.fallbackProviderIds.length > 0 ? (
+              <ol className="fallback-provider-list" aria-label="Ordem dos provedores alternativos">
+                {settings.fallbackProviderIds
+                  .filter((id) => settings.providers[id]?.enabled !== false)
+                  .map((providerId, index, activeFallbacks) => {
+                    const provider = AI_PROVIDERS.find((item) => item.id === providerId);
+                    if (!provider) return null;
+                    return (
+                      <li key={providerId}>
+                        <span>{provider.name}</span>
+                        <div>
+                          <button
+                            type="button"
+                            className="secondary-button small-button"
+                            aria-label={`Mover ${provider.name} para cima`}
+                            disabled={index === 0}
+                            onClick={() =>
+                              onSetFallbacks(
+                                moveFallbackProvider(settings, providerId, -1).fallbackProviderIds,
+                              )
+                            }
+                          >
+                            ↑
+                          </button>
+                          <button
+                            type="button"
+                            className="secondary-button small-button"
+                            aria-label={`Mover ${provider.name} para baixo`}
+                            disabled={index === activeFallbacks.length - 1}
+                            onClick={() =>
+                              onSetFallbacks(
+                                moveFallbackProvider(settings, providerId, 1).fallbackProviderIds,
+                              )
+                            }
+                          >
+                            ↓
+                          </button>
+                          <button
+                            type="button"
+                            className="secondary-button small-button"
+                            onClick={() =>
+                              onSetFallbacks(
+                                settings.fallbackProviderIds.filter((id) => id !== providerId),
+                              )
+                            }
+                          >
+                            Remover
+                          </button>
+                        </div>
+                      </li>
+                    );
+                  })}
+              </ol>
+            ) : (
+              <p className="settings-description">Nenhum provedor alternativo configurado.</p>
+            )}
+          </>
+        ) : (
+          <p role="status">A edição dos provedores alternativos não está disponível nesta tela.</p>
+        )}
+      </section>
+      <section
+        className="settings-panel settings-section provider-global-routing"
+        aria-labelledby="provider-usage-heading"
+      >
+        <h2 id="provider-usage-heading">Uso de tokens por provedor</h2>
+        <ul className="provider-usage-list">
+          {AI_PROVIDERS.filter((provider) =>
+            usage.some((item) => item.providerId === provider.id),
+          ).map((provider) => {
+            const item = usage.find((entry) => entry.providerId === provider.id)!;
+            return (
+              <li key={provider.id}>
+                <strong>{provider.name}</strong>
+                <span>
+                  Hoje: {(item.todayInput + item.todayOutput).toLocaleString('pt-BR')} tokens
+                </span>
+                <span>
+                  Últimos 7 dias:{' '}
+                  {(item.sevenDayInput + item.sevenDayOutput).toLocaleString('pt-BR')} tokens
+                </span>
+              </li>
+            );
+          })}
+          {usage.length === 0 && (
+            <li className="settings-description">Ainda não há uso registrado.</li>
+          )}
+        </ul>
+      </section>
       <div className={`provider-layout ${detailsOpen ? 'has-detail' : ''}`}>
         <section className="provider-browser" aria-label="Catálogo de provedores de IA">
           <div className="provider-browser-heading">

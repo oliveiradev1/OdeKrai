@@ -1,6 +1,7 @@
 import {
   lazy,
   Suspense,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -8,20 +9,23 @@ import {
   type CSSProperties,
   type ComponentType,
   type FormEvent,
+  type SetStateAction,
 } from 'react';
-import { resolveConversationSelection } from '../core/chat';
+import { canRetryFailedPrompt, resolveConversationSelection } from '../core/chat';
+import { LatestRequestGate } from '../core/latest-request-gate';
 import { setActionCardUndoError } from '../core/agent-card';
+import { runOnceWhilePending } from '../core/single-flight';
 import type { ChatMessage } from '../core/provider-messages';
 import type { AgentActionCardData } from './AgentControls';
+import { ActivityPanelTrigger } from './ActivityPanelTrigger';
 import {
-  ActivityPanelTrigger,
-  ActivitySidePanel,
   shouldLoadPanelAudit,
   toggleActivityPanel,
   type ActivityAuditSummary,
   type UpcomingReminder,
-} from './ActivitySidePanel';
+} from '../core/activity-panel';
 import { Channel, invoke, isTauri } from '@tauri-apps/api/core';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { emit, listen } from '@tauri-apps/api/event';
 import {
   normalizeSoundPreferences,
@@ -103,9 +107,7 @@ const ActivityScreen = lazy(() =>
     default: withScreenBoundary(module.ActivityScreen),
   })),
 );
-import { ApprovalWindow, isApprovalWindow, SecurityCenter } from './SecurityCenter';
 import type { AuditEntry } from './SecurityCenter';
-import { SkillsScreen } from './SkillsScreen';
 import { PETS, petAnimationForAssistantActivity, type PetAnimationState } from '../core/pets';
 import {
   navigationItems,
@@ -115,6 +117,7 @@ import {
 } from './SidebarNavigation';
 import {
   loadSavedCredentialProviderIds,
+  setFallbackProviderIds,
   setPrimaryProviderSettings,
   toggleProviderSettings,
 } from '../core/provider-directory';
@@ -125,7 +128,6 @@ import { shouldAutomaticallyCheckForUpdates } from '../core/update-check';
 
 import { useAppState } from './hooks/useAppState';
 import { useNavigation } from './hooks/useNavigation';
-import { SettingsModal } from './SettingsModal';
 import { UpdateAvailableBanner, type UpdateCheckResult } from './UpdateAvailableBanner';
 import { FirstUseAssistant, type FirstUseStepContent } from './FirstUseAssistant';
 import { ReleaseNotesModal } from './ReleaseNotesModal';
@@ -142,6 +144,21 @@ import {
   type PaletteItem,
 } from '../core/command-palette';
 import type { SkillFamily } from '../core/skills-catalog';
+const ActivitySidePanel = lazy(() =>
+  import('./ActivitySidePanel').then((module) => ({ default: module.ActivitySidePanel })),
+);
+const SecurityCenter = lazy(() =>
+  import('./SecurityCenter').then((module) => ({ default: module.SecurityCenter })),
+);
+const ApprovalWindow = lazy(() =>
+  import('./SecurityCenter').then((module) => ({ default: module.ApprovalWindow })),
+);
+const SkillsScreen = lazy(() =>
+  import('./SkillsScreen').then((module) => ({ default: module.SkillsScreen })),
+);
+const SettingsModal = lazy(() =>
+  import('./SettingsModal').then((module) => ({ default: module.SettingsModal })),
+);
 const screenLoading = (
   <div className="screen-loading" role="status">
     Carregando tela…
@@ -161,8 +178,31 @@ const withScreenBoundary = <Props extends object>(
 };
 const currentReleaseNotesUrl = `https://github.com/Anceryx/OdeKrai/blob/main/docs/releases/v${releaseNotesManifest.currentVersion}.md`;
 
+type HomeContextSnapshot = {
+  skills: CatalogSkill[];
+  todayEvents: HomeEvent[];
+  scheduledEvents: HomeEvent[];
+  reminderCount: number;
+  scheduleUnavailable: boolean;
+  reminderUnavailable: boolean;
+};
+
+function isApprovalWindow(): boolean {
+  try {
+    return isTauri() && getCurrentWindow().label === 'approval';
+  } catch {
+    return false;
+  }
+}
+
 export function App() {
-  if (isApprovalWindow()) return <ApprovalWindow />;
+  if (isApprovalWindow()) {
+    return (
+      <Suspense fallback={screenLoading}>
+        <ApprovalWindow />
+      </Suspense>
+    );
+  }
   if (
     import.meta.env.DEV &&
     location.pathname === '/__dev/design-system' &&
@@ -209,6 +249,8 @@ function MainApp() {
   const [agentErrorDetails, setAgentErrorDetails] = useState('');
   const [agentAwaitingApproval, setAgentAwaitingApproval] = useState(false);
   const [agentActionCards, setAgentActionCards] = useState<AgentActionCardData[]>([]);
+  const [lastFailedPromptUsedAgent, setLastFailedPromptUsedAgent] = useState(false);
+  const [agentProviderSelection, setAgentProviderSelection] = useState<string | null>(null);
   const [assistantPetState, setAssistantPetState] = useState<PetAnimationState>('idle');
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [recentCommands, setRecentCommands] = useState<string[]>([]);
@@ -222,6 +264,7 @@ function MainApp() {
   const reviewAlertHandler = useRef<(state: IslandReviewState) => void>(() => undefined);
   const quickSuggestionsRef = useRef<ReturnType<typeof islandSuggestions>>([]);
   const activeConversationRef = useRef<string | null>(null);
+  const conversationLoadGate = useRef(new LatestRequestGate());
   const [requestedSettingsEntry, setRequestedSettingsEntry] = useState<{
     section: import('../core/navigation').SettingsSection;
     anchor: string;
@@ -240,13 +283,19 @@ function MainApp() {
     return () => window.clearTimeout(timer);
   }, [undoToast]);
   const [pendingApprovalCount, setPendingApprovalCount] = useState(0);
+  const [pendingApprovalCountError, setPendingApprovalCountError] = useState('');
+  const [settingsModalLoaded, setSettingsModalLoaded] = useState(settingsOpen);
   const [activityPanelOpen, setActivityPanelOpen] = useState(false);
+  const [activityPanelVisited, setActivityPanelVisited] = useState(false);
   const activityPanelTriggerRef = useRef<HTMLButtonElement>(null);
   const [activityAuditRecords, setActivityAuditRecords] = useState<AuditEntry[]>([]);
   const [activityAuditVerified, setActivityAuditVerified] = useState<boolean | null>(null);
   const [activityAuditLoading, setActivityAuditLoading] = useState(false);
   const [activityAuditUnavailable, setActivityAuditUnavailable] = useState(false);
   const activityAuditLoadedAt = useRef(0);
+  useEffect(() => {
+    if (settingsOpen) setSettingsModalLoaded(true);
+  }, [settingsOpen]);
   const [homeSkills, setHomeSkills] = useState<CatalogSkill[] | null>(null);
   const [homeSkillsLoadError, setHomeSkillsLoadError] = useState('');
   const [homeContextRetry, setHomeContextRetry] = useState(0);
@@ -259,6 +308,7 @@ function MainApp() {
   const [scheduleUnavailable, setScheduleUnavailable] = useState(false);
   const [reminderUnavailable, setReminderUnavailable] = useState(false);
   const homeContextLoadedAt = useRef(0);
+  const homeContextRequest = useRef<Promise<HomeContextSnapshot> | null>(null);
   const agentRunConversation = useRef<string | null>(null);
   const thinkingSoundGate = useRef(new SoundTriggerGate());
   const lastThinkingSoundKey = useRef<string | null>(null);
@@ -299,12 +349,25 @@ function MainApp() {
     diagnostics,
     dismissDiagnostic,
     dismissDiagnostics,
-    reportDiagnostic,
+    reportSystemDiagnostic,
     chatMode,
     setChatMode,
     request,
     companionStateTimer,
   } = appState;
+  const selectConversation = useCallback(
+    (next: SetStateAction<string | null>) => {
+      const id = typeof next === 'function' ? next(activeConversationRef.current) : next;
+      conversationLoadGate.current.invalidate();
+      activeConversationRef.current = id;
+      setConversationId(id);
+    },
+    [setConversationId],
+  );
+  const isConversationSelected = useCallback(
+    (id: string | null) => activeConversationRef.current === id,
+    [],
+  );
   const performanceStatus = usePerformanceMode(settings.performanceMode);
   useEffect(() => {
     if (!shouldAutomaticallyCheckForUpdates(settings.checkForUpdatesAutomatically, isTauri()))
@@ -366,7 +429,10 @@ function MainApp() {
   const emitCompanionState = (payload: { type: 'activity'; state: string; message: string }) => {
     setAssistantPetState(petAnimationForAssistantActivity(payload.state));
     void emit('companion-state', payload).catch(() =>
-      reportDiagnostic('companion-state', 'Não foi possível atualizar o estado visual do pet.'),
+      reportSystemDiagnostic(
+        'companion-state',
+        'Não foi possível atualizar o estado visual do pet.',
+      ),
     );
   };
   const usedProvider = usedProviderId
@@ -449,7 +515,16 @@ function MainApp() {
     const checkAvailability = () =>
       invoke<{ available: boolean; reason: string | null; workspacePath: string | null }>(
         'agent_availability',
-        { providerId: activeProvider.providerId, model: activeProvider.model },
+        {
+          providerId: activeProvider.providerId,
+          model: activeProvider.model,
+          fallbacks: settings.fallbackProviderIds.flatMap((providerId) => {
+            const config = settings.providers[providerId];
+            return config?.enabled !== false && config?.model
+              ? [{ providerId, baseUrl: config.baseUrl, model: config.model }]
+              : [];
+          }),
+        },
       )
         .then((availability) => {
           setAgentAvailability(availability);
@@ -485,6 +560,8 @@ function MainApp() {
     activeProvider.providerId,
     activeProvider.model,
     conversationId,
+    settings.fallbackProviderIds,
+    settings.providers,
     permissionIndicator?.halted,
   ]);
 
@@ -496,63 +573,74 @@ function MainApp() {
     const refreshHomeContext = async (force = false) => {
       if (!force && Date.now() - homeContextLoadedAt.current < 30_000 && homeSkills !== null)
         return;
-      setHomeSkills(null);
-      setTodayEvents([]);
-      setScheduledEvents([]);
-      setReminderCount(0);
-      setScheduleUnavailable(true);
-      setReminderUnavailable(true);
       if (!isTauri()) {
         setHomeSkills([]);
         homeContextLoadedAt.current = Date.now();
         return;
       }
+      if (!homeContextRequest.current) {
+        setHomeSkills(null);
+        setTodayEvents([]);
+        setScheduledEvents([]);
+        setReminderCount(0);
+        setScheduleUnavailable(true);
+        setReminderUnavailable(true);
+      }
       try {
-        const skills = await invoke<CatalogSkill[]>('get_skills');
+        const request = runOnceWhilePending(
+          homeContextRequest,
+          async (): Promise<HomeContextSnapshot> => {
+            const skills = await invoke<CatalogSkill[]>('get_skills');
+            const active = skills.filter((skill) => skill.enabled && skill.status === 'installed');
+            const canReadCalendar = active.some(
+              (skill) => skill.id === 'calendar.list_events' && skill.family === 'agenda_lembretes',
+            );
+            const canReadReminders = active.some(
+              (skill) => skill.id === 'reminder.list' && skill.family === 'agenda_lembretes',
+            );
+            const now = new Date();
+            const todayBounds = getTodayBounds(now);
+            const next24Hours = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+            const bounds = {
+              from: todayBounds.from,
+              to: new Date(
+                Math.max(new Date(todayBounds.to).getTime(), next24Hours.getTime()),
+              ).toISOString(),
+            };
+            const [events, reminders] = await Promise.allSettled([
+              canReadCalendar
+                ? invoke<HomeEvent[]>('calendar_list_events', bounds)
+                : Promise.resolve([] as HomeEvent[]),
+              canReadReminders ? invoke<number>('get_home_reminder_count') : Promise.resolve(0),
+            ]);
+            const availableEvents = events.status === 'fulfilled' ? events.value : [];
+            const todayStart = new Date(todayBounds.from).getTime();
+            const todayEnd = new Date(todayBounds.to).getTime();
+            return {
+              skills,
+              todayEvents: availableEvents.filter((event) => {
+                const startsAt = new Date(event.start).getTime();
+                return startsAt >= todayStart && startsAt < todayEnd;
+              }),
+              scheduledEvents: availableEvents.filter((event) => {
+                const startsAt = new Date(event.start).getTime();
+                return startsAt >= now.getTime() && startsAt <= next24Hours.getTime();
+              }),
+              reminderCount: reminders.status === 'fulfilled' ? reminders.value : 0,
+              scheduleUnavailable: events.status === 'rejected' || !canReadCalendar,
+              reminderUnavailable: reminders.status === 'rejected' || !canReadReminders,
+            };
+          },
+        );
+        const snapshot = await request;
         if (disposed) return;
-        setHomeSkills(skills);
+        setHomeSkills(snapshot.skills);
         setHomeSkillsLoadError('');
-        const active = skills.filter((skill) => skill.enabled && skill.status === 'installed');
-        const canReadCalendar = active.some(
-          (skill) => skill.id === 'calendar.list_events' && skill.family === 'agenda_lembretes',
-        );
-        const canReadReminders = active.some(
-          (skill) => skill.id === 'reminder.list' && skill.family === 'agenda_lembretes',
-        );
-        const now = new Date();
-        const todayBounds = getTodayBounds(now);
-        const next24Hours = new Date(now.getTime() + 24 * 60 * 60 * 1000);
-        const bounds = {
-          from: todayBounds.from,
-          to: new Date(
-            Math.max(new Date(todayBounds.to).getTime(), next24Hours.getTime()),
-          ).toISOString(),
-        };
-        const [events, reminders] = await Promise.allSettled([
-          canReadCalendar
-            ? invoke<HomeEvent[]>('calendar_list_events', bounds)
-            : Promise.resolve([] as HomeEvent[]),
-          canReadReminders ? invoke<number>('get_home_reminder_count') : Promise.resolve(0),
-        ]);
-        if (disposed) return;
-        const availableEvents = events.status === 'fulfilled' ? events.value : [];
-        const todayStart = new Date(todayBounds.from).getTime();
-        const todayEnd = new Date(todayBounds.to).getTime();
-        setTodayEvents(
-          availableEvents.filter((event) => {
-            const startsAt = new Date(event.start).getTime();
-            return startsAt >= todayStart && startsAt < todayEnd;
-          }),
-        );
-        setScheduledEvents(
-          availableEvents.filter((event) => {
-            const startsAt = new Date(event.start).getTime();
-            return startsAt >= now.getTime() && startsAt <= next24Hours.getTime();
-          }),
-        );
-        setReminderCount(reminders.status === 'fulfilled' ? reminders.value : 0);
-        setScheduleUnavailable(events.status === 'rejected' || !canReadCalendar);
-        setReminderUnavailable(reminders.status === 'rejected' || !canReadReminders);
+        setTodayEvents(snapshot.todayEvents);
+        setScheduledEvents(snapshot.scheduledEvents);
+        setReminderCount(snapshot.reminderCount);
+        setScheduleUnavailable(snapshot.scheduleUnavailable);
+        setReminderUnavailable(snapshot.reminderUnavailable);
         homeContextLoadedAt.current = Date.now();
       } catch {
         if (!disposed) {
@@ -707,7 +795,7 @@ function MainApp() {
         );
       } else if (payload === 'new-chat') {
         navigate('chat');
-        setConversationId(null);
+        selectConversation(null);
         setMessages([]);
         setDraft('');
       } else if (payload === 'stop') {
@@ -733,7 +821,7 @@ function MainApp() {
       disposed = true;
       unlisten?.();
     };
-  }, [setDraft, setMessages, navigate, setSettings, setConversationId, setToast]);
+  }, [setDraft, setMessages, navigate, setSettings, selectConversation, setToast]);
 
   useEffect(() => {
     if (!isTauri()) return;
@@ -774,14 +862,16 @@ function MainApp() {
     const refresh = () => {
       void invoke<number>('get_pending_approval_count')
         .then((count) => {
-          if (!disposed) setPendingApprovalCount(count);
+          if (!disposed) {
+            setPendingApprovalCount(count);
+            setPendingApprovalCountError('');
+          }
         })
-        .catch(() =>
-          reportDiagnostic(
-            'get_pending_approval_count',
-            'Não foi possível atualizar a contagem de aprovações pendentes.',
-          ),
-        );
+        .catch(() => {
+          if (disposed) return;
+          setPendingApprovalCount(0);
+          setPendingApprovalCountError('Não foi possível atualizar as aprovações pendentes.');
+        });
     };
     void listen('approval-updated', refresh)
       .then((stop) => {
@@ -820,7 +910,7 @@ function MainApp() {
         }
       })
       .catch(() =>
-        reportDiagnostic(
+        reportSystemDiagnostic(
           'pet-security-state',
           'Não foi possível acompanhar a parada de emergência do mascote.',
         ),
@@ -830,7 +920,7 @@ function MainApp() {
       unlistenHalted?.();
       unlistenResumed?.();
     };
-  }, [reportDiagnostic]);
+  }, [reportSystemDiagnostic]);
 
   useEffect(() => {
     if (permissionIndicator?.halted) setAssistantPetState('paused');
@@ -847,7 +937,7 @@ function MainApp() {
     }
   }
 
-  useAppEffects(appState);
+  useAppEffects({ ...appState, setConversationId: selectConversation }, isConversationSelected);
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let disposed = false;
@@ -1021,7 +1111,7 @@ function MainApp() {
   }
 
   function startHomeConversation() {
-    setConversationId(null);
+    selectConversation(null);
     setMessages([]);
     setAgentActionCards([]);
     setAgentEnabled(agentAvailability.available);
@@ -1062,8 +1152,10 @@ function MainApp() {
   ): Promise<boolean> {
     const text = rawText.trim();
     if (!text || busy) return false;
+    setAgentProviderSelection(null);
     const isNewConversation = options.newConversation ?? !conversationId;
     const useAgent = options.agentEnabled ?? agentEnabled;
+    setLastFailedPromptUsedAgent(false);
     if (useAgent && !agentAvailability.available) {
       setError(
         `Modo agente indisponível: ${agentAvailability.reason ?? 'verifique as configurações do agente.'}`,
@@ -1153,7 +1245,7 @@ function MainApp() {
           return [{ ...existing, preview: text }, ...items.filter((item) => item.id !== activeId)];
         });
       }
-      setConversationId(activeId);
+      selectConversation(activeId);
       if (isNewConversation)
         setConversations((items) => [
           {
@@ -1170,6 +1262,7 @@ function MainApp() {
       if (useAgent && agentAvailability.available) {
         const onEvent = new Channel<{
           type:
+            | 'providerSelection'
             | 'step'
             | 'toolCall'
             | 'awaitingApproval'
@@ -1189,13 +1282,22 @@ function MainApp() {
           kind?: string;
           message?: string;
           technicalDetails?: string | null;
+          providerId?: string;
+          model?: string;
+          reason?: string;
           card?: AgentActionCardData & { createdAt: number };
         }>();
         agentRunConversation.current = activeId;
         setAgentRunning(true);
         setAgentAwaitingApproval(false);
+        setAgentProviderSelection(null);
         onEvent.onmessage = (event) => {
-          if (event.type === 'actionCard' && event.card) {
+          if (event.type === 'providerSelection' && event.providerId && event.reason) {
+            const providerName =
+              AI_PROVIDERS.find((item) => item.id === event.providerId)?.name ?? event.providerId;
+            setUsedProviderId(event.providerId);
+            setAgentProviderSelection(`Usando ${providerName} porque ${event.reason}.`);
+          } else if (event.type === 'actionCard' && event.card) {
             setAgentActionCards((items) => {
               const next = items.filter((item) => item.id !== event.card!.id);
               return [...next, event.card!].slice(-100);
@@ -1412,6 +1514,7 @@ function MainApp() {
       if (!stopped) {
         setMessages(next);
         setLastFailedPrompt(text);
+        setLastFailedPromptUsedAgent(useAgent);
         setError(
           typeof cause === 'string'
             ? cause
@@ -1429,6 +1532,7 @@ function MainApp() {
       } else {
         setMessages(next);
         setLastFailedPrompt('');
+        setLastFailedPromptUsedAgent(false);
       }
       return false;
     } finally {
@@ -1475,7 +1579,8 @@ function MainApp() {
     if (busy) return;
     const selectedId = resolveConversationSelection(conversations, id);
     if (!selectedId) return;
-    setConversationId(selectedId);
+    selectConversation(selectedId);
+    const loadRequest = conversationLoadGate.current.begin();
     setConversations((items) => {
       const selected = items.find((item) => item.id === selectedId);
       return selected ? [selected, ...items.filter((item) => item.id !== selectedId)] : items;
@@ -1489,11 +1594,17 @@ function MainApp() {
       invoke<AgentActionCardData[]>('load_agent_action_cards', { conversationId: selectedId }),
     ])
       .then(([loaded, enabled, cards]) => {
+        if (!conversationLoadGate.current.isCurrent(loadRequest)) return;
         setMessages(loaded);
         setAgentEnabled(enabled);
         setAgentActionCards(cards);
+        setAgentProviderSelection(null);
       })
-      .catch(() => setError('Não foi possível abrir a conversa.'));
+      .catch(() => {
+        if (conversationLoadGate.current.isCurrent(loadRequest)) {
+          setError('Não foi possível abrir a conversa.');
+        }
+      });
   }
 
   openConversationHandler.current = openConversation;
@@ -1559,7 +1670,7 @@ function MainApp() {
       await invoke('delete_conversation', { conversationId: id });
       setConversations((items) => items.filter((item) => item.id !== id));
       if (conversationId === id) {
-        setConversationId(null);
+        selectConversation(null);
         setMessages([]);
       }
     } catch {
@@ -1575,7 +1686,7 @@ function MainApp() {
     try {
       await invoke('delete_all_conversations');
       setConversations([]);
-      setConversationId(null);
+      selectConversation(null);
       setMessages([]);
       setDraft('');
       setError('');
@@ -1818,7 +1929,10 @@ function MainApp() {
               count={pendingApprovalCount}
               expanded={activityPanelOpen}
               buttonRef={activityPanelTriggerRef}
-              onClick={() => setActivityPanelOpen(toggleActivityPanel)}
+              onClick={() => {
+                setActivityPanelVisited(true);
+                setActivityPanelOpen(toggleActivityPanel);
+              }}
             />
             {shouldShowStopAll(busy, agentRunning) && (
               <button type="button" className="stop-all-button" onClick={() => void stopAll()}>
@@ -1923,7 +2037,7 @@ function MainApp() {
               onConversation={openConversation}
               onNewConversation={() => {
                 if (!busy) {
-                  setConversationId(null);
+                  selectConversation(null);
                   setMessages([]);
                   setAgentActionCards([]);
                   setAgentEnabled(agentAvailability.available);
@@ -1992,12 +2106,7 @@ function MainApp() {
                 setChatMode(false);
               }}
               onRetry={() => void sendMessage(lastFailedPrompt, true)}
-              canRetry={
-                Boolean(lastFailedPrompt) &&
-                /rede|conexão|limitou as solicitações|tempo limite|demorou para responder|serviço do provedor está indisponível/i.test(
-                  error,
-                )
-              }
+              canRetry={canRetryFailedPrompt(lastFailedPrompt, error, lastFailedPromptUsedAgent)}
               profile={profile}
               selectedPet={selectedPet}
               agentEnabled={agentEnabled}
@@ -2006,6 +2115,7 @@ function MainApp() {
               agentRunning={agentRunning}
               agentAwaitingApproval={agentAwaitingApproval}
               agentActionCards={agentActionCards}
+              agentProviderSelection={agentProviderSelection}
               onReviewApproval={() =>
                 void invoke('show_pending_approval_window').catch(() =>
                   setToast('Não foi possível abrir a janela de aprovação.'),
@@ -2019,6 +2129,29 @@ function MainApp() {
                   requestId: settingsEntryRequestId.current,
                 });
                 selectSettingsSection('privacidade');
+              }}
+              onApplyCodeDiff={async (action) => {
+                if (!action.codeReviewId || !conversationId)
+                  throw new Error('Esta revisão não está mais disponível.');
+                const applied = await invoke<boolean>('apply_code_diff', {
+                  reviewId: action.codeReviewId,
+                  conversationId,
+                  actionId: action.id,
+                });
+                if (applied) {
+                  setAgentActionCards((items) =>
+                    items.map((item) =>
+                      item.id === action.id
+                        ? {
+                            ...item,
+                            codeReviewId: null,
+                            resultSummary:
+                              'Alterações aplicadas ao projeto após aprovação explícita.',
+                          }
+                        : item,
+                    ),
+                  );
+                }
               }}
               onUndo={(action) => {
                 const descriptor = action.undoDescriptor;
@@ -2123,6 +2256,9 @@ function MainApp() {
                   onSelect={selectProvider}
                   onSetPrimary={setPrimaryProvider}
                   onToggleEnabled={setProviderEnabled}
+                  onSetFallbacks={(providerIds) =>
+                    setSettings((current) => setFallbackProviderIds(current, providerIds))
+                  }
                   onSave={saveProviderSettings}
                   onChat={beginChat}
                   onCredentialRemoved={handleCredentialRemoved}
@@ -2143,6 +2279,11 @@ function MainApp() {
                   key={requestedSkillFamily?.requestId ?? 'all-families'}
                   initialFamily={requestedSkillFamily?.family}
                   onOpenPrivacy={() => navigate('permissions')}
+                  onTestInChat={(suggestion) => {
+                    setDraft(suggestion);
+                    setChatMode(false);
+                    navigate('chat');
+                  }}
                   onRemovePublicMcp={async (server) =>
                     await invoke<string | null>('mcp_remove_server', { serverId: server.id })
                   }
@@ -2163,6 +2304,8 @@ function MainApp() {
                 <SettingsScreen
                   settings={settings}
                   update={setSettings}
+                  onSetPrimaryProvider={setPrimaryProvider}
+                  onOpenConnectors={() => navigate('providers')}
                   onOpenPermissions={() => navigate('permissions')}
                   performanceStatus={performanceStatus}
                 />
@@ -2175,56 +2318,61 @@ function MainApp() {
                   initialNickname={profile.nickname}
                   profileValue={profile}
                   onProfileChange={setProfile}
-                  onStatus={() => reportDiagnostic('agent_home_status', '')}
+                  onStatus={() => reportSystemDiagnostic('agent_home_status', '')}
                 />
               )}
             </div>
           )}
         </Suspense>
       </main>
-      <ActivitySidePanel
-        open={activityPanelOpen}
-        triggerRef={activityPanelTriggerRef}
-        pendingApprovalCount={pendingApprovalCount}
-        running={agentRunning}
-        awaitingApproval={agentAwaitingApproval}
-        currentAction={currentActivityAction}
-        events={scheduledEvents}
-        reminderCount={reminderCount}
-        reminders={upcomingReminders}
-        remindersLoading={upcomingRemindersLoading}
-        upcomingReminderUnavailable={upcomingRemindersUnavailable}
-        scheduleUnavailable={scheduleUnavailable}
-        reminderUnavailable={reminderUnavailable}
-        actions={agentActionCards}
-        artifactHistoryAvailable={Boolean(conversationId)}
-        audit={activityAudit}
-        scheduleLoading={homeSkills === null}
-        auditLoading={activityAuditLoading}
-        auditUnavailable={activityAuditUnavailable}
-        onClose={() => setActivityPanelOpen(false)}
-        onStop={cancelRequest}
-        onReview={() =>
-          void invoke('show_pending_approval_window').catch(() =>
-            setToast('Não foi possível abrir a janela de aprovação.'),
-          )
-        }
-        onOpenArtifact={(path) =>
-          void invoke('open_agent_artifact', { path }).catch(() =>
-            setToast('Não foi possível abrir o arquivo.'),
-          )
-        }
-        onRevealArtifact={(path) =>
-          void invoke('reveal_agent_artifact', { path }).catch(() =>
-            setToast('Não foi possível mostrar o arquivo.'),
-          )
-        }
-        onViewAll={() => {
-          setActivityPanelOpen(false);
-          setChatMode(false);
-          navigate('activity');
-        }}
-      />
+      {activityPanelVisited && (
+        <Suspense fallback={null}>
+          <ActivitySidePanel
+            open={activityPanelOpen}
+            triggerRef={activityPanelTriggerRef}
+            pendingApprovalCount={pendingApprovalCount}
+            pendingApprovalError={pendingApprovalCountError}
+            running={agentRunning}
+            awaitingApproval={agentAwaitingApproval}
+            currentAction={currentActivityAction}
+            events={scheduledEvents}
+            reminderCount={reminderCount}
+            reminders={upcomingReminders}
+            remindersLoading={upcomingRemindersLoading}
+            upcomingReminderUnavailable={upcomingRemindersUnavailable}
+            scheduleUnavailable={scheduleUnavailable}
+            reminderUnavailable={reminderUnavailable}
+            actions={agentActionCards}
+            artifactHistoryAvailable={Boolean(conversationId)}
+            audit={activityAudit}
+            scheduleLoading={homeSkills === null}
+            auditLoading={activityAuditLoading}
+            auditUnavailable={activityAuditUnavailable}
+            onClose={() => setActivityPanelOpen(false)}
+            onStop={cancelRequest}
+            onReview={() =>
+              void invoke('show_pending_approval_window').catch(() =>
+                setToast('Não foi possível abrir a janela de aprovação.'),
+              )
+            }
+            onOpenArtifact={(path) =>
+              void invoke('open_agent_artifact', { path }).catch(() =>
+                setToast('Não foi possível abrir o arquivo.'),
+              )
+            }
+            onRevealArtifact={(path) =>
+              void invoke('reveal_agent_artifact', { path }).catch(() =>
+                setToast('Não foi possível mostrar o arquivo.'),
+              )
+            }
+            onViewAll={() => {
+              setActivityPanelOpen(false);
+              setChatMode(false);
+              navigate('activity');
+            }}
+          />
+        </Suspense>
+      )}
       {toast && (
         <div className="toast" role="status">
           {toast}
@@ -2299,33 +2447,38 @@ function MainApp() {
         onShowCurrent={() => setShowAllReleaseNotes(false)}
         onClose={() => setReleaseNotesOpen(false)}
       />
-      <SettingsModal
-        open={settingsOpen}
-        section={route.settingsSection ?? 'geral'}
-        onClose={closeSettings}
-        onSelectSection={selectSettingsSection}
-        settings={settings}
-        update={setSettings}
-        performanceStatus={performanceStatus}
-        profile={profile}
-        setProfile={setProfile}
-        petVisible={petVisible}
-        setPetVisible={setPetVisible}
-        selectedPet={selectedPet}
-        onSelectPet={(petId) => void choosePet(petId)}
-        onError={setToast}
-        onDeleteAllHistory={deleteAllConversations}
-        onOpenPage={(page) => navigate(page)}
-        onOpenActivityFullPage={() => openLegacyScreen('activity')}
-        onAgentStatus={() => reportDiagnostic('agent_home_status', '')}
-        releaseNotesUrl={currentReleaseNotesUrl}
-        onOpenReleaseNotes={() => void openResponseLink(currentReleaseNotesUrl)}
-        onUpdateFound={(result) =>
-          setAvailableUpdate(result.check_succeeded && result.available_version ? result : null)
-        }
-        sharedAudit={sharedAudit}
-        requestedEntry={requestedSettingsEntry}
-      />
+      {settingsModalLoaded && (
+        <Suspense fallback={null}>
+          <SettingsModal
+            open={settingsOpen}
+            section={route.settingsSection ?? 'geral'}
+            onClose={closeSettings}
+            onSelectSection={selectSettingsSection}
+            settings={settings}
+            update={setSettings}
+            onSetPrimaryProvider={setPrimaryProvider}
+            performanceStatus={performanceStatus}
+            profile={profile}
+            setProfile={setProfile}
+            petVisible={petVisible}
+            setPetVisible={setPetVisible}
+            selectedPet={selectedPet}
+            onSelectPet={(petId) => void choosePet(petId)}
+            onError={setToast}
+            onDeleteAllHistory={deleteAllConversations}
+            onOpenPage={(page) => navigate(page)}
+            onOpenActivityFullPage={() => openLegacyScreen('activity')}
+            onAgentStatus={() => reportSystemDiagnostic('agent_home_status', '')}
+            releaseNotesUrl={currentReleaseNotesUrl}
+            onOpenReleaseNotes={() => void openResponseLink(currentReleaseNotesUrl)}
+            onUpdateFound={(result) =>
+              setAvailableUpdate(result.check_succeeded && result.available_version ? result : null)
+            }
+            sharedAudit={sharedAudit}
+            requestedEntry={requestedSettingsEntry}
+          />
+        </Suspense>
+      )}
       <CommandPalette
         open={commandPaletteOpen}
         items={paletteItems}

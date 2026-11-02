@@ -61,46 +61,19 @@ pub fn decide(
     if risk == Risk::CapturaSensivel {
         return Decision::AskUser("sensitive_capture_requires_approval");
     }
-    let base = match (mode, risk, inside_workspace) {
-        (_, Risk::ExecucaoDeCodigo, _) => Decision::AskUser("code_execution_requires_approval"),
-        (_, Risk::CapturaSensivel, _) => Decision::AskUser("sensitive_capture_requires_approval"),
-        (_, Risk::Leitura, true) => Decision::Allow("workspace_read"),
-        (_, Risk::Leitura, false) => Decision::Deny("outside_workspace"),
-        (Mode::SemprePerguntar, _, _) => Decision::AskUser("mode_always_ask"),
-        (Mode::AprovarPorMim, Risk::EscritaReversivel, true) => {
-            Decision::Allow("mode_auto_reversible_workspace")
-        }
-        (Mode::AprovarPorMim, Risk::DestrutivoFinanceiro, _) => {
-            Decision::AskUser("mode_destructive_asks")
-        }
-        (Mode::AprovarPorMim, _, _) => Decision::AskUser("mode_external_asks"),
-        (Mode::ControleTotal, Risk::DestrutivoFinanceiro, true) => {
-            Decision::Allow("mode_total_trash_only")
-        }
-        (Mode::ControleTotal, Risk::DestrutivoFinanceiro, false) => {
-            Decision::AskUser("mode_total_outside_destructive_asks")
-        }
-        (Mode::ControleTotal, Risk::ComunicacaoExterna, _) => {
-            Decision::AskUser("external_communication_requires_approval")
-        }
-        (Mode::ControleTotal, Risk::EscritaReversivel, false) => {
-            Decision::AskUser("mode_total_outside_write_asks")
-        }
-        (Mode::ControleTotal, _, true) => Decision::Allow("mode_total_workspace"),
+    let base = match risk {
+        Risk::Leitura if inside_workspace => Decision::Allow("workspace_read"),
+        Risk::Leitura => Decision::Deny("outside_workspace"),
+        Risk::EscritaReversivel => Decision::AskUser("write_requires_approval"),
+        Risk::ComunicacaoExterna => Decision::AskUser("external_communication_requires_approval"),
+        Risk::DestrutivoFinanceiro => Decision::AskUser("destructive_action_requires_approval"),
+        Risk::ExecucaoDeCodigo => Decision::AskUser("code_execution_requires_approval"),
+        Risk::CapturaSensivel => Decision::AskUser("sensitive_capture_requires_approval"),
     };
-    let fixed_approval = risk == Risk::ExecucaoDeCodigo
-        || risk == Risk::CapturaSensivel
-        || risk == Risk::ComunicacaoExterna
-        || (risk == Risk::DestrutivoFinanceiro && !inside_workspace);
-    if permissive_override
-        && !fixed_approval
-        && !origin.is_tainted()
-        && matches!(base, Decision::AskUser(_))
-    {
-        Decision::Allow("confirmed_tool_override")
-    } else {
-        base
-    }
+    // All writes, external actions and sensitive operations require the approval window.
+    // The selected permission mode and per-tool overrides cannot bypass this boundary.
+    let _ = (mode, permissive_override);
+    base
 }
 
 pub fn decide_with_taint(
@@ -164,36 +137,18 @@ mod tests {
                                 Decision::Deny("outside_workspace")
                             }
                         } else {
-                            match (mode, risk, inside) {
-                                (Mode::SemprePerguntar, _, _) => {
-                                    Decision::AskUser("mode_always_ask")
+                            Decision::AskUser(match risk {
+                                Risk::EscritaReversivel => "write_requires_approval",
+                                Risk::ComunicacaoExterna => {
+                                    "external_communication_requires_approval"
                                 }
-                                (Mode::AprovarPorMim, Risk::EscritaReversivel, true) => {
-                                    Decision::Allow("mode_auto_reversible_workspace")
+                                Risk::DestrutivoFinanceiro => {
+                                    "destructive_action_requires_approval"
                                 }
-                                (Mode::AprovarPorMim, Risk::DestrutivoFinanceiro, _) => {
-                                    Decision::AskUser("mode_destructive_asks")
-                                }
-                                (Mode::AprovarPorMim, _, _) => {
-                                    Decision::AskUser("mode_external_asks")
-                                }
-                                (Mode::ControleTotal, Risk::DestrutivoFinanceiro, true) => {
-                                    Decision::Allow("mode_total_trash_only")
-                                }
-                                (Mode::ControleTotal, Risk::DestrutivoFinanceiro, false) => {
-                                    Decision::AskUser("mode_total_outside_destructive_asks")
-                                }
-                                (Mode::ControleTotal, Risk::ComunicacaoExterna, _) => {
-                                    Decision::AskUser("external_communication_requires_approval")
-                                }
-                                (Mode::ControleTotal, Risk::EscritaReversivel, true) => {
-                                    Decision::Allow("mode_total_workspace")
-                                }
-                                (Mode::ControleTotal, Risk::EscritaReversivel, false) => {
-                                    Decision::AskUser("mode_total_outside_write_asks")
-                                }
-                                _ => unreachable!(),
-                            }
+                                Risk::ExecucaoDeCodigo => "code_execution_requires_approval",
+                                Risk::CapturaSensivel => "sensitive_capture_requires_approval",
+                                Risk::Leitura => unreachable!(),
+                            })
                         };
                         assert_eq!(
                             decision, expected,
@@ -212,7 +167,7 @@ mod tests {
                 None,
                 false
             ),
-            Decision::AskUser("mode_always_ask")
+            Decision::AskUser("write_requires_approval")
         );
         assert_eq!(
             decide(
@@ -223,7 +178,7 @@ mod tests {
                 None,
                 false
             ),
-            Decision::Allow("mode_auto_reversible_workspace")
+            Decision::AskUser("write_requires_approval")
         );
         assert_eq!(
             decide(
@@ -234,7 +189,7 @@ mod tests {
                 None,
                 false
             ),
-            Decision::Allow("mode_total_trash_only")
+            Decision::AskUser("destructive_action_requires_approval")
         );
         assert_eq!(
             decide(
@@ -245,7 +200,7 @@ mod tests {
                 None,
                 false
             ),
-            Decision::AskUser("mode_total_outside_destructive_asks")
+            Decision::AskUser("destructive_action_requires_approval")
         );
     }
 
@@ -306,7 +261,7 @@ mod tests {
     }
 
     #[test]
-    fn permissive_override_only_changes_an_ask_after_fixed_rules() {
+    fn permissive_override_cannot_skip_write_approval() {
         assert_eq!(
             decide(
                 Mode::SemprePerguntar,
@@ -316,7 +271,7 @@ mod tests {
                 None,
                 true
             ),
-            Decision::AskUser("mode_always_ask")
+            Decision::AskUser("external_communication_requires_approval")
         );
         assert_eq!(
             decide(
@@ -338,8 +293,33 @@ mod tests {
                 None,
                 true
             ),
-            Decision::AskUser("mode_always_ask")
+            Decision::AskUser("destructive_action_requires_approval")
         );
+    }
+
+    #[test]
+    fn every_write_risk_requires_the_approval_window_in_all_modes() {
+        for mode in [
+            Mode::SemprePerguntar,
+            Mode::AprovarPorMim,
+            Mode::ControleTotal,
+        ] {
+            for risk in [
+                Risk::EscritaReversivel,
+                Risk::ComunicacaoExterna,
+                Risk::DestrutivoFinanceiro,
+                Risk::ExecucaoDeCodigo,
+                Risk::CapturaSensivel,
+            ] {
+                assert!(
+                    matches!(
+                        decide(mode, risk, &Origin::Model, true, None, true),
+                        Decision::AskUser(_)
+                    ),
+                    "{mode:?} {risk:?}"
+                );
+            }
+        }
     }
 
     #[test]

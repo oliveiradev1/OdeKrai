@@ -86,7 +86,7 @@ Uma conversa pode ser apagada pelo menu da lista. Para apagar todo o histórico,
 
 As respostas usam o ícone do aplicativo como avatar por padrão. A opção “Usar meu mascote como avatar do OdeKrai” troca esse ícone pelo pet selecionado; a preferência fica no armazenamento local do WebView.
 
-Após configurar a pasta, `ODEKRAI.md`, `memory/` e a versão aprovada ficam em texto simples no dispositivo. O chat envia ao provedor as regras fixas, a identidade aprovada e até 1.024 caracteres de `memory/estilo.md`; as outras notas não entram automaticamente no prompt. Não coloque senhas, tokens ou dados bancários nesses arquivos. Uma pasta com aparência de OneDrive gera aviso de possível sincronização em nuvem.
+Após configurar a pasta, `ODEKRAI.md`, `memory/` e a versão aprovada ficam em texto simples no dispositivo. O chat envia ao provedor as regras fixas, a identidade aprovada, até 1.024 caracteres de `memory/estilo.md` e os nomes/estados das habilidades registrados localmente, para explicar quais ações estão habilitadas, desativadas ou aguardam configuração. No modo agente, também envia as descrições das habilidades efetivamente oferecidas; no chat normal, nenhuma ferramenta é enviada. As outras notas não entram automaticamente no prompt. Não coloque senhas, tokens ou dados bancários nesses arquivos. Uma pasta com aparência de OneDrive gera aviso de possível sincronização em nuvem.
 
 As configurações do motor de permissões (modo efetivo, exceções por ferramenta, atalho do kill switch, prazo de aprovação e estado parado) ficam em `permissions.sqlite3` nos dados locais do aplicativo, sem criptografia feita pelo OdeKrai. Aprovações pendentes ficam apenas em memória e não sobrevivem ao encerramento do processo.
 

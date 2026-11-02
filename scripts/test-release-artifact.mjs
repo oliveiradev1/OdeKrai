@@ -95,7 +95,8 @@ assert.doesNotMatch(
   releaseWorkflow,
   /--features diagnostics|TAURI_SIGNING_PRIVATE_KEY|gh release create|softprops\/action-gh-release/,
 );
-assert.match(releaseWorkflow, /permissions:\s+contents:\s+write/);
+assert.match(releaseWorkflow, /permissions:\s+contents:\s+read/);
+assert.doesNotMatch(releaseWorkflow, /permissions:\s+contents:\s+write/);
 assert.match(releaseWorkflow, /workflow_dispatch:/);
 assert.match(releaseWorkflow, /tags:[\s\S]*?- 'v\*'/);
 

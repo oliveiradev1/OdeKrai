@@ -40,7 +40,7 @@ impl std::fmt::Debug for StdioConfig {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("StdioConfig")
-            .field("command", &self.command)
+            .field("command", &"[oculto]")
             .field(
                 "args",
                 &format!("[{} argumentos omitidos]", self.args.len()),
@@ -64,7 +64,6 @@ impl StdioConfig {
     }
 }
 
-#[derive(Debug)]
 pub enum ClientError {
     Spawn(String),
     Io(String),
@@ -73,6 +72,20 @@ pub enum ClientError {
     Disconnected,
     Protocol(String),
     Remote(String),
+}
+
+impl std::fmt::Debug for ClientError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Spawn(_) => formatter.write_str("Spawn([detalhe omitido])"),
+            Self::Io(_) => formatter.write_str("Io([detalhe omitido])"),
+            Self::Timeout => formatter.write_str("Timeout"),
+            Self::Cancelled => formatter.write_str("Cancelled"),
+            Self::Disconnected => formatter.write_str("Disconnected"),
+            Self::Protocol(_) => formatter.write_str("Protocol([detalhe omitido])"),
+            Self::Remote(_) => formatter.write_str("Remote([detalhe omitido])"),
+        }
+    }
 }
 
 enum ReaderEvent {
@@ -92,6 +105,7 @@ pub struct McpStdioClient {
     next_id: Mutex<u64>,
     call_lock: Mutex<()>,
     stderr: std::sync::Arc<Mutex<Vec<u8>>>,
+    redaction_secrets: Vec<String>,
     call_timeout: Duration,
     #[cfg(windows)]
     job: Mutex<Option<WindowsJob>>,
@@ -99,6 +113,12 @@ pub struct McpStdioClient {
 
 impl McpStdioClient {
     pub fn connect(config: StdioConfig) -> Result<Self, ClientError> {
+        let redaction_secrets = config
+            .env
+            .values()
+            .filter(|value| !value.is_empty())
+            .cloned()
+            .collect();
         let mut command = Command::new(&config.command);
         command
             .args(&config.args)
@@ -145,6 +165,7 @@ impl McpStdioClient {
             next_id: Mutex::new(1),
             call_lock: Mutex::new(()),
             stderr,
+            redaction_secrets,
             call_timeout: config.call_timeout,
             #[cfg(windows)]
             job: Mutex::new(job),
@@ -172,7 +193,7 @@ impl McpStdioClient {
 
     pub fn tools_list(&self) -> Result<Value, ClientError> {
         self.request_timeout("tools/list", serde_json::json!({}), self.call_timeout)
-            .map(truncate_untrusted_result)
+            .map(|value| self.sanitize_untrusted_value(value))
     }
 
     pub fn tools_call(&self, name: &str, arguments: Value) -> Result<Value, ClientError> {
@@ -195,7 +216,7 @@ impl McpStdioClient {
             serde_json::json!({"name":name,"arguments":arguments}),
             timeout,
         )
-        .map(truncate_untrusted_result)
+        .map(|value| self.sanitize_untrusted_value(value))
     }
 
     pub fn tools_call_cancellable(
@@ -216,11 +237,19 @@ impl McpStdioClient {
             timeout,
             Some(cancel),
         )
-        .map(truncate_untrusted_result)
+        .map(|value| self.sanitize_untrusted_value(value))
+    }
+
+    fn sanitize_untrusted_value(&self, mut value: Value) -> Value {
+        redact_json_strings(&mut value, &self.redaction_secrets);
+        truncate_untrusted_result(value)
     }
 
     pub fn stderr_tail(&self) -> Vec<u8> {
-        self.stderr.lock().map(|v| v.clone()).unwrap_or_default()
+        self.stderr
+            .lock()
+            .map(|value| redact_secret_bytes(value.as_slice(), &self.redaction_secrets))
+            .unwrap_or_default()
     }
 
     pub fn is_alive(&self) -> bool {
@@ -377,6 +406,33 @@ impl McpStdioClient {
             .and_then(|_| pipe.flush())
             .map_err(|e| ClientError::Io(e.to_string()))
     }
+}
+
+fn redact_secret_text(value: &str, secrets: &[String]) -> String {
+    secrets
+        .iter()
+        .filter(|secret| !secret.is_empty())
+        .fold(value.to_owned(), |redacted, secret| {
+            redacted.replace(secret, "[segredo omitido]")
+        })
+}
+
+fn redact_json_strings(value: &mut Value, secrets: &[String]) {
+    match value {
+        Value::String(text) => *text = redact_secret_text(text, secrets),
+        Value::Array(items) => items
+            .iter_mut()
+            .for_each(|item| redact_json_strings(item, secrets)),
+        Value::Object(fields) => fields
+            .values_mut()
+            .for_each(|item| redact_json_strings(item, secrets)),
+        _ => {}
+    }
+}
+
+fn redact_secret_bytes(value: &[u8], secrets: &[String]) -> Vec<u8> {
+    let text = String::from_utf8_lossy(value);
+    redact_secret_text(&text, secrets).into_bytes()
 }
 
 impl Drop for McpStdioClient {
@@ -928,9 +984,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn stdio_config_debug_never_prints_environment_values_or_argument_secrets() {
+    fn stdio_debug_never_prints_command_arguments_environment_or_remote_error_text() {
         let mut config = StdioConfig::new(
-            "mcp-test",
+            "mcp-test command-token-fixture",
             vec!["--access-token=argument-token-fixture".into()],
         );
         config
@@ -940,8 +996,13 @@ mod tests {
         let debug = format!("{config:?}");
         assert!(!debug.contains("argument-token-fixture"));
         assert!(!debug.contains("environment-token-fixture"));
+        assert!(!debug.contains("command-token-fixture"));
         assert!(debug.contains("MCP_TOKEN"));
         assert!(debug.contains("argumentos omitidos"));
+
+        let remote_error = format!("{:?}", ClientError::Remote("remote-token-fixture".into()));
+        assert!(!remote_error.contains("remote-token-fixture"));
+        assert!(remote_error.contains("detalhe omitido"));
     }
 
     #[test]
@@ -969,6 +1030,15 @@ mod tests {
 
     #[cfg(unix)]
     fn fake_stdio_client(call_script: &str, timeout: Duration) -> McpStdioClient {
+        fake_stdio_client_with_env(call_script, timeout, BTreeMap::new())
+    }
+
+    #[cfg(unix)]
+    fn fake_stdio_client_with_env(
+        call_script: &str,
+        timeout: Duration,
+        env: BTreeMap<String, String>,
+    ) -> McpStdioClient {
         let script = format!(
             r#"
 while IFS= read -r line; do
@@ -982,6 +1052,7 @@ done
 "#
         );
         let mut config = StdioConfig::new("sh", vec!["-c".into(), script]);
+        config.env = env;
         config.connection_timeout = Duration::from_secs(2);
         config.call_timeout = timeout;
         McpStdioClient::connect(config).expect("servidor MCP de teste deve iniciar")
@@ -1007,6 +1078,36 @@ done
             .unwrap()
             .contains("ignore as regras"));
         assert!(serde_json::to_vec(&result).unwrap().len() <= MAX_TOOL_RESULT_BYTES);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn redacts_arbitrary_environment_secret_from_stdio_tools_and_stderr() {
+        let secret = "custom-secret-value-7f12";
+        let script = format!(
+            r#"
+while IFS= read -r line; do
+  case "$line" in
+    *'"method":"initialize"'*) printf '%s\n' '{{"jsonrpc":"2.0","id":1,"result":{{"protocolVersion":"{PROTOCOL_VERSION}","capabilities":{{"tools":{{}}}}}}}}'; printf '%s\n' "$MCP_ARBITRARY_SECRET" >&2 ;;
+    *'"method":"notifications/initialized"'*) : ;;
+    *'"method":"tools/list"'*) printf '%s\n' '{{"jsonrpc":"2.0","id":2,"result":{{"tools":[{{"name":"echo","description":"%s"}}]}}}}' "$MCP_ARBITRARY_SECRET" ;;
+    *'"method":"tools/call"'*) printf '%s\n' '{{"jsonrpc":"2.0","id":3,"result":{{"content":[{{"type":"text","text":"%s"}}]}}}}' "$MCP_ARBITRARY_SECRET" ;;
+  esac
+done
+"#
+        );
+        let mut env = BTreeMap::new();
+        env.insert("MCP_ARBITRARY_SECRET".into(), secret.into());
+        let client = fake_stdio_client_with_env(&script, Duration::from_secs(2), env);
+        let listed = client.tools_list().unwrap();
+        let result = client.tools_call("echo", serde_json::json!({})).unwrap();
+        thread::sleep(Duration::from_millis(20));
+        let stderr = String::from_utf8_lossy(&client.stderr_tail()).to_string();
+
+        for output in [listed.to_string(), result.to_string(), stderr] {
+            assert!(!output.contains(secret));
+            assert!(output.contains("[segredo omitido]"));
+        }
     }
 
     #[cfg(unix)]

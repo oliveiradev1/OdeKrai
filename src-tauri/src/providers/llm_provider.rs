@@ -38,6 +38,7 @@ impl LlmProvider for AnthropicProvider {
             streaming: true,
             tools: true,
             vision: false,
+            context_window_tokens: None,
             image_generation: false,
             verified: true,
         }
@@ -72,6 +73,7 @@ impl LlmProvider for PerplexityProvider {
             streaming: false,
             tools: false,
             vision: false,
+            context_window_tokens: None,
             image_generation: false,
             verified: false,
         }

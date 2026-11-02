@@ -28,13 +28,15 @@ import { Icon } from './Icon';
 import { submitSecretForm } from './secret-form';
 import { RiskBadge } from './RiskBadge';
 import { PrivacyConfigurationSummary } from './PrivacyConfigurations';
+import { useConfirmation } from './ConfirmationProvider';
 import {
   canConnectToPublicOAuth,
   canConnectWithOAuth,
   getPublicMcpStatus,
+  getPublicMcpPrimaryAction,
   publicOAuthServiceKey,
-  publicMcpCatalog,
   publicMcpErrorMessage,
+  publicMcpPrimaryActionLabels,
   publicMcpStatusLabels,
   type PublicMcpCatalogEntry,
   type OAuthRegistrationOptions,
@@ -58,6 +60,8 @@ type SkillsCatalogViewProps = {
   googleConnection?: ReactNode;
   prerequisites?: SkillPrerequisites;
   mcpServers?: Array<PublicMcpServer & { id: string }>;
+  publicServices?: PublicMcpCatalogEntry[];
+  catalogError?: string;
   githubOAuthAccount?: string | null;
   mcpBusy?: boolean;
   onConfigurePublicMcp?: (
@@ -70,14 +74,16 @@ type SkillsCatalogViewProps = {
   ) => Promise<boolean>;
   onSaveGitHubToken?: (server: PublicMcpServer & { id: string }, token: string) => Promise<boolean>;
   onRemoveGitHubToken?: (server: PublicMcpServer & { id: string }) => Promise<boolean>;
-  onRemovePublicMcp?: (server: PublicMcpServer & { id: string }) => Promise<boolean>;
+  onRemovePublicMcp?: (server: PublicMcpServer & { id: string }) => Promise<string | null>;
   onConnectGitHubOAuth?: (
     server: (PublicMcpServer & { id: string }) | undefined,
     clientId: string,
     scopes: string,
   ) => Promise<boolean>;
   onDisconnectGitHubOAuth?: (server: PublicMcpServer & { id: string }) => Promise<string | null>;
+  onDisconnectPublicMcp?: (server: PublicMcpServer & { id: string }) => Promise<string | null>;
   onTestPublicMcp?: (server: PublicMcpServer & { id: string }) => Promise<boolean>;
+  onTestInChat?: (suggestion: string) => void;
 };
 
 type GoogleOAuthStatus = {
@@ -118,6 +124,23 @@ function statusClass(status: CatalogFamily['status']): string {
   return `skills-family-status--${status}`;
 }
 
+function permissionDescription(risk: CatalogSkill['risk']): string {
+  switch (risk) {
+    case 'leitura':
+      return 'Leitura de dados';
+    case 'escrita_reversivel':
+      return 'Escrita reversível';
+    case 'comunicacao_externa':
+      return 'Comunicação externa (aprovação obrigatória)';
+    case 'destrutivo_financeiro':
+      return 'Ação destrutiva ou financeira (aprovação obrigatória)';
+    case 'execucao_de_codigo':
+      return 'Execução de código (aprovação obrigatória)';
+    case 'captura_sensivel':
+      return 'Captura sensível (aprovação obrigatória)';
+  }
+}
+
 export function SkillsCatalogView({
   skills,
   loading = false,
@@ -134,6 +157,8 @@ export function SkillsCatalogView({
   googleConnection,
   prerequisites = { folderAvailable: true, appCount: 0, googleConnected: null },
   mcpServers = [],
+  publicServices = [],
+  catalogError = '',
   githubOAuthAccount,
   mcpBusy = false,
   onConfigurePublicMcp,
@@ -142,26 +167,45 @@ export function SkillsCatalogView({
   onRemovePublicMcp,
   onConnectGitHubOAuth,
   onDisconnectGitHubOAuth,
+  onDisconnectPublicMcp,
   onTestPublicMcp,
+  onTestInChat,
 }: SkillsCatalogViewProps) {
   const [query, setQuery] = useState('');
   const [tab, setTab] = useState<SkillsCatalogTab>(initialTab);
   const [selectedFamily, setSelectedFamily] = useState<SkillFamily | null>(initialFamily ?? null);
+  const [selectedPublicServiceId, setSelectedPublicServiceId] = useState<string | null>(null);
+  const [navigationError, setNavigationError] = useState('');
   const tabRefs = useRef<Record<SkillsCatalogTab, HTMLButtonElement | null>>({
     pessoal: null,
     publico: null,
   });
-  const familyButtonRef = useRef<HTMLElement | null>(null);
+  const familyButtonLabelRef = useRef<string | null>(null);
   const detailsHeadingRef = useRef<HTMLHeadingElement | null>(null);
   const filteredSkills = filterSkills(skills, query);
   const families = groupSkillFamilies(filteredSkills);
   const installedFamilies = groupSkillFamilies(skills).filter((family) => family.activeCount > 0);
-  const showFamily = (family: SkillFamily) => {
-    familyButtonRef.current =
+  const showFamily = (family: SkillFamily, trigger?: HTMLElement) => {
+    const activeElement =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    familyButtonLabelRef.current =
+      trigger?.getAttribute('aria-label') ?? activeElement?.getAttribute('aria-label') ?? null;
     setTab('pessoal');
     setSelectedFamily(family);
   };
+
+  async function openOfficialLink(url: string) {
+    if (!isTauri()) {
+      setNavigationError('Abra esta ação no aplicativo OdeKrai para usar o navegador do sistema.');
+      return;
+    }
+    try {
+      await invoke('open_external_link', { url });
+      setNavigationError('');
+    } catch (cause) {
+      setNavigationError(publicMcpErrorMessage(cause));
+    }
+  }
 
   useEffect(() => {
     if (selectedFamily) detailsHeadingRef.current?.focus();
@@ -170,7 +214,13 @@ export function SkillsCatalogView({
   const closeFamily = () => {
     setSelectedFamily(null);
     requestAnimationFrame(() => {
-      if (familyButtonRef.current?.isConnected) familyButtonRef.current.focus();
+      const label = familyButtonLabelRef.current;
+      const trigger = label
+        ? Array.from(document.querySelectorAll<HTMLElement>('[aria-label]')).find(
+            (element) => element.getAttribute('aria-label') === label,
+          )
+        : null;
+      if (trigger) trigger.focus();
       else document.getElementById('skills-search')?.focus();
     });
   };
@@ -187,6 +237,11 @@ export function SkillsCatalogView({
         <div className="error-banner" role="alert">
           {error}
         </div>
+      )}
+      {navigationError && (
+        <p className="error-banner" role="alert">
+          {navigationError}
+        </p>
       )}
 
       {loadError && !loading && (
@@ -225,7 +280,7 @@ export function SkillsCatalogView({
                     type="button"
                     aria-label={`Abrir detalhes de ${family.name}`}
                     aria-expanded={selectedFamily === family.family}
-                    onClick={() => showFamily(family.family)}
+                    onClick={(event) => showFamily(family.family, event.currentTarget)}
                   >
                     <Icon name={family.icon} size={18} />
                     <span>{family.name}</span>
@@ -320,13 +375,16 @@ export function SkillsCatalogView({
                     prerequisites={prerequisites}
                     headingRef={detailsHeadingRef}
                     onBack={closeFamily}
-                    onToggle={(enabled) => onFamilyToggle(selected.family, enabled)}
                     onSkillToggle={onSkillToggle}
                     onOverrideToggle={onOverrideToggle}
                     onOpenPrivacy={onOpenPrivacy}
+                    publicServices={publicServices}
+                    mcpServers={mcpServers}
+                    onOpenOfficialLink={openOfficialLink}
+                    onTestPublicMcp={onTestPublicMcp}
                     googleConnection={
-                      selected.family === 'google' &&
-                      skills.some((skill) => skill.id.startsWith('google.calendar.'))
+                      selected.family === 'integracoes' &&
+                      selected.skills.some((skill) => skill.id.startsWith('google.calendar.'))
                         ? googleConnection
                         : undefined
                     }
@@ -346,8 +404,7 @@ export function SkillsCatalogView({
                     key={family.family}
                     family={family}
                     busy={busy}
-                    prerequisites={prerequisites}
-                    onExpand={() => showFamily(family.family)}
+                    onExpand={(trigger) => showFamily(family.family, trigger)}
                     onToggle={(enabled) => onFamilyToggle(family.family, enabled)}
                   />
                 ))}
@@ -371,15 +428,27 @@ export function SkillsCatalogView({
                 teste de conexão bem-sucedido.
               </p>
             </div>
+            {catalogError && (
+              <p className="error-banner" role="alert">
+                {catalogError}
+              </p>
+            )}
             <div className="public-mcp-grid" aria-label="Catálogo de serviços MCP">
-              {publicMcpCatalog.map((service) => {
+              {publicServices.map((service) => {
                 const server = mcpServers.find(
                   (item) => item.endpoint === service.endpoint || item.name === service.name,
                 );
                 return (
                   <PublicMcpServiceCard
-                    key={service.name}
+                    key={service.id}
                     service={service}
+                    skills={skills}
+                    detailsPage={selectedPublicServiceId === service.id}
+                    hidden={
+                      selectedPublicServiceId !== null && selectedPublicServiceId !== service.id
+                    }
+                    onOpenDetails={() => setSelectedPublicServiceId(service.id)}
+                    onCloseDetails={() => setSelectedPublicServiceId(null)}
                     status={getPublicMcpStatus(service, mcpServers)}
                     server={server}
                     githubOAuthAccount={githubOAuthAccount}
@@ -390,7 +459,8 @@ export function SkillsCatalogView({
                     onRemovePublicMcp={onRemovePublicMcp}
                     onConnectGitHubOAuth={onConnectGitHubOAuth}
                     onDisconnectGitHubOAuth={onDisconnectGitHubOAuth}
-                    onTest={onTestPublicMcp}
+                    onDisconnectPublicMcp={onDisconnectPublicMcp}
+                    onTestInChat={onTestInChat}
                   />
                 );
               })}
@@ -404,6 +474,11 @@ export function SkillsCatalogView({
 
 function PublicMcpServiceCard({
   service,
+  skills,
+  detailsPage,
+  hidden,
+  onOpenDetails,
+  onCloseDetails,
   status,
   server,
   githubOAuthAccount: initialGitHubAccount,
@@ -414,9 +489,15 @@ function PublicMcpServiceCard({
   onRemovePublicMcp,
   onConnectGitHubOAuth,
   onDisconnectGitHubOAuth,
-  onTest,
+  onDisconnectPublicMcp,
+  onTestInChat,
 }: {
   service: PublicMcpCatalogEntry;
+  skills: CatalogSkill[];
+  detailsPage: boolean;
+  hidden: boolean;
+  onOpenDetails: () => void;
+  onCloseDetails: () => void;
   status: ReturnType<typeof getPublicMcpStatus>;
   server?: PublicMcpServer & { id: string };
   githubOAuthAccount?: string | null;
@@ -427,14 +508,15 @@ function PublicMcpServiceCard({
   onRemovePublicMcp?: SkillsCatalogViewProps['onRemovePublicMcp'];
   onConnectGitHubOAuth?: SkillsCatalogViewProps['onConnectGitHubOAuth'];
   onDisconnectGitHubOAuth?: SkillsCatalogViewProps['onDisconnectGitHubOAuth'];
-  onTest?: SkillsCatalogViewProps['onTestPublicMcp'];
+  onDisconnectPublicMcp?: SkillsCatalogViewProps['onDisconnectPublicMcp'];
+  onTestInChat?: SkillsCatalogViewProps['onTestInChat'];
 }) {
   const formId = useId();
   const [expanded, setExpanded] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [endpoint, setEndpoint] = useState(service.endpoint);
   const [authentication, setAuthentication] = useState<'oauth' | 'bearer'>(
-    (service.name === 'GitHub'
+    (service.id === 'github'
       ? 'bearer'
       : (service.authenticationMethods[0] as 'oauth' | 'bearer' | undefined)) ?? 'oauth',
   );
@@ -455,8 +537,12 @@ function PublicMcpServiceCard({
   const [githubAccount, setGithubAccount] = useState<string | null>(initialGitHubAccount ?? null);
   const [githubAccountLoading, setGithubAccountLoading] = useState(false);
   const [githubNotice, setGithubNotice] = useState('');
-  const isGitHub = service.name === 'GitHub';
-  const isGoogleWorkspace = service.supplier === 'Google Workspace';
+  const [managing, setManaging] = useState(false);
+  const confirm = useConfirmation();
+  const titleButtonRef = useRef<HTMLButtonElement | null>(null);
+  const detailHeadingRef = useRef<HTMLHeadingElement | null>(null);
+  const isGitHub = service.id === 'github';
+  const isGoogleWorkspace = service.id.startsWith('google.');
   const githubOAuthReady = canConnectToPublicOAuth(
     oauthClientSettings,
     { dynamicRegistration: false },
@@ -468,6 +554,37 @@ function PublicMcpServiceCard({
     busy || clientSecretBusy,
   );
   const isConnecting = connecting || status === 'connecting';
+  const requestedPrimaryAction = getPublicMcpPrimaryAction(service, status);
+  const primaryHandlerAvailable =
+    requestedPrimaryAction === 'details' ||
+    requestedPrimaryAction === 'connecting' ||
+    (requestedPrimaryAction === 'connect' &&
+      (isGitHub ? Boolean(onConfigure || onConnectGitHubOAuth) : Boolean(onConfigure))) ||
+    (requestedPrimaryAction === 'configure' &&
+      (isGitHub ? Boolean(onConfigure || onSaveGitHubToken) : Boolean(onConfigure)));
+  const primaryAction = isConnecting
+    ? 'connecting'
+    : primaryHandlerAvailable
+      ? requestedPrimaryAction
+      : 'details';
+  const serviceSkills = server
+    ? skills.filter(
+        (skill) =>
+          skill.origin.kind === 'mcp' &&
+          (skill.origin.server === server.name || skill.id.startsWith(`mcp.${server.id}.`)),
+      )
+    : [];
+
+  useEffect(() => {
+    if (detailsPage) detailHeadingRef.current?.focus();
+  }, [detailsPage]);
+
+  function closeDetails() {
+    onCloseDetails();
+    requestAnimationFrame(() => {
+      if (titleButtonRef.current?.isConnected) titleButtonRef.current.focus();
+    });
+  }
 
   useEffect(() => {
     if (!service.authenticationMethods.includes('oauth') || !isTauri()) return;
@@ -479,7 +596,7 @@ function PublicMcpServiceCard({
         if (!current) return;
         setOauthClientSettings(settings);
         setClientId(settings.clientId);
-        if (service.supplier === 'Google Workspace') {
+        if (service.id.startsWith('google.')) {
           setRegistrationOptions({ dynamicRegistration: false });
         }
       })
@@ -604,7 +721,11 @@ function PublicMcpServiceCard({
     setGithubNotice('');
     setConnecting(true);
     try {
-      await onConnectGitHubOAuth(server, oauthClientSettings.clientId, 'read:user');
+      await onConnectGitHubOAuth(
+        server,
+        oauthClientSettings.clientId,
+        service.oauthScopes?.join(' ') ?? '',
+      );
     } catch (cause) {
       setGithubNotice(publicMcpErrorMessage(cause));
     } finally {
@@ -623,14 +744,16 @@ function PublicMcpServiceCard({
           'Conta desconectada. As credenciais locais foram removidas do Gerenciador de Credenciais.',
       );
     } catch (cause) {
-      setGithubNotice(publicMcpErrorMessage(cause));
+      setGithubNotice(
+        `Não foi possível desconectar com segurança. ${publicMcpErrorMessage(cause)}`,
+      );
     }
   }
 
   async function connectOrConfigure() {
     if (busy || connecting) return;
-    if (service.status === 'not_available') {
-      await openOfficialLink(service.documentationUrl);
+    if (!service.connectable) {
+      await openOfficialLink(service.officialLink);
       return;
     }
     if (isGitHub && oauthClientSettings && githubOAuthReady && onConnectGitHubOAuth) {
@@ -642,44 +765,100 @@ function PublicMcpServiceCard({
       setExpanded(true);
       return;
     }
-    if (
-      server &&
-      onTest &&
-      (status === 'connected' ||
-        !service.authenticationMethods.includes('oauth') ||
-        (status === 'configured' && server.enabled))
-    ) {
-      setConnecting(true);
-      try {
-        await onTest(server);
-      } catch (cause) {
-        setGithubNotice(publicMcpErrorMessage(cause));
-      } finally {
-        setConnecting(false);
-      }
-      return;
-    }
     setExpanded(true);
   }
 
   async function disconnectPublicService() {
-    if (!server || busy || !onRemovePublicMcp) return;
+    if (!server || busy) return;
     setConnecting(true);
+    setGithubNotice('');
     try {
-      if (await onRemovePublicMcp(server)) setGithubNotice('Servidor desconectado.');
+      const warning =
+        isGitHub && githubAccount && onDisconnectGitHubOAuth
+          ? await onDisconnectGitHubOAuth(server)
+          : onDisconnectPublicMcp
+            ? await onDisconnectPublicMcp(server)
+            : null;
+      setGithubAccount(null);
+      setGithubNotice(warning ?? 'Serviço desconectado. As credenciais locais foram removidas.');
     } catch (cause) {
-      setGithubNotice(publicMcpErrorMessage(cause));
+      setGithubNotice(
+        `Não foi possível desconectar com segurança. ${publicMcpErrorMessage(cause)}`,
+      );
+    } finally {
+      setConnecting(false);
+    }
+  }
+
+  async function removePublicService() {
+    if (!server || !onRemovePublicMcp || busy || connecting) return;
+    try {
+      const accepted = await confirm({
+        title: 'Remover servidor?',
+        message: `Remover ${service.name} e apagar as credenciais salvas neste dispositivo?`,
+        destructive: true,
+      });
+      if (!accepted) return;
+      setConnecting(true);
+      setGithubNotice('');
+      const warning = await onRemovePublicMcp(server);
+      setGithubAccount(null);
+      setGithubNotice(warning ?? 'Servidor removido e credenciais locais apagadas.');
+    } catch (cause) {
+      setGithubNotice(`Não foi possível remover o servidor. ${publicMcpErrorMessage(cause)}`);
     } finally {
       setConnecting(false);
     }
   }
 
   return (
-    <article className="public-mcp-card">
-      <div className="public-mcp-card-heading">
+    <article
+      hidden={hidden}
+      className={detailsPage ? 'public-mcp-card public-mcp-detail-page' : 'public-mcp-card'}
+    >
+      {detailsPage && (
+        <Button
+          type="button"
+          variant="ghost"
+          className="skills-details-back"
+          onClick={closeDetails}
+        >
+          Voltar aos serviços
+        </Button>
+      )}
+      <div
+        className={
+          detailsPage
+            ? 'public-mcp-card-heading public-mcp-detail-heading'
+            : 'public-mcp-card-heading'
+        }
+      >
         <div>
-          <h3>{service.name}</h3>
-          <p>{service.supplier}</p>
+          {detailsPage ? (
+            <span className="public-mcp-detail-icon" aria-hidden="true">
+              <Icon name="connectors" size={24} />
+            </span>
+          ) : null}
+          {detailsPage ? (
+            <h2 ref={detailHeadingRef} tabIndex={-1} id={`${formId}-detail-title`}>
+              <span className="public-mcp-detail-eyebrow">{service.provider}</span>
+              {service.name}
+            </h2>
+          ) : (
+            <h3>{service.name}</h3>
+          )}
+          {!detailsPage && <p>{service.provider}</p>}
+          {!detailsPage && (
+            <button
+              ref={titleButtonRef}
+              type="button"
+              className="ui-button ui-button--ghost public-mcp-title-details"
+              onClick={onOpenDetails}
+              aria-label={`Ver detalhes de ${service.name}`}
+            >
+              Detalhes
+            </button>
+          )}
         </div>
         <span
           className={`public-mcp-status public-mcp-status--${isConnecting ? 'connecting' : status}`}
@@ -689,38 +868,233 @@ function PublicMcpServiceCard({
           {isConnecting ? publicMcpStatusLabels.connecting : publicMcpStatusLabels[status]}
         </span>
       </div>
-      {service.programStatus && (
-        <p className="public-mcp-program-status">{service.programStatus}</p>
-      )}
       {status === 'error' && (
         <p className="public-mcp-error" role="alert">
           {publicMcpErrorMessage(server?.status)}
         </p>
       )}
-      {isGoogleWorkspace && (
-        <section className="public-mcp-google-setup" aria-label={`Configuração de ${service.name}`}>
-          <h4>Como preparar o projeto Google</h4>
-          <ul>
-            {service.oauthScopeLabels?.map((scope) => (
-              <li key={scope}>{scope}</li>
-            ))}
-          </ul>
-          <ol>
-            {service.oauthSetupSteps?.map((step) => (
-              <li key={step}>{step}</li>
-            ))}
-          </ol>
+      {isConnecting && (
+        <p className="public-mcp-action-reason" role="status">
+          A conexão está em andamento.
+        </p>
+      )}
+      {busy && !isConnecting && (
+        <p className="public-mcp-action-reason" role="status">
+          Aguarde a operação atual terminar para usar este cartão.
+        </p>
+      )}
+      {clientSecretBusy && (
+        <p className="public-mcp-action-reason" role="status">
+          Atualizando os dados de acesso…
+        </p>
+      )}
+      {!detailsPage && (
+        <section className="public-mcp-service-summary" aria-label={`Sobre ${service.name}`}>
+          <p>
+            <strong>O que faz:</strong> {service.whatItDoes}
+          </p>
+          <p>
+            <strong>O que precisa:</strong> {service.whatItNeeds}
+          </p>
+          <p>
+            <strong>Próximo passo:</strong> {service.nextStep}
+          </p>
           {linkError && <p role="alert">{linkError}</p>}
         </section>
       )}
+      {detailsPage && (
+        <>
+          <p className="public-mcp-detail-description">{service.whatItDoes}</p>
+          <div className="public-mcp-detail-actions">
+            {status !== 'connected' && (
+              <Button
+                type="button"
+                variant="primary"
+                disabled={busy || isConnecting || !service.connectable}
+                onClick={() => void connectOrConfigure()}
+              >
+                {isConnecting ? 'Conectando…' : 'Conectar'}
+              </Button>
+            )}
+            {server && (
+              <Button
+                type="button"
+                variant="secondary"
+                disabled={busy || isConnecting}
+                aria-expanded={managing}
+                aria-controls={`${formId}-manage`}
+                onClick={() => setManaging((open) => !open)}
+              >
+                Gerenciar
+              </Button>
+            )}
+            <Button
+              type="button"
+              variant="secondary"
+              disabled={busy || isConnecting || !onTestInChat}
+              onClick={() =>
+                onTestInChat?.(
+                  `Teste a integração com ${service.name}: mostre o que posso fazer e peça aprovação antes de qualquer ação.`,
+                )
+              }
+            >
+              Testar no chat
+            </Button>
+            {!service.connectable && (
+              <p role="status">{service.unavailableMessage ?? service.whatItNeeds}</p>
+            )}
+            {!onTestInChat && <p role="status">O teste no chat não está disponível nesta tela.</p>}
+          </div>
+          {server && (
+            <section
+              id={`${formId}-manage`}
+              className="public-mcp-detail-section public-mcp-manage-section"
+              aria-labelledby={`${formId}-manage-title`}
+              hidden={!managing}
+            >
+              <h3 id={`${formId}-manage-title`}>Gerenciar conexão</h3>
+              <h4>Permissões</h4>
+              {service.permissions.length || service.oauthScopes?.length ? (
+                <ul>
+                  {[...service.permissions, ...(service.oauthScopes ?? [])].map((permission) => (
+                    <li key={permission}>{permission}</li>
+                  ))}
+                </ul>
+              ) : (
+                <p>Nenhuma permissão adicional está registrada para este serviço.</p>
+              )}
+              {onDisconnectPublicMcp && (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={busy || isConnecting}
+                  onClick={() => void disconnectPublicService()}
+                >
+                  Desconectar
+                </Button>
+              )}
+              {!onDisconnectPublicMcp && (
+                <p role="status">A desconexão não está disponível nesta tela.</p>
+              )}
+              {isGitHub && onRemoveGitHubToken && (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={busy || isConnecting}
+                  onClick={() => setExpanded(true)}
+                >
+                  Gerenciar token pessoal
+                </Button>
+              )}
+              {onRemovePublicMcp && (
+                <Button
+                  type="button"
+                  variant="danger"
+                  disabled={busy || isConnecting}
+                  onClick={() => void removePublicService()}
+                >
+                  Remover servidor
+                </Button>
+              )}
+              {!onRemovePublicMcp && (
+                <p role="status">A remoção do servidor não está disponível nesta tela.</p>
+              )}
+            </section>
+          )}
+          {githubNotice && (
+            <p
+              role={
+                githubNotice.includes('não confirmou') || githubNotice.includes('continua válido')
+                  ? 'alert'
+                  : 'status'
+              }
+            >
+              {githubNotice}
+            </p>
+          )}
+          <section
+            className="public-mcp-detail-section"
+            aria-labelledby={`${formId}-applications-title`}
+          >
+            <h3 id={`${formId}-applications-title`}>Aplicativos</h3>
+            <ul>
+              <li>
+                <strong>{service.name}</strong> — {service.provider};{' '}
+                {publicMcpStatusLabels[isConnecting ? 'connecting' : status]}.
+              </li>
+            </ul>
+          </section>
+          <section className="public-mcp-detail-section" aria-labelledby={`${formId}-skills-title`}>
+            <h3 id={`${formId}-skills-title`}>Habilidades</h3>
+            {serviceSkills.length ? (
+              <ul>
+                {serviceSkills.map((skill) => (
+                  <li key={skill.id}>
+                    <strong>{skill.name}</strong> — {skill.description}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p>
+                {server
+                  ? 'Este serviço ainda não informou habilidades disponíveis.'
+                  : 'As habilidades aparecem depois de conectar e testar o serviço.'}
+              </p>
+            )}
+          </section>
+          <section
+            className="public-mcp-detail-section"
+            aria-labelledby={`${formId}-information-title`}
+          >
+            <h3 id={`${formId}-information-title`}>Informações</h3>
+            <dl>
+              <div>
+                <dt>Categoria</dt>
+                <dd>Serviço público</dd>
+              </div>
+              <div>
+                <dt>Fornecedor</dt>
+                <dd>{service.provider}</dd>
+              </div>
+              <div>
+                <dt>Status</dt>
+                <dd>{publicMcpStatusLabels[isConnecting ? 'connecting' : status]}</dd>
+              </div>
+              <div>
+                <dt>Link oficial</dt>
+                <dd>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    onClick={() => void openOfficialLink(service.officialLink)}
+                  >
+                    Abrir documentação oficial
+                  </Button>
+                </dd>
+              </div>
+              <div>
+                <dt>Permissões pedidas</dt>
+                <dd>
+                  {[...service.permissions, ...(service.oauthScopes ?? [])].length ? (
+                    <ul>
+                      {[...service.permissions, ...(service.oauthScopes ?? [])].map(
+                        (permission) => (
+                          <li key={permission}>{permission}</li>
+                        ),
+                      )}
+                    </ul>
+                  ) : (
+                    'Nenhuma permissão específica informada no catálogo.'
+                  )}
+                </dd>
+              </div>
+            </dl>
+          </section>
+        </>
+      )}
       {isGitHub && (
         <div className="public-mcp-github-oauth">
-          <p>
-            O OdeKrai pedirá somente <code>read:user</code> para identificar a conta. A conexão do
-            servidor fica em modo somente leitura; não são solicitadas permissões de escrita.
-            Confira as permissões exibidas pelo GitHub antes de autorizar. Sem permissões de
-            repositório, dados privados podem não ficar disponíveis.
-          </p>
+          <p>{service.oauthGuidance}</p>
           {status === 'connected' && githubAccount && (
             <p className="public-mcp-connected" role="status">
               Conectado como <strong>@{githubAccount}</strong>
@@ -730,9 +1104,7 @@ function PublicMcpServiceCard({
             <p role="status">Verificando conta…</p>
           )}
           {oauthClientSettings && !oauthClientSettings.clientId.trim() && (
-            <p role="status">
-              Este aplicativo ainda precisa de um OAuth App GitHub registrado pelo desenvolvedor.
-            </p>
+            <p role="status">{service.oauthClientRequirement}</p>
           )}
           {oauthClientSettings?.clientSecretRequired && oauthClientSettings.clientId.trim() && (
             <form
@@ -743,7 +1115,7 @@ function PublicMcpServiceCard({
               }}
             >
               <label>
-                Segredo do OAuth App do GitHub
+                {service.oauthSecretLabel ?? 'Segredo do cliente OAuth'}
                 <input
                   id={`${formId}-github-oauth-client-secret`}
                   name={`${formId}-github-oauth-client-secret`}
@@ -752,11 +1124,10 @@ function PublicMcpServiceCard({
                   value={clientSecret}
                   onChange={(event) => setClientSecret(event.target.value)}
                 />
-                <small>
-                  O GitHub exige o segredo para trocar o código OAuth. Ele fica no Gerenciador de
-                  Credenciais e não volta a ser exibido. Use um app dedicado ao OdeKrai; o segredo
-                  fica acessível a quem usa este dispositivo.
-                </small>
+                <small>{service.oauthSecretHelp}</small>
+                {!clientSecret.trim() && (
+                  <small>Digite o segredo para habilitar o salvamento.</small>
+                )}
               </label>
               {oauthClientSettings.clientSecretSaved ? (
                 <>
@@ -804,10 +1175,7 @@ function PublicMcpServiceCard({
             {!oauthClientSettings.clientId.trim() &&
               (!oauthClientSettings.dynamicRegistration ||
                 registrationOptions?.dynamicRegistration === false) && (
-                <p role="status">
-                  Este serviço ainda não foi configurado para o OdeKrai. Veja a documentação no menu
-                  Ações.
-                </p>
+                <p role="status">Peça ao desenvolvedor do OdeKrai para configurar este serviço.</p>
               )}
             {oauthClientSettings.clientSecretRequired &&
               (oauthClientSettings.clientId.trim() || oauthClientSettings.clientSecretSaved) && (
@@ -832,6 +1200,9 @@ function PublicMcpServiceCard({
                     <small>
                       O segredo fica no Gerenciador de Credenciais e não volta a ser exibido.
                     </small>
+                    {!clientSecret.trim() && (
+                      <small>Digite o segredo para habilitar o salvamento.</small>
+                    )}
                   </label>
                   {oauthClientSettings.clientSecretSaved ? (
                     <>
@@ -876,147 +1247,130 @@ function PublicMcpServiceCard({
             {oauthError && <p role="alert">{oauthError}</p>}
           </div>
         )}
-      <dl>
-        <div>
-          <dt>Endereço oficial</dt>
-          <dd>{service.endpoint}</dd>
-        </div>
-        <div>
-          <dt>Transporte</dt>
-          <dd>{service.transport}</dd>
-        </div>
-        <div>
-          <dt>Autenticação</dt>
-          <dd>{service.authentication}</dd>
-        </div>
-      </dl>
-      {service.setupSteps && (
-        <section className="public-mcp-service-setup" aria-label={`Como conectar ${service.name}`}>
-          <h4>Como conectar</h4>
-          <ol>
-            {service.setupSteps.map((step) => (
-              <li key={step}>{step}</li>
-            ))}
-          </ol>
-          {linkError && <p role="alert">{linkError}</p>}
-        </section>
-      )}
-      {service.tokenCreationUrl && service.tokenPermissions && (
-        <div className="public-mcp-token-guide">
-          <p>Crie um token pessoal fine-grained no GitHub. Sugestão mínima para leitura:</p>
+      {service.tokenCreationUrl && service.permissions.length > 0 && (
+        <details className="public-mcp-token-guide">
+          <summary>Ver permissões sugeridas para o token pessoal</summary>
+          <p>{service.personalTokenIntro}</p>
           <ul>
-            {service.tokenPermissions.map((permission) => (
+            {service.personalTokenPermissions?.map((permission) => (
               <li key={permission}>{permission}</li>
             ))}
           </ul>
-          {linkError && <p role="alert">{linkError}</p>}
-        </div>
+        </details>
       )}
-      {service.status === 'not_available' && (
-        <p className="public-mcp-unavailable">
-          A conexão deste serviço depende da inclusão do OdeKrai no catálogo MCP do fornecedor.
-          Consulte os requisitos pela documentação no menu Ações.
-        </p>
-      )}
-      <div className="public-mcp-card-actions">
-        {(service.status === 'not_available' ||
-          onConfigure ||
-          (server && onTest) ||
-          (isGitHub && onConnectGitHubOAuth)) && (
+      {!detailsPage && (
+        <div className="public-mcp-card-actions">
           <Button
             type="button"
             variant="primary"
             disabled={busy || isConnecting}
             aria-busy={isConnecting}
-            onClick={() => void connectOrConfigure()}
+            aria-expanded={primaryAction === 'details' ? detailsPage : undefined}
+            aria-controls={primaryAction === 'details' ? `${formId}-detail-title` : undefined}
+            onClick={() => {
+              if (primaryAction === 'connect') void connectOrConfigure();
+              else if (primaryAction === 'configure') {
+                setAuthentication(isGitHub ? 'bearer' : 'oauth');
+                setExpanded(true);
+              } else if (primaryAction === 'details') {
+                onOpenDetails();
+              }
+            }}
           >
-            {isConnecting ? 'Conectando…' : 'Conectar'}
+            {publicMcpPrimaryActionLabels[primaryAction]}
           </Button>
-        )}
-        <details className="public-mcp-actions-menu">
-          <summary aria-label={`Ações de ${service.name}`}>Ações</summary>
-          <div className="public-mcp-actions-menu-items">
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={() => void openOfficialLink(service.documentationUrl)}
-            >
-              Ver documentação
-            </Button>
-            {service.tokenCreationUrl && (
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={() => void openOfficialLink(service.officialLink)}
+          >
+            Ver guia oficial
+          </Button>
+          <details className="public-mcp-actions-menu">
+            <summary aria-label={`Ações de ${service.name}`}>Ações</summary>
+            <div className="public-mcp-actions-menu-items">
               <Button
                 type="button"
                 variant="secondary"
-                onClick={() => void openOfficialLink(service.tokenCreationUrl!)}
+                onClick={() => void openOfficialLink(service.officialLink)}
               >
-                Criar token pessoal
+                Ver documentação
               </Button>
-            )}
-            {isGitHub && (
-              <Button
-                type="button"
-                variant="secondary"
-                disabled={busy || connecting}
-                aria-expanded={expanded}
-                aria-controls={formId}
-                onClick={() => {
-                  setAuthentication('bearer');
-                  setExpanded((open) => !open);
-                }}
-              >
-                {expanded && authentication === 'bearer' ? 'Fechar opção de token' : 'Usar token'}
-              </Button>
-            )}
-            {!isGitHub && onConfigure && (
-              <Button
-                type="button"
-                variant="secondary"
-                disabled={busy || connecting}
-                aria-expanded={expanded}
-                aria-controls={formId}
-                onClick={() => setExpanded((open) => !open)}
-              >
-                {expanded
-                  ? 'Fechar configuração'
-                  : server && (status === 'connected' || status === 'error')
-                    ? 'Conectar novamente'
-                    : 'Configurar serviço'}
-              </Button>
-            )}
-            {isGoogleWorkspace && server && onConfigure && (
-              <Button
-                type="button"
-                variant="secondary"
-                disabled={busy || connecting}
-                onClick={() => {
-                  setAuthentication('oauth');
-                  setRegistrationOptions({ dynamicRegistration: false });
-                  setExpanded(true);
-                }}
-              >
-                Autorizar novamente
-              </Button>
-            )}
-            {server &&
-              (isGitHub
-                ? (githubAccount && onDisconnectGitHubOAuth) || onRemovePublicMcp
-                : onRemovePublicMcp) && (
+              {service.tokenCreationUrl && (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={() => void openOfficialLink(service.tokenCreationUrl!)}
+                >
+                  Criar token pessoal
+                </Button>
+              )}
+              {isGitHub && (
                 <Button
                   type="button"
                   variant="secondary"
                   disabled={busy || connecting}
-                  onClick={() =>
-                    void (isGitHub && githubAccount && onDisconnectGitHubOAuth
-                      ? disconnectGitHubOAuth()
-                      : disconnectPublicService())
-                  }
+                  aria-expanded={expanded}
+                  aria-controls={formId}
+                  onClick={() => {
+                    setAuthentication('bearer');
+                    setExpanded((open) => !open);
+                  }}
                 >
-                  Desconectar
+                  {expanded && authentication === 'bearer' ? 'Fechar opção de token' : 'Usar token'}
                 </Button>
               )}
-          </div>
-        </details>
-      </div>
+              {!isGitHub && onConfigure && (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={busy || connecting}
+                  aria-expanded={expanded}
+                  aria-controls={formId}
+                  onClick={() => setExpanded((open) => !open)}
+                >
+                  {expanded
+                    ? 'Fechar configuração'
+                    : server && (status === 'connected' || status === 'error')
+                      ? 'Conectar novamente'
+                      : 'Configurar serviço'}
+                </Button>
+              )}
+              {isGoogleWorkspace && server && onConfigure && (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={busy || connecting}
+                  onClick={() => {
+                    setAuthentication('oauth');
+                    setRegistrationOptions({ dynamicRegistration: false });
+                    setExpanded(true);
+                  }}
+                >
+                  Autorizar novamente
+                </Button>
+              )}
+              {server &&
+                (isGitHub
+                  ? (githubAccount && onDisconnectGitHubOAuth) || onDisconnectPublicMcp
+                  : onDisconnectPublicMcp) && (
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    disabled={busy || connecting}
+                    onClick={() =>
+                      void (isGitHub && githubAccount && onDisconnectGitHubOAuth
+                        ? disconnectGitHubOAuth()
+                        : disconnectPublicService())
+                    }
+                  >
+                    Desconectar
+                  </Button>
+                )}
+            </div>
+          </details>
+        </div>
+      )}
       {expanded && (!isGitHub || !server || isGoogleWorkspace) && onConfigure && (
         <form id={formId} className="public-mcp-form" onSubmit={(event) => void submit(event)}>
           <label>
@@ -1025,7 +1379,7 @@ function PublicMcpServiceCard({
               type="url"
               value={endpoint}
               required
-              readOnly={service.name === 'GitHub'}
+              readOnly={service.id === 'github'}
               onChange={(event) => {
                 setEndpoint(event.target.value);
                 setClientId('');
@@ -1050,7 +1404,7 @@ function PublicMcpServiceCard({
           </label>
           {authentication === 'bearer' && (
             <label>
-              {service.name === 'GitHub' ? 'Token pessoal do GitHub (PAT)' : 'Token Bearer'}
+              {service.personalTokenLabel ?? 'Token Bearer'}
               <input
                 id={`${formId}-bearer-token`}
                 name={`${formId}-bearer-token`}
@@ -1067,18 +1421,6 @@ function PublicMcpServiceCard({
           )}
           {authentication === 'oauth' && (
             <div className="public-mcp-oauth-options">
-              {service.oauthRegistrationNote && (
-                <div className="public-mcp-oauth-guide">
-                  <p>{service.oauthRegistrationNote}</p>
-                  {service.oauthSteps && (
-                    <ol>
-                      {service.oauthSteps.map((step) => (
-                        <li key={step}>{step}</li>
-                      ))}
-                    </ol>
-                  )}
-                </div>
-              )}
               {endpoint !== service.endpoint && (
                 <label>
                   Identificador do cliente OAuth
@@ -1118,10 +1460,7 @@ function PublicMcpServiceCard({
                 {checkingOAuth ? 'Verificando…' : 'Verificar opções OAuth'}
               </Button>
               {registrationOptions?.dynamicRegistration && (
-                <p role="status">
-                  Registro dinâmico disponível. O identificador será registrado e salvo com a
-                  autorização.
-                </p>
+                <p role="status">O OdeKrai configurará a conexão durante a autorização.</p>
               )}
               {oauthError && <p role="alert">{oauthError}</p>}
               {linkError && <p role="alert">{linkError}</p>}
@@ -1152,6 +1491,7 @@ function PublicMcpServiceCard({
           <GitHubTokenManager
             server={server}
             busy={busy}
+            label={`Substituir ${service.personalTokenLabel ?? 'token pessoal'}`}
             onSave={onSaveGitHubToken}
             onRemove={onRemoveGitHubToken}
           />
@@ -1166,11 +1506,13 @@ function PublicMcpServiceCard({
 function GitHubTokenManager({
   server,
   busy,
+  label,
   onSave,
   onRemove,
 }: {
   server: PublicMcpServer & { id: string };
   busy: boolean;
+  label: string;
   onSave: NonNullable<SkillsCatalogViewProps['onSaveGitHubToken']>;
   onRemove: NonNullable<SkillsCatalogViewProps['onRemoveGitHubToken']>;
 }) {
@@ -1197,7 +1539,7 @@ function GitHubTokenManager({
 
   return (
     <form className="public-mcp-token-manager" onSubmit={(event) => void submit(event)}>
-      <label htmlFor={`${formId}-token`}>Substituir token pessoal do GitHub</label>
+      <label htmlFor={`${formId}-token`}>{label}</label>
       <input
         id={`${formId}-token`}
         name={`${formId}-token`}
@@ -1215,6 +1557,7 @@ function GitHubTokenManager({
         </Button>
       </div>
       <small>O valor salvo não pode ser consultado nem reaparece no OdeKrai.</small>
+      {!token && <small>Digite o token para habilitar o salvamento.</small>}
       {notice && <p role="status">{notice}</p>}
     </form>
   );
@@ -1223,14 +1566,12 @@ function GitHubTokenManager({
 function SkillFamilyCard({
   family,
   busy,
-  prerequisites,
   onExpand,
   onToggle,
 }: {
   family: CatalogFamily;
   busy: boolean;
-  prerequisites: SkillPrerequisites;
-  onExpand: () => void;
+  onExpand: (trigger: HTMLElement) => void;
   onToggle: (enabled: boolean) => void;
 }) {
   const eligible = family.skills.filter(
@@ -1261,19 +1602,17 @@ function SkillFamilyCard({
         </span>
       </div>
       <div className="skills-family-actions">
-        <Button variant="secondary" aria-label={`Gerenciar ${family.name}`} onClick={onExpand}>
+        <Button
+          variant="secondary"
+          aria-label={`Gerenciar ${family.name}`}
+          onClick={(event) => onExpand(event.currentTarget)}
+        >
           Gerenciar
         </Button>
         <Toggle
           checked={allEnabled}
           label={`${allEnabled ? 'Desativar' : 'Ativar'} todas as habilidades de ${family.name}`}
-          disabled={
-            busy ||
-            target === undefined ||
-            (target &&
-              family.skills.some((skill) => skill.id.startsWith('google.calendar.')) &&
-              prerequisites.googleConnected !== true)
-          }
+          disabled={busy || target === undefined}
           aria-describedby={`skills-family-${family.family}-description`}
           onClick={() => target !== undefined && onToggle(target)}
         />
@@ -1294,10 +1633,13 @@ function SkillFamilyDetails({
   prerequisites,
   headingRef,
   onBack,
-  onToggle,
   onSkillToggle,
   onOverrideToggle,
   onOpenPrivacy,
+  publicServices,
+  mcpServers,
+  onOpenOfficialLink,
+  onTestPublicMcp,
   googleConnection,
 }: {
   family: CatalogFamily;
@@ -1305,17 +1647,19 @@ function SkillFamilyDetails({
   prerequisites: SkillPrerequisites;
   headingRef: React.RefObject<HTMLHeadingElement | null>;
   onBack: () => void;
-  onToggle: (enabled: boolean) => void;
   onSkillToggle: SkillsCatalogViewProps['onSkillToggle'];
   onOverrideToggle: SkillsCatalogViewProps['onOverrideToggle'];
   onOpenPrivacy?: () => void;
+  publicServices: PublicMcpCatalogEntry[];
+  mcpServers: Array<PublicMcpServer & { id: string }>;
+  onOpenOfficialLink: (url: string) => Promise<void>;
+  onTestPublicMcp?: SkillsCatalogViewProps['onTestPublicMcp'];
   googleConnection?: ReactNode;
 }) {
   const eligible = family.skills.filter(
     (skill) =>
       skill.status === 'available' || skill.status === 'blocked' || skill.status === 'installed',
   );
-  const allEnabled = eligible.length > 0 && eligible.every((skill) => skill.enabled);
   const hasConfigurationRequirement = family.skills.some((skill) => skill.configurationRequired);
   const requiresGoogle = family.skills.some((skill) => skill.id.startsWith('google.calendar.'));
   const needsGoogleConnection = requiresGoogle && prerequisites.googleConnected === false;
@@ -1330,12 +1674,50 @@ function SkillFamilyDetails({
       ),
     ),
   ];
+  const familyServerIds = new Set(
+    family.skills
+      .filter((skill) => skill.origin.kind === 'mcp')
+      .map((skill) => (skill.id.startsWith('mcp.') ? skill.id.split('.')[1] : ''))
+      .filter(Boolean),
+  );
+  const familyServers = mcpServers.filter(
+    (server) =>
+      familyServerIds.has(server.id) ||
+      family.skills.some(
+        (skill) => skill.origin.kind === 'mcp' && skill.origin.server === server.name,
+      ),
+  );
+  const familyServices = [
+    ...publicServices.filter(
+      (service) =>
+        family.skills.some((skill) => skill.id.startsWith('google.calendar.')) &&
+        service.provider === 'Google Workspace',
+    ),
+    ...familyServers.flatMap((server) => {
+      const service = publicServices.find(
+        (entry) => entry.name === server.name || entry.endpoint === server.endpoint,
+      );
+      return service ? [service] : [];
+    }),
+  ];
+  const familyServiceServers = familyServices
+    .map((service) =>
+      mcpServers.find(
+        (server) => server.name === service.name || server.endpoint === service.endpoint,
+      ),
+    )
+    .filter((server): server is PublicMcpServer & { id: string } => Boolean(server));
   const categories = [
     ...new Set(family.skills.map((skill) => (skill.category === 'local' ? 'Local' : 'Integração'))),
   ];
   const hasUnconfiguredApps = requiresApps && prerequisites.appCount === 0;
   const needsConfiguration =
     hasConfigurationRequirement || hasUnconfiguredApps || needsGoogleConnection;
+
+  async function testFamilyServices() {
+    if (!onTestPublicMcp || busy) return;
+    for (const server of familyServiceServers) await onTestPublicMcp(server);
+  }
 
   return (
     <section className="skills-family-details-page" aria-labelledby="skills-family-detail-title">
@@ -1351,28 +1733,11 @@ function SkillFamilyDetails({
           <h2 id="skills-family-detail-title" ref={headingRef} tabIndex={-1}>
             {family.name}
           </h2>
+          <p className="skills-details-provider">{origins.join(' · ')}</p>
           <p>{family.description}</p>
         </div>
         <RiskBadge risk={family.highestRisk} />
       </header>
-      <dl className="skills-details-metadata">
-        <div>
-          <dt>Categoria</dt>
-          <dd>{categories.join(' e ')}</dd>
-        </div>
-        <div>
-          <dt>Origem</dt>
-          <dd>{origins.join(' · ')}</dd>
-        </div>
-        <div>
-          <dt>Estado</dt>
-          <dd>
-            <span className={`skills-family-status ${statusClass(family.status)}`}>
-              {skillStatusLabel(family.status)}
-            </span>
-          </dd>
-        </div>
-      </dl>
       <div className="skills-details-primary-action">
         {needsConfiguration || hasUnconfiguredApps ? (
           <Button
@@ -1383,20 +1748,65 @@ function SkillFamilyDetails({
               else onOpenPrivacy?.();
             }}
           >
-            {needsGoogleConnection || hasConfigurationRequirement
-              ? 'Conectar'
-              : 'Cadastrar aplicativo'}
+            Conectar
           </Button>
         ) : (
           <Button
             variant="primary"
             disabled={busy || eligible.length === 0}
-            onClick={() => onToggle(!allEnabled)}
+            onClick={() => {
+              document.getElementById('skills-detail-list-title')?.focus();
+              document.getElementById('skills-detail-list-title')?.scrollIntoView({
+                block: 'nearest',
+              });
+            }}
           >
-            {allEnabled ? 'Desativar família' : 'Ativar família'}
+            Gerenciar
           </Button>
         )}
+        <Button
+          variant="secondary"
+          disabled={busy || !onTestPublicMcp || familyServiceServers.length === 0}
+          onClick={() => void testFamilyServices()}
+        >
+          Testar
+        </Button>
+        {familyServiceServers.length === 0 && (
+          <p role="status">Esta família não tem um serviço conectado para testar.</p>
+        )}
       </div>
+      <section className="skills-detail-applications" aria-labelledby="skills-applications-title">
+        <h3 id="skills-applications-title">Aplicativos</h3>
+        {familyServices.length > 0 ? (
+          <ul>
+            {familyServices.map((service) => {
+              const serviceServer = mcpServers.find(
+                (server) => server.name === service.name || server.endpoint === service.endpoint,
+              );
+              const serviceStatus = getPublicMcpStatus(
+                service,
+                serviceServer ? [serviceServer] : [],
+              );
+              return (
+                <li key={service.id}>
+                  <strong>{service.name}</strong> — {service.provider};{' '}
+                  {publicMcpStatusLabels[serviceStatus]}.
+                </li>
+              );
+            })}
+          </ul>
+        ) : requiresApps ? (
+          <p>
+            {prerequisites.appCount === null
+              ? 'Não foi possível consultar os aplicativos cadastrados.'
+              : prerequisites.appCount > 0
+                ? `${prerequisites.appCount} aplicativo(s) cadastrado(s).`
+                : 'Nenhum aplicativo cadastrado.'}
+          </p>
+        ) : (
+          <p>Nenhum serviço externo associado a esta família.</p>
+        )}
+      </section>
       <section className="skills-prerequisites" aria-labelledby="skills-prerequisites-title">
         <h3 id="skills-prerequisites-title">Requisitos e estado</h3>
         {requiresFolder && (
@@ -1451,7 +1861,9 @@ function SkillFamilyDetails({
       </section>
       {googleConnection}
       <section className="skills-detail-list" aria-labelledby="skills-detail-list-title">
-        <h3 id="skills-detail-list-title">Habilidades desta família</h3>
+        <h3 id="skills-detail-list-title" tabIndex={-1}>
+          Habilidades
+        </h3>
         {family.skills.map((skill) => (
           <article className="skills-detail-item" key={skill.id}>
             <div className="skills-detail-copy">
@@ -1541,6 +1953,73 @@ function SkillFamilyDetails({
           </article>
         ))}
       </section>
+      <section className="skills-detail-information" aria-labelledby="skills-information-title">
+        <h3 id="skills-information-title">Informações</h3>
+        <dl className="skills-details-metadata">
+          <div>
+            <dt>Categoria</dt>
+            <dd>{categories.join(' e ')}</dd>
+          </div>
+          <div>
+            <dt>Fornecedor</dt>
+            <dd>{origins.join(' · ')}</dd>
+          </div>
+          <div>
+            <dt>Status</dt>
+            <dd>
+              <span className={`skills-family-status ${statusClass(family.status)}`}>
+                {skillStatusLabel(family.status)}
+              </span>
+            </dd>
+          </div>
+          <div>
+            <dt>Link oficial</dt>
+            <dd>
+              {familyServices.length ? (
+                <ul>
+                  {familyServices.map((service) => (
+                    <li key={service.id}>
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        onClick={() => void onOpenOfficialLink(service.officialLink)}
+                      >
+                        {service.name}: documentação oficial
+                      </Button>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                'Não se aplica às habilidades locais do OdeKrai.'
+              )}
+            </dd>
+          </div>
+          <div>
+            <dt>Permissões pedidas</dt>
+            <dd>
+              <ul>
+                {[...new Set(family.skills.map((skill) => permissionDescription(skill.risk)))].map(
+                  (permission) => (
+                    <li key={permission}>{permission}</li>
+                  ),
+                )}
+              </ul>
+              {familyServices.flatMap((service) => [
+                ...service.permissions,
+                ...(service.oauthScopes ?? []),
+              ]).length > 0 && (
+                <ul>
+                  {familyServices
+                    .flatMap((service) => [...service.permissions, ...(service.oauthScopes ?? [])])
+                    .map((permission) => (
+                      <li key={permission}>{permission}</li>
+                    ))}
+                </ul>
+              )}
+            </dd>
+          </div>
+        </dl>
+      </section>
       <p className="skills-critical-approval-note" role="note">
         Controle total não remove aprovações críticas. Pagamentos, comunicação externa e ações
         bloqueadas continuam sob as proteções do OdeKrai.
@@ -1552,10 +2031,12 @@ function SkillFamilyDetails({
 export function SkillsScreen({
   onOpenPrivacy,
   onRemovePublicMcp,
+  onTestInChat,
   initialFamily,
 }: {
   onOpenPrivacy: () => void;
   onRemovePublicMcp: (server: { id: string }) => Promise<string | null>;
+  onTestInChat?: (suggestion: string) => void;
   initialFamily?: SkillFamily;
 }) {
   const [skills, setSkills] = useState<CatalogSkill[]>([]);
@@ -1564,6 +2045,8 @@ export function SkillsScreen({
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [mcpServers, setMcpServers] = useState<Array<PublicMcpServer & { id: string }>>([]);
+  const [publicServices, setPublicServices] = useState<PublicMcpCatalogEntry[]>([]);
+  const [catalogError, setCatalogError] = useState('');
   const [mcpBusy, setMcpBusy] = useState(false);
   const [googleStatus, setGoogleStatus] = useState<GoogleOAuthStatus | null>(null);
   const [prerequisites, setPrerequisites] = useState<SkillPrerequisites>({
@@ -1575,6 +2058,7 @@ export function SkillsScreen({
   const refresh = useCallback(async (silent = false) => {
     if (!isTauri()) {
       setSkills([]);
+      setPublicServices([]);
       setLoadError('As habilidades só podem ser carregadas no aplicativo OdeKrai.');
       setLoading(false);
       return;
@@ -1583,12 +2067,15 @@ export function SkillsScreen({
     try {
       const nextSkills = await invoke<CatalogSkill[]>('get_skills');
       setSkills(nextSkills);
-      const [folders, apps, servers] = await Promise.all([
+      const [folders, apps, servers, catalog] = await Promise.all([
         invoke<Array<{ workspace: boolean }>>('get_allowed_folders').catch(() => null),
         invoke<Array<{ id: string }>>('get_allowed_apps').catch(() => null),
         invoke<Array<PublicMcpServer & { id: string }>>('mcp_list_servers').catch(() => null),
+        invoke<PublicMcpCatalogEntry[]>('mcp_public_catalog').catch(() => null),
       ]);
       if (servers) setMcpServers(servers);
+      setPublicServices(catalog ?? []);
+      setCatalogError(catalog ? '' : 'Não foi possível carregar o catálogo de serviços públicos.');
       setPrerequisites({
         folderAvailable: folders === null ? null : folders.some((folder) => folder.workspace),
         appCount: apps === null ? null : apps.length,
@@ -1644,8 +2131,8 @@ export function SkillsScreen({
       setError('O servidor MCP precisa usar uma URL HTTPS.');
       return false;
     }
-    if (service.name === 'GitHub' && endpoint !== service.endpoint) {
-      setError('O endereço oficial do servidor MCP do GitHub é fixo no catálogo.');
+    if (service.id === 'github' && endpoint !== service.endpoint) {
+      setError(service.endpointError ?? 'O endereço oficial do servidor é fixo no catálogo.');
       return false;
     }
     if (authentication === 'bearer' && !token.trim()) {
@@ -1682,7 +2169,7 @@ export function SkillsScreen({
       const detail = String(cause);
       if (detail.includes('exige um identificador de cliente')) {
         setError(
-          `Este servidor exige um identificador de cliente. Veja a documentação do serviço (${service.documentationUrl}) para criá-lo.`,
+          `Este servidor exige um identificador de cliente. Veja a documentação do serviço (${service.officialLink}) para criá-lo.`,
         );
       } else {
         setError(publicMcpErrorMessage(cause));
@@ -1752,17 +2239,29 @@ export function SkillsScreen({
     }
   }
 
-  async function removePublicMcp(server: PublicMcpServer & { id: string }): Promise<boolean> {
+  async function disconnectPublicMcp(
+    server: PublicMcpServer & { id: string },
+  ): Promise<string | null> {
     setMcpBusy(true);
-    setError('');
+    try {
+      const warning = await invoke<string | null>('mcp_disconnect_server', {
+        serverId: server.id,
+      });
+      await refreshMcpServers().catch(() => undefined);
+      return warning;
+    } finally {
+      setMcpBusy(false);
+    }
+  }
+
+  async function removePublicMcp(server: PublicMcpServer & { id: string }): Promise<string | null> {
+    setMcpBusy(true);
     try {
       const warning = await onRemovePublicMcp(server);
-      if (warning) setError('A conexão foi removida, mas o provedor não confirmou a revogação.');
       await refreshMcpServers().catch(() => undefined);
-      return true;
+      return warning;
     } catch (cause) {
-      setError(publicMcpErrorMessage(cause));
-      return false;
+      throw new Error(publicMcpErrorMessage(cause));
     } finally {
       setMcpBusy(false);
     }
@@ -1773,13 +2272,15 @@ export function SkillsScreen({
     clientId: string,
     scopes: string,
   ): Promise<boolean> {
-    const service = publicMcpCatalog.find((item) => item.name === 'GitHub');
+    const service = publicServices.find((item) => item.id === 'github');
     if (!service) return false;
     if (!server) {
       return configurePublicMcp(service, service.endpoint, 'oauth', '', clientId, scopes);
     }
     if (server.endpoint !== service.endpoint) {
-      throw new Error('O endereço salvo não corresponde ao servidor oficial do GitHub.');
+      throw new Error(
+        service.serverMismatchError ?? 'O endereço salvo não corresponde ao endereço oficial.',
+      );
     }
     setMcpBusy(true);
     setError('');
@@ -1839,14 +2340,18 @@ export function SkillsScreen({
         ) : undefined
       }
       mcpServers={mcpServers}
+      publicServices={publicServices}
+      catalogError={catalogError}
       mcpBusy={mcpBusy}
       onConfigurePublicMcp={configurePublicMcp}
       onSaveGitHubToken={saveGitHubToken}
       onRemoveGitHubToken={removeGitHubToken}
       onConnectGitHubOAuth={connectGitHubOAuth}
       onDisconnectGitHubOAuth={disconnectGitHubOAuth}
+      onDisconnectPublicMcp={disconnectPublicMcp}
       onRemovePublicMcp={removePublicMcp}
       onTestPublicMcp={testPublicMcp}
+      onTestInChat={onTestInChat}
       prerequisites={prerequisites}
       initialFamily={initialFamily}
       onFamilyToggle={(family, enabled) =>

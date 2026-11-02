@@ -72,19 +72,19 @@ const modes: { id: Mode; title: string; description: string }[] = [
     id: 'aprovar_por_mim',
     title: 'Aprovar por mim',
     description:
-      'Leituras e alterações reversíveis em pastas permitidas seguem automaticamente. Mensagens e ações destrutivas pedem aprovação.',
+      'Leituras em pastas permitidas seguem sem confirmação. Toda alteração, comunicação externa, captura sensível e execução de código pede aprovação.',
   },
   {
     id: 'sempre_perguntar',
     title: 'Sempre perguntar',
     description:
-      'Toda alteração ou envio de mensagem pede aprovação. Leituras em pastas permitidas são permitidas.',
+      'Leituras em pastas permitidas seguem sem confirmação. Toda alteração, comunicação externa, captura sensível e execução de código pede aprovação.',
   },
   {
     id: 'controle_total',
     title: 'Controle total',
     description:
-      'Executa ações permitidas sem perguntar. Pagamentos, segredos e caminhos bloqueados continuam bloqueados ou exigem aprovação.',
+      'Bloqueios fixos continuam ativos. A matriz atual ainda exige aprovação para toda alteração, comunicação externa, captura sensível e execução de código.',
   },
 ];
 const risks: { id: RiskLevel; title: string }[] = [
@@ -107,16 +107,9 @@ function toolLabel(tool: string): string {
   return tools.find(([id]) => id === tool)?.[1] ?? 'Ação do OdeKrai';
 }
 
-function decision(mode: Mode, risk: RiskLevel): string {
+function decision(risk: RiskLevel): string {
   if (risk === 'leitura') return 'Permitir em pastas permitidas';
-  if (risk === 'execucao_de_codigo') return 'Sempre pedir aprovação';
-  if (risk === 'captura_sensivel') return 'Sempre pedir aprovação';
-  if (mode === 'sempre_perguntar') return 'Pedir aprovação';
-  if (mode === 'aprovar_por_mim')
-    return risk === 'escrita_reversivel' ? 'Permitir em pastas permitidas' : 'Pedir aprovação';
-  if (risk === 'destrutivo_financeiro')
-    return 'Na lixeira: permitir em pastas permitidas; caminhos bloqueados continuam indisponíveis';
-  return 'Permitir (origem externa sempre pede aprovação)';
+  return 'Sempre pedir aprovação';
 }
 
 export function SecurityCenter({
@@ -315,7 +308,7 @@ export function SecurityCenter({
                     <tr key={mode.id}>
                       <th>{mode.title}</th>
                       {risks.map((risk) => (
-                        <td key={risk.id}>{decision(mode.id, risk.id)}</td>
+                        <td key={risk.id}>{decision(risk.id)}</td>
                       ))}
                     </tr>
                   ))}

@@ -3,13 +3,30 @@ import { readFileSync } from 'node:fs';
 import {
   canConnectToPublicOAuth,
   canConnectWithOAuth,
+  getPublicMcpPrimaryAction,
   getPublicMcpStatus,
   oauthClientIdHelp,
   publicOAuthServiceKey,
+  type PublicMcpCatalogEntry,
 } from './mcp-service-catalog';
-import catalog from './mcp-service-catalog.json';
+import rawCatalog from '../../src-tauri/resources/public-mcp-catalog.json';
+
+const catalog = rawCatalog as unknown as PublicMcpCatalogEntry[];
 
 describe('catálogo público de servidores MCP', () => {
+  it('escolhe uma ação principal para cada status e substitui conexão impossível por detalhes', () => {
+    const github = catalog.find(({ id }) => id === 'github');
+    const figma = catalog.find(({ id }) => id === 'figma');
+    if (!github || !figma) throw new Error('Serviço esperado ausente do catálogo.');
+
+    expect(getPublicMcpPrimaryAction(github, 'available')).toBe('connect');
+    expect(getPublicMcpPrimaryAction(github, 'configured')).toBe('configure');
+    expect(getPublicMcpPrimaryAction(github, 'connecting')).toBe('connecting');
+    expect(getPublicMcpPrimaryAction(github, 'connected')).toBe('details');
+    expect(getPublicMcpPrimaryAction(github, 'error')).toBe('configure');
+    expect(getPublicMcpPrimaryAction(figma, 'available')).toBe('details');
+  });
+
   it('contém somente os sete serviços pedidos, com fontes e dados de transporte/autenticação', () => {
     expect(catalog.map(({ name }) => name)).toEqual([
       'GitHub',
@@ -22,20 +39,26 @@ describe('catálogo público de servidores MCP', () => {
     ]);
 
     for (const service of catalog) {
-      expect(service.supplier).toBeTruthy();
-      expect(service.documentationUrl).toMatch(/^https:\/\//);
+      expect(service.provider).toBeTruthy();
+      expect(service.officialLink).toMatch(/^https:\/\//);
       expect(service.endpoint).toMatch(/^https:\/\//);
       expect(service.transport).toBeTruthy();
       expect(service.authentication).toBeTruthy();
       expect(service.authenticationMethods.length).toBeGreaterThan(0);
-      expect(['available_to_configure', 'not_available']).toContain(service.status);
+      expect(['available', 'in_preview', 'configuration_pending', 'not_verified']).toContain(
+        service.status,
+      );
+      expect(service.id).toBeTruthy();
+      expect(service.provider).toBeTruthy();
+      expect(service.officialLink).toMatch(/^https:\/\//);
+      expect(service.requirements).toBeDefined();
+      expect(service.permissions).toBeDefined();
+      expect(service.connectionType.length).toBeGreaterThan(0);
     }
   });
 
   it('não apresenta como disponível no OdeKrai serviços com requisito incompatível documentado', () => {
-    const unavailable = catalog
-      .filter(({ status }) => status === 'not_available')
-      .map(({ name }) => name);
+    const unavailable = catalog.filter(({ connectable }) => !connectable).map(({ name }) => name);
 
     expect(unavailable).toEqual(['Figma']);
   });
@@ -43,15 +66,13 @@ describe('catálogo público de servidores MCP', () => {
   it('identifica o Developer Preview do Google e usa fontes oficiais da Lovable', () => {
     expect(
       catalog
-        .filter(({ supplier }) => supplier === 'Google Workspace')
+        .filter(({ provider }) => provider === 'Google Workspace')
         .map(({ programStatus }) => programStatus),
     ).toEqual(['Developer Preview', 'Developer Preview', 'Developer Preview']);
 
     const lovable = catalog.find(({ name }) => name === 'Lovable');
     expect(lovable?.endpoint).toBe('https://mcp.lovable.dev');
-    expect(lovable?.documentationUrl).toBe(
-      'https://docs.lovable.dev/integrations/lovable-mcp-server',
-    );
+    expect(lovable?.officialLink).toBe('https://docs.lovable.dev/integrations/lovable-mcp-server');
     expect(lovable?.sourceCodeUrl).toBe('https://github.com/lovablelabs/mcp');
   });
 
@@ -62,8 +83,8 @@ describe('catálogo público de servidores MCP', () => {
     expect(figma.endpoint).toBe('https://mcp.figma.com/mcp');
     expect(figma.authenticationMethods).toEqual(['oauth']);
     expect(figma.authentication).toContain('NÃO VERIFICADO');
-    expect(figma.status).toBe('not_available');
-    expect(figma.setupSteps?.join(' ')).toContain('lista de espera da Figma');
+    expect(figma.status).toBe('configuration_pending');
+    expect(figma.requirements.join(' ')).toContain('A Figma precisa liberar o OdeKrai');
   });
 
   it('oferece Lovable somente via OAuth e confirma registro dinâmico sem client ID manual', () => {
@@ -72,31 +93,31 @@ describe('catálogo público de servidores MCP', () => {
 
     expect(lovable.endpoint).toBe('https://mcp.lovable.dev');
     expect(lovable.authenticationMethods).toEqual(['oauth']);
-    expect(lovable.status).toBe('available_to_configure');
-    expect(lovable.setupSteps?.join(' ')).toContain('OdeKrai usa 127.0.0.1');
+    expect(lovable.status).toBe('available');
+    expect(lovable.requirements.join(' ')).toContain('OdeKrai usa 127.0.0.1');
     expect(lovable.oauthRegistrationNote).toContain('registration_endpoint');
     expect(canConnectWithOAuth({ dynamicRegistration: true }, '')).toBe(true);
     expect(canConnectWithOAuth({ dynamicRegistration: false }, '')).toBe(false);
   });
 
   it('documenta os passos e escopos mínimos independentes dos três serviços Google', () => {
-    const googleServices = catalog.filter(({ supplier }) => supplier === 'Google Workspace');
+    const googleServices = catalog.filter(({ provider }) => provider === 'Google Workspace');
     expect(googleServices).toHaveLength(3);
     for (const service of googleServices) {
-      expect(service.status).toBe('available_to_configure');
+      expect(service.status).toBe('in_preview');
       expect(service.programStatus).toBe('Developer Preview');
-      expect(service.oauthSetupSteps?.join(' ')).toContain('Google Cloud');
-      expect(service.oauthSetupSteps?.join(' ')).toContain('identificador e o segredo');
-      expect(service.oauthScopeLabels?.length).toBeGreaterThan(0);
+      expect(service.requirements.join(' ')).toContain('Google Cloud');
+      expect(service.requirements.join(' ')).toContain('identificador e o segredo');
+      expect(service.permissions.length).toBeGreaterThan(0);
     }
     const gmail = googleServices.find(({ name }) => name === 'Gmail');
-    expect(gmail?.oauthScopeLabels).toEqual([
+    expect(gmail?.permissions).toEqual([
       'Leitura de mensagens: https://www.googleapis.com/auth/gmail.readonly',
       'Criar rascunhos: https://www.googleapis.com/auth/gmail.compose (o OdeKrai não oferece ferramenta de envio)',
     ]);
-    expect(gmail?.oauthSetupSteps?.join(' ')).toContain('Developer Preview Program');
-    expect(gmail?.oauthSetupSteps?.join(' ')).toContain('Gmail MCP API');
-    expect(gmail?.oauthSetupSteps?.join(' ')).toContain('127.0.0.1:43117/callback');
+    expect(gmail?.requirements.join(' ')).toContain('Developer Preview Program');
+    expect(gmail?.requirements.join(' ')).toContain('Gmail MCP API');
+    expect(gmail?.requirements.join(' ')).toContain('127.0.0.1:43117/callback');
   });
 
   it('mantém o endpoint oficial fixo do GitHub e recomenda permissões de PAT de menor privilégio', () => {
@@ -105,9 +126,9 @@ describe('catálogo público de servidores MCP', () => {
 
     expect(github.endpoint).toBe('https://api.githubcopilot.com/mcp/');
     expect(github.transport).toBe('Streamable HTTP');
-    expect(github.documentationUrl).toContain('docs.github.com/');
+    expect(github.officialLink).toContain('docs.github.com/');
     expect(github.tokenCreationUrl).toBe('https://github.com/settings/personal-access-tokens/new');
-    expect(github.tokenPermissions).toEqual(
+    expect(github.personalTokenPermissions).toEqual(
       expect.arrayContaining([
         expect.stringContaining('Metadata: Read'),
         expect.stringContaining('Contents: Read'),
@@ -122,19 +143,17 @@ describe('catálogo público de servidores MCP', () => {
     expect(notion?.authentication).toContain('registro dinâmico de cliente');
     expect(notion?.authenticationMethods).toEqual(['oauth']);
     expect(notion?.oauthRegistrationNote).toContain('identificador é recebido durante a conexão');
-    expect(notion?.oauthSteps).toHaveLength(4);
-    expect(notion?.oauthSteps?.[1]).toContain('registration_endpoint');
-    expect(notion?.oauthSteps?.[1]).toContain('não é necessário configurar client ID');
-    expect(notion?.documentationUrl).toBe(
-      'https://developers.notion.com/guides/mcp/build-mcp-client',
-    );
+    expect(notion?.requirements).toHaveLength(4);
+    expect(notion?.requirements[1]).toContain('registration_endpoint');
+    expect(notion?.requirements[1]).toContain('não é necessário configurar client ID');
+    expect(notion?.officialLink).toBe('https://developers.notion.com/guides/mcp/build-mcp-client');
   });
 
   it('só marca conectado após o comando de teste confirmar o runtime', () => {
     const github = catalog.find(({ name }) => name === 'GitHub');
     if (!github) throw new Error('Serviço GitHub ausente do catálogo.');
 
-    expect(getPublicMcpStatus(github, [])).toBe('available');
+    expect(getPublicMcpStatus(github, [])).toBe('configured');
     expect(
       getPublicMcpStatus(github, [{ endpoint: github.endpoint, enabled: false, status: 'Parado' }]),
     ).toBe('configured');
@@ -182,7 +201,7 @@ describe('catálogo público de servidores MCP', () => {
       'Este serviço ainda não foi configurado para o OdeKrai. Veja o guia',
     );
     expect(oauthClientIdHelp(notion, { dynamicRegistration: false })).toContain(
-      notion.documentationUrl,
+      notion.officialLink,
     );
     expect(canConnectWithOAuth({ dynamicRegistration: false }, 'manual-client')).toBe(true);
     expect(oauthClientIdHelp(notion, { dynamicRegistration: false })).toContain(

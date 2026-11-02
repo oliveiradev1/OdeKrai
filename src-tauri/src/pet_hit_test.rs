@@ -14,7 +14,7 @@ pub(crate) struct SpriteRect {
 
 pub(crate) const HIT_MARGIN: f64 = 6.0;
 pub(crate) const NEAR_POLL_INTERVAL: Duration = Duration::from_millis(16);
-pub(crate) const FAR_POLL_INTERVAL: Duration = Duration::from_millis(60);
+pub(crate) const FAR_POLL_INTERVAL: Duration = Duration::from_millis(120);
 
 pub(crate) fn contains(rect: SpriteRect, x: f64, y: f64) -> bool {
     x >= rect.x - HIT_MARGIN
@@ -94,7 +94,7 @@ mod tests {
     fn intervalo_do_monitor_reduz_consultas_longe_e_aguarda_pet_inativo() {
         assert_eq!(
             poll_interval(true, true, false),
-            Some(Duration::from_millis(60))
+            Some(Duration::from_millis(120))
         );
         assert_eq!(
             poll_interval(true, true, true),

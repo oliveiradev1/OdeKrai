@@ -48,6 +48,7 @@ export type AgentActionCardData = {
   summary: string;
   resultSummary?: string;
   diff?: string;
+  codeReviewId?: string | null;
   preview?: string | null;
   artifacts?: AgentArtifact[];
   timeline?: AgentTimelineEntry[];
@@ -134,6 +135,7 @@ export function AgentActionCard({
   onOpenArtifact,
   onRevealArtifact,
   onUndo,
+  onApplyCodeDiff,
 }: {
   action: AgentActionCardData;
   running?: boolean;
@@ -143,9 +145,12 @@ export function AgentActionCard({
   onOpenArtifact?: (path: string) => void;
   onRevealArtifact?: (path: string) => void;
   onUndo?: (descriptor: UndoDescriptor) => void;
+  onApplyCodeDiff?: (action: AgentActionCardData) => Promise<void>;
 }) {
   const state = getAgentCardState(action);
   const [now, setNow] = useState(Date.now());
+  const [applyingCodeDiff, setApplyingCodeDiff] = useState(false);
+  const [codeDiffError, setCodeDiffError] = useState('');
   useEffect(() => {
     if (state !== 'aguardando aprovação' || !action.approvalExpiresAt) return;
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
@@ -306,13 +311,40 @@ export function AgentActionCard({
         </details>
       )}
       {action.diff && (
-        <details>
+        <details open={Boolean(action.codeReviewId)}>
           <summary>Ver detalhes</summary>
           {action.untrustedResult && (
             <p className="agent-untrusted-label">Conteúdo externo · dado não confiável.</p>
           )}
           <pre>{action.diff}</pre>
         </details>
+      )}
+      {action.codeReviewId && action.skillId === 'code.delegate' && onApplyCodeDiff && (
+        <div className="agent-card-review">
+          <p>Revise o diff acima. Ele ainda não foi aplicado ao projeto original.</p>
+          <button
+            type="button"
+            disabled={applyingCodeDiff}
+            onClick={async () => {
+              setApplyingCodeDiff(true);
+              setCodeDiffError('');
+              try {
+                await onApplyCodeDiff(action);
+              } catch (error) {
+                setCodeDiffError(
+                  error instanceof Error
+                    ? error.message
+                    : 'Não foi possível aplicar o diff revisado.',
+                );
+              } finally {
+                setApplyingCodeDiff(false);
+              }
+            }}
+          >
+            {applyingCodeDiff ? 'Aguardando confirmação…' : 'Aplicar alterações ao projeto'}
+          </button>
+          {codeDiffError && <p role="alert">{codeDiffError}</p>}
+        </div>
       )}
       {(action.artifacts ?? [])
         .filter((artifact) => isSafeArtifactPath(artifact.path))

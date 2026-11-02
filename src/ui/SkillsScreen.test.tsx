@@ -1,9 +1,16 @@
 import { readFileSync } from 'node:fs';
 import { renderToStaticMarkup } from 'react-dom/server';
+import type { ComponentProps } from 'react';
 import { describe, expect, it } from 'vitest';
 import type { CatalogSkill } from '../core/skills-catalog';
-import { publicMcpCatalog, publicMcpErrorMessage } from '../core/mcp-service-catalog';
-import { SkillsCatalogView } from './SkillsScreen';
+import { publicMcpErrorMessage, type PublicMcpCatalogEntry } from '../core/mcp-service-catalog';
+import catalog from '../../src-tauri/resources/public-mcp-catalog.json';
+import { SkillsCatalogView as SkillsCatalogViewBase } from './SkillsScreen';
+
+const publicMcpCatalog = catalog as unknown as PublicMcpCatalogEntry[];
+const SkillsCatalogView = (props: ComponentProps<typeof SkillsCatalogViewBase>) => (
+  <SkillsCatalogViewBase publicServices={publicMcpCatalog} {...props} />
+);
 
 const registryFixture: CatalogSkill[] = [
   {
@@ -81,19 +88,31 @@ const discordSkill: CatalogSkill = {
 };
 
 describe('catálogo de habilidades', () => {
+  it('usa os metadados do recurso backend e não fixa nomes dos serviços no cartão', () => {
+    const source = readFileSync(new URL('./SkillsScreen.tsx', import.meta.url), 'utf8');
+    expect(source).toContain("invoke<PublicMcpCatalogEntry[]>('mcp_public_catalog')");
+    expect(source).toContain('<h3>{service.name}</h3>');
+    expect(source).toContain('<p>{service.provider}</p>');
+    expect(source).not.toMatch(
+      />\s*(GitHub|Figma|Gmail|Google Calendar|Google Sheets|Lovable|Notion)\s*</,
+    );
+  });
+
   it('renderiza os cinco estados públicos e os tipos de autenticação do catálogo', () => {
     const github = publicMcpCatalog.find((entry) => entry.name === 'GitHub');
     if (!github) throw new Error('Serviço GitHub ausente do catálogo.');
     const scenarios = [
-      { expected: 'Disponível', servers: [] },
+      { expected: 'Configure o serviço', action: 'Configurar', servers: [] },
       {
         expected: 'Configure o serviço',
+        action: 'Configurar',
         servers: [
           { id: 's', name: 'GitHub', endpoint: github.endpoint, enabled: false, status: 'Parado' },
         ],
       },
       {
         expected: 'Conectando',
+        action: 'Conectando…',
         servers: [
           {
             id: 's',
@@ -106,6 +125,7 @@ describe('catálogo de habilidades', () => {
       },
       {
         expected: 'Conectado',
+        action: 'Ver detalhes',
         servers: [
           {
             id: 's',
@@ -118,12 +138,13 @@ describe('catálogo de habilidades', () => {
       },
       {
         expected: 'Erro',
+        action: 'Configurar',
         servers: [
           { id: 's', name: 'GitHub', endpoint: github.endpoint, enabled: true, status: 'Error' },
         ],
       },
     ];
-    for (const { expected, servers } of scenarios) {
+    for (const { expected, action, servers } of scenarios) {
       const markup = renderToStaticMarkup(
         <SkillsCatalogView
           skills={registryFixture}
@@ -135,7 +156,7 @@ describe('catálogo de habilidades', () => {
           onConfigurePublicMcp={async () => true}
           onTestPublicMcp={async () => true}
           onDisconnectGitHubOAuth={async () => null}
-          onRemovePublicMcp={async () => true}
+          onRemovePublicMcp={async () => null}
         />,
       );
       const card = markup.slice(
@@ -143,10 +164,8 @@ describe('catálogo de habilidades', () => {
         markup.indexOf('<h3>Figma</h3>'),
       );
       expect(card).toContain(`>${expected}</span>`);
-      expect(card).toContain(
-        expected === 'Conectando' ? '>Conectando…</button>' : '>Conectar</button>',
-      );
-      expect(card).toContain('>Ações</summary>');
+      expect(card).toContain(`>${action}</button>`);
+      expect(card).toContain('>Ver guia oficial</button>');
     }
 
     expect(github.authenticationMethods).toEqual(['oauth', 'bearer']);
@@ -154,6 +173,39 @@ describe('catálogo de habilidades', () => {
     expect(github.authentication).toContain('PAT Bearer');
     for (const service of publicMcpCatalog.filter((entry) => entry.name !== 'GitHub')) {
       expect(service.authenticationMethods).toEqual(['oauth']);
+    }
+  });
+
+  it('os seis cartões explicam o que fazem, o que precisam e o próximo passo sem jargão', () => {
+    const serviceIds = [
+      'github',
+      'figma',
+      'google.gmail',
+      'google.calendar',
+      'google.sheets',
+      'lovable',
+    ];
+    const markup = renderToStaticMarkup(
+      <SkillsCatalogView
+        skills={registryFixture}
+        initialTab="publico"
+        onFamilyToggle={noOperation}
+        onSkillToggle={noOperation}
+        onOverrideToggle={noOperation}
+      />,
+    );
+
+    for (const id of serviceIds) {
+      const service = publicMcpCatalog.find((item) => item.id === id);
+      if (!service) throw new Error(`Serviço ${id} ausente do catálogo.`);
+      const start = markup.indexOf(`<h3>${service.name}</h3>`);
+      const end = markup.indexOf('</article>', start);
+      const card = markup.slice(start, end);
+      expect(card).toContain(`<strong>O que faz:</strong> ${service.whatItDoes}`);
+      expect(card).toContain(`<strong>O que precisa:</strong> ${service.whatItNeeds}`);
+      expect(card).toContain(`<strong>Próximo passo:</strong> ${service.nextStep}`);
+      expect(card).toContain('Ver guia oficial');
+      expect(card).not.toMatch(/menu Ações|catálogo MCP|dependência|registration_endpoint/);
     }
   });
 
@@ -182,9 +234,35 @@ describe('catálogo de habilidades', () => {
     expect(card).toContain('aria-busy="true"');
     expect(card).toContain('>Conectando…</button>');
     expect(card).toContain('disabled=""');
+    expect(card).toContain('A conexão está em andamento.');
   });
 
-  it('não renderiza uma ação principal sem callback funcional', () => {
+  it('explica todo botão desabilitado e mantém o guia oficial disponível durante outra operação', () => {
+    const markup = renderToStaticMarkup(
+      <SkillsCatalogView
+        skills={registryFixture}
+        initialTab="publico"
+        mcpBusy
+        onFamilyToggle={noOperation}
+        onSkillToggle={noOperation}
+        onOverrideToggle={noOperation}
+        onConfigurePublicMcp={async () => true}
+      />,
+    );
+
+    for (const service of publicMcpCatalog) {
+      const start = markup.indexOf(`<h3>${service.name}</h3>`);
+      const end = markup.indexOf('</article>', start);
+      const card = markup.slice(start, end);
+      expect(card).toContain('Aguarde a operação atual terminar para usar este cartão.');
+      expect(card).toContain('>Ver guia oficial</button>');
+      const disabledButtons = card.match(/<button[^>]*disabled=""[^>]*>/g) ?? [];
+      expect(disabledButtons.length).toBeGreaterThan(0);
+      expect(card).toContain('Aguarde a operação atual terminar');
+    }
+  });
+
+  it('mantém uma ação útil para serviço não configurável mesmo sem callback de conexão', () => {
     const markup = renderToStaticMarkup(
       <SkillsCatalogView
         skills={registryFixture}
@@ -203,11 +281,15 @@ describe('catálogo de habilidades', () => {
       markup.indexOf('<h3>Gmail</h3>'),
     );
     expect(githubCard).not.toContain('>Conectar</button>');
-    expect(figmaCard).toContain('>Conectar</button>');
-    expect(figmaCard).toContain('Ver documentação');
+    expect(githubCard).toContain('>Ver detalhes</button>');
+    expect(figmaCard).toContain('>Ver detalhes</button>');
+    expect(figmaCard).toContain('>Ver guia oficial</button>');
+    expect(figmaCard).toContain('Próximo passo:');
+    expect(figmaCard).toContain('Essa liberação ainda está pendente.');
+    expect(figmaCard).not.toMatch(/<button[^>]*disabled=""[^>]*>Conectar<\/button>/);
   });
 
-  it('renderiza a autenticação documentada em cada cartão público', () => {
+  it('renderiza o resumo e o guia oficial em cada cartão público', () => {
     const markup = renderToStaticMarkup(
       <SkillsCatalogView
         skills={registryFixture}
@@ -224,11 +306,13 @@ describe('catálogo de habilidades', () => {
       const next = publicMcpCatalog[index + 1];
       const end = next ? markup.indexOf(`<h3>${next.name}</h3>`, start) : -1;
       const card = markup.slice(start, end < 0 ? undefined : end);
-      expect(card).toContain(service.authentication);
-      for (const method of service.authenticationMethods) {
-        expect(card).toContain(method === 'oauth' ? 'OAuth' : 'Bearer');
-      }
-      expect(card).toContain('>Conectar</button>');
+      expect(card).toContain(service.whatItDoes);
+      expect(card).toContain(service.whatItNeeds);
+      expect(card).toContain(service.nextStep);
+      expect(card).toContain('Ver guia oficial');
+      expect(card).not.toMatch(/menu Ações|catálogo MCP|dependência|registration_endpoint/);
+      expect(card).toMatch(/>(Conectar|Configurar|Ver detalhes)<\/button>/);
+      expect(card).toContain('>Ver guia oficial</button>');
       expect(card).toContain('>Ações</summary>');
     }
   });
@@ -333,7 +417,7 @@ describe('catálogo de habilidades', () => {
     expect(markup).toContain('Procurar habilidades');
     expect(markup).toContain('Computador');
     expect(markup).toContain('Computador');
-    expect(markup).not.toContain('Integrações MCP');
+    expect(markup).not.toContain('Integrações');
     expect(markup).not.toContain('Conexão com o Google');
     expect(markup).not.toContain('Captura de tela: indisponível');
     expect(markup).toContain('Abrir Privacidade e permissões');
@@ -425,7 +509,7 @@ describe('catálogo de habilidades', () => {
     const details = renderToStaticMarkup(
       <SkillsCatalogView
         skills={skills}
-        initialFamily="integracoes_mcp"
+        initialFamily="integracoes"
         onFamilyToggle={noOperation}
         onSkillToggle={noOperation}
         onOverrideToggle={noOperation}
@@ -435,7 +519,7 @@ describe('catálogo de habilidades', () => {
 
     expect(catalog.match(/class="skills-family-card"/g)).toHaveLength(4);
     expect(catalog).toContain('Risco: Destrutivo ou financeiro');
-    expect(catalog).toContain('Integrações MCP');
+    expect(catalog).toContain('Integrações');
     expect(details).toContain(longName);
     expect(details).toContain(longDescription);
     expect(details).toContain('Exemplo de solicitação longo');
@@ -497,16 +581,17 @@ describe('catálogo de habilidades', () => {
     }
     expect(markup).toContain('>Disponível</span>');
     expect(markup).toContain('>Configure o serviço</span>');
-    expect(markup.match(/class="public-mcp-program-status"/g)).toHaveLength(3);
     expect(markup).not.toContain('>Conectado</span>');
-    expect(markup.match(/>Conectar<\/button>/g)).toHaveLength(7);
+    expect(markup.match(/>Conectar<\/button>/g)).toHaveLength(5);
+    expect(markup.match(/>Configurar<\/button>/g)).toHaveLength(1);
+    expect(markup.match(/>Ver detalhes<\/button>/g)).toHaveLength(1);
     expect(markup.match(/>Ações<\/summary>/g)).toHaveLength(7);
     expect(markup).toMatch(/id="skills-panel-personal"[^>]*hidden=""/);
     expect(markup).not.toMatch(/id="skills-panel-public"[^>]*hidden=""/);
     expect(markup).not.toContain('Instalar pacote');
   });
 
-  it('mostra no cartão Figma o requisito de catálogo e a ação principal comum', () => {
+  it('mostra no cartão Figma que a liberação está pendente e aponta para o guia oficial', () => {
     const markup = renderToStaticMarkup(
       <SkillsCatalogView
         skills={registryFixture}
@@ -522,15 +607,16 @@ describe('catálogo de habilidades', () => {
       markup.indexOf('<h3>Gmail</h3>'),
     );
 
-    expect(figmaCard).toContain('https://mcp.figma.com/mcp');
-    expect(figmaCard).toContain('catálogo MCP');
-    expect(figmaCard).toContain('lista de espera da Figma');
-    expect(figmaCard).toContain('Ver documentação');
-    expect(figmaCard).toContain('>Conectar</button>');
+    expect(figmaCard).toContain('a liberação do OdeKrai pela Figma');
+    expect(figmaCard).toContain('Abra o guia oficial para acompanhar como liberar o OdeKrai');
+    expect(figmaCard).toContain('>Ver detalhes</button>');
+    expect(figmaCard).toContain('>Ver guia oficial</button>');
+    expect(figmaCard).not.toContain('catálogo MCP');
+    expect(figmaCard).not.toContain('dependência');
     expect(figmaCard).toContain('Configure o serviço');
   });
 
-  it('mostra no cartão Lovable somente configuração OAuth local com registro automático', () => {
+  it('explica em linguagem simples o acesso à Lovable e o próximo passo', () => {
     const markup = renderToStaticMarkup(
       <SkillsCatalogView
         skills={registryFixture}
@@ -546,12 +632,14 @@ describe('catálogo de habilidades', () => {
       markup.indexOf('<h3>Notion</h3>'),
     );
 
-    expect(lovableCard).toContain('https://mcp.lovable.dev');
-    expect(lovableCard).toContain('127.0.0.1');
-    expect(lovableCard).toContain('registro dinâmico');
+    expect(lovableCard).toContain('Permite usar as ferramentas da Lovable');
+    expect(lovableCard).toContain('Uma conta Lovable para autorizar');
+    expect(lovableCard).toContain('Clique em Conectar e entre na sua conta Lovable');
     expect(lovableCard).toContain('>Disponível</span>');
     expect(lovableCard).toContain('>Conectar</button>');
-    expect(lovableCard).toContain('Configurar serviço');
+    expect(lovableCard).toContain('Ver guia oficial');
+    expect(lovableCard).not.toContain('menu Ações');
+    expect(lovableCard).not.toContain('registration_endpoint');
     expect(lovableCard).not.toContain('Token Bearer');
   });
 
@@ -579,7 +667,7 @@ describe('catálogo de habilidades', () => {
     expect(markup).toContain('>Usar token</button>');
     expect(markup).not.toContain('Substituir token pessoal do GitHub');
     expect(markup).toContain('>Criar token pessoal</button>');
-    expect(markup).toContain('https://api.githubcopilot.com/mcp/');
+    expect(markup).toContain('Permite consultar projetos e arquivos');
     expect(markup).toContain('Metadata: Read');
     expect(markup).not.toContain('github-pat-fixture');
 
@@ -588,7 +676,7 @@ describe('catálogo de habilidades', () => {
     expect(source).toContain("invoke('mcp_remove_http_token', { serverId: server.id })");
     expect(source).toContain("setToken('')");
     expect(source).toContain('event.preventDefault()');
-    expect(source).toContain("readOnly={service.name === 'GitHub'}");
+    expect(source).toContain("readOnly={service.id === 'github'}");
     expect(source).toContain('endpoint !== service.endpoint');
     expect(source).toMatch(
       /isGitHub\s*&&\s*server\s*&&\s*expanded\s*&&\s*authentication === 'bearer'/,
@@ -610,21 +698,18 @@ describe('catálogo de habilidades', () => {
       markup.indexOf('<h3>GitHub</h3>'),
       markup.indexOf('<h3>Figma</h3>'),
     );
-    expect(githubCard).toContain('>Conectar</button>');
-    expect(githubCard).toContain('read:user');
-    expect(githubCard).toContain('modo somente leitura');
+    expect(githubCard).toContain('>Configurar</button>');
+    expect(githubCard).toContain('A conexão pela conta do GitHub permite somente leitura.');
     expect(githubCard).toContain('>Usar token</button>');
 
     const source = readFileSync(new URL('./SkillsScreen.tsx', import.meta.url), 'utf8');
     expect(source).toContain("invoke('mcp_oauth_authorize'");
     expect(source).toContain("invoke<string | null>('mcp_oauth_github_account'");
     expect(source).toContain("invoke<string | null>('mcp_oauth_disconnect_github'");
-    expect(source).toContain(
-      "onConnectGitHubOAuth(server, oauthClientSettings.clientId, 'read:user')",
-    );
+    expect(source).toContain('service.oauthScopes?.join');
   });
 
-  it('mostra Developer Preview, preparo individual dos projetos Google e não permite editar escopos', () => {
+  it('mostra os resumos simples dos serviços Google e deixa a configuração de escopos no fluxo OAuth', () => {
     const markup = renderToStaticMarkup(
       <SkillsCatalogView
         skills={registryFixture}
@@ -638,19 +723,17 @@ describe('catálogo de habilidades', () => {
       const start = markup.indexOf(`<h3>${service}</h3>`);
       const end = markup.indexOf('<article class="public-mcp-card">', start + 1);
       const card = markup.slice(start, end < 0 ? undefined : end);
-      expect(card).toContain('Developer Preview');
-      expect(card).toContain('Como preparar o projeto Google');
-      expect(card).toContain('Google Cloud');
-      expect(card).toContain('identificador e o segredo');
-      expect(card).toContain('Ver documentação');
+      expect(card).toContain('<strong>O que faz:</strong>');
+      expect(card).toContain('<strong>O que precisa:</strong>');
+      expect(card).toContain('<strong>Próximo passo:</strong>');
+      expect(card).toContain('Ver guia oficial');
+      expect(card).toContain('programa de prévia do Google');
     }
     const gmail = markup.slice(
       markup.indexOf('<h3>Gmail</h3>'),
       markup.indexOf('<h3>Google Calendar</h3>'),
     );
-    expect(gmail).toContain('gmail.readonly');
-    expect(gmail).toContain('gmail.compose');
-    expect(gmail).toContain('não oferece ferramenta de envio');
+    expect(gmail).toContain('o OdeKrai não envia e-mails.');
   });
 
   it('oferece nova autorização no mesmo servidor Google depois de revogação do refresh token', () => {
@@ -714,11 +797,12 @@ describe('catálogo de habilidades', () => {
     );
     expect(source).toContain("invoke('mcp_oauth_save_public_client_secret'");
     expect(source).toContain("invoke('mcp_oauth_remove_public_client_secret'");
-    expect(source).toContain('Segredo do OAuth App do GitHub');
+    expect(source).toContain('service.oauthSecretLabel');
     expect(source).toContain('oauthClientSettings?.clientSecretRequired');
-    expect(source).toContain('Veja a documentação no menu');
+    expect(source).not.toContain('menu Ações');
     expect(source).toContain('publicMcpErrorMessage(cause)');
-    expect(source).toContain("{connecting ? 'Conectando…' : 'Conectar'}");
+    expect(source).toContain('getPublicMcpPrimaryAction(service, status)');
+    expect(source).toContain('publicMcpPrimaryActionLabels[primaryAction]');
     expect(source).toContain('Segredo do cliente OAuth');
     expect(source).toContain('autoComplete="off"');
     expect(source).toContain("setClientSecret('')");
@@ -748,10 +832,11 @@ describe('catálogo de habilidades', () => {
           },
         ]}
         onTestPublicMcp={async () => true}
+        onConfigurePublicMcp={async () => true}
       />,
     );
     expect(configuredMarkup).toContain('>Configure o serviço</span>');
-    expect(configuredMarkup).toContain('>Conectar</button>');
+    expect(configuredMarkup).toContain('>Configurar</button>');
 
     const connectedMarkup = renderToStaticMarkup(
       <SkillsCatalogView
@@ -784,7 +869,7 @@ describe('catálogo de habilidades', () => {
     );
     expect(markup).toContain('aria-label="Abrir detalhes de Arquivos"');
     expect(markup).toContain('Voltar às habilidades');
-    expect(markup).toContain('Habilidades desta família');
+    expect(markup).toContain('>Habilidades</h3>');
     expect(markup).toContain('Categoria');
     expect(markup).toContain('Origem: OdeKrai');
     expect(markup).toContain('Leia o relatório da pasta permitida.');
@@ -845,7 +930,7 @@ describe('catálogo de habilidades', () => {
     const missingAppMarkup = renderToStaticMarkup(
       <SkillsCatalogView
         skills={[appSkill]}
-        initialFamily="abrir_aplicativos"
+        initialFamily="sistema"
         prerequisites={{ folderAvailable: true, appCount: 0, googleConnected: null }}
         onOpenPrivacy={noOperation}
         onFamilyToggle={noOperation}
@@ -854,7 +939,7 @@ describe('catálogo de habilidades', () => {
       />,
     );
     expect(missingAppMarkup).toContain('nenhum aplicativo cadastrado');
-    expect(missingAppMarkup).toContain('Cadastrar aplicativo');
+    expect(missingAppMarkup).toContain('Conectar');
     expect(missingAppMarkup).toContain('Inicie o aplicativo cadastrado.');
     expect(missingAppMarkup).not.toContain('allowed-folder-list');
   });
@@ -890,7 +975,7 @@ describe('catálogo de habilidades', () => {
     const markup = renderToStaticMarkup(
       <SkillsCatalogView
         skills={[googleSkill]}
-        initialFamily="google"
+        initialFamily="integracoes"
         googleConnection={<section>Conexão com o Google</section>}
         onFamilyToggle={noOperation}
         onSkillToggle={noOperation}

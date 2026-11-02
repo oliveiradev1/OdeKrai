@@ -3,6 +3,7 @@ import { emit, listen } from '@tauri-apps/api/event';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { AI_PROVIDERS } from '../../core/providers';
 import { sanitizeDiagnosticDetails } from '../../core/diagnostics';
+import { createGlobalErrorHandlers } from './globalErrorHandlers';
 import { loadSettings } from '../../core/settings';
 import { stopLocalSpeech } from '../../core/speech';
 import { normalizeSoundPreferences, playSound } from '../../core/sounds';
@@ -57,7 +58,7 @@ function diagnosticMessage(command: string) {
 export async function startupInvoke<T>(
   command: string,
   args: Record<string, unknown> | undefined,
-  reportDiagnostic: (command: string, message: string, details?: string) => void,
+  reportSystemDiagnostic: (command: string, message: string, details?: string) => void,
 ): Promise<T> {
   const started = performance.now();
   const id = correlationId();
@@ -73,11 +74,11 @@ export async function startupInvoke<T>(
   }).catch(() => console.warn('[OdeKrai diagnóstico] Não foi possível persistir um evento local.'));
   try {
     const result = await timeout(invoke<T>(command, args), command);
-    reportDiagnostic(command, '');
+    reportSystemDiagnostic(command, '');
     return result;
   } catch (error) {
     outcome = 'error';
-    reportDiagnostic(command, diagnosticMessage(command), sanitizeDiagnosticDetails(error));
+    reportSystemDiagnostic(command, diagnosticMessage(command), sanitizeDiagnosticDetails(error));
     throw error;
   } finally {
     const durationMs = Math.max(0, Math.round(performance.now() - started));
@@ -95,14 +96,17 @@ export async function startupInvoke<T>(
   }
 }
 
-export function useAppEffects(state: ReturnType<typeof useAppState>) {
+export function useAppEffects(
+  state: ReturnType<typeof useAppState>,
+  isConversationSelected: (conversationId: string | null) => boolean,
+) {
   const {
     settings,
     setPetVisible,
     setSelectedPet,
     setPermissionIndicator,
     setToast,
-    reportDiagnostic,
+    reportSystemDiagnostic,
     setProfile,
     setIdentityConfigured,
     setConversations,
@@ -123,7 +127,7 @@ export function useAppEffects(state: ReturnType<typeof useAppState>) {
         recoveredFromIncompleteRun = await startupInvoke<boolean>(
           'get_startup_state',
           undefined,
-          reportDiagnostic,
+          reportSystemDiagnostic,
         );
       } catch {
         recoveredFromIncompleteRun = true;
@@ -131,24 +135,24 @@ export function useAppEffects(state: ReturnType<typeof useAppState>) {
       if (!current) return;
       const provider = AI_PROVIDERS.find((item) => item.id === settings.activeProviderId);
       const results = await Promise.allSettled([
-        startupInvoke<string>('get_selected_pet', undefined, reportDiagnostic),
+        startupInvoke<string>('get_selected_pet', undefined, reportSystemDiagnostic),
         startupInvoke<{ mode: string; halted: boolean }>(
           'get_permission_settings',
           undefined,
-          reportDiagnostic,
+          reportSystemDiagnostic,
         ),
-        startupInvoke<ProfileData>('get_profile', undefined, reportDiagnostic),
+        startupInvoke<ProfileData>('get_profile', undefined, reportSystemDiagnostic),
         startupInvoke<{ configured: boolean; state: string }>(
           'agent_home_status',
           undefined,
-          reportDiagnostic,
+          reportSystemDiagnostic,
         ),
-        startupInvoke<Conversation[]>('list_conversations', undefined, reportDiagnostic),
+        startupInvoke<Conversation[]>('list_conversations', undefined, reportSystemDiagnostic),
         provider
           ? startupInvoke<boolean>(
               'has_provider_credential',
               { providerId: provider.id },
-              reportDiagnostic,
+              reportSystemDiagnostic,
             )
           : Promise.resolve(false),
       ]);
@@ -164,17 +168,19 @@ export function useAppEffects(state: ReturnType<typeof useAppState>) {
       if (credential.status === 'fulfilled')
         setKeySavedForSession(credential.value || provider?.id === 'local');
       if (history.status === 'fulfilled') {
-        setConversations(history.value);
-        if (history.value[0]) {
-          setConversationId(history.value[0].id);
+        if (isConversationSelected(null)) setConversations(history.value);
+        if (history.value[0] && isConversationSelected(null)) {
+          const initialConversationId = history.value[0].id;
+          setConversationId(initialConversationId);
           try {
-            setMessages(
-              await startupInvoke<ChatMessage[]>(
-                'load_conversation',
-                { conversationId: history.value[0].id },
-                reportDiagnostic,
-              ),
+            const initialMessages = await startupInvoke<ChatMessage[]>(
+              'load_conversation',
+              { conversationId: initialConversationId },
+              reportSystemDiagnostic,
             );
+            if (current && isConversationSelected(initialConversationId)) {
+              setMessages(initialMessages);
+            }
           } catch {
             // O banner persistente identifica o comando que falhou.
           }
@@ -189,7 +195,7 @@ export function useAppEffects(state: ReturnType<typeof useAppState>) {
           const document = await startupInvoke<{ approved_content: string }>(
             'agent_home_read_core',
             undefined,
-            reportDiagnostic,
+            reportSystemDiagnostic,
           );
           const recovered = mergeApprovedProfile(currentProfile, document.approved_content);
           if (recovered) {
@@ -197,7 +203,7 @@ export function useAppEffects(state: ReturnType<typeof useAppState>) {
             const saved = await startupInvoke<ProfileData>(
               'save_profile',
               { displayName: recovered.displayName, nickname: recovered.nickname },
-              reportDiagnostic,
+              reportSystemDiagnostic,
             );
             setProfile(normalizeProfileData(saved));
           }
@@ -206,7 +212,7 @@ export function useAppEffects(state: ReturnType<typeof useAppState>) {
         }
       }
       if (recoveredFromIncompleteRun) {
-        reportDiagnostic(
+        reportSystemDiagnostic(
           'modo_seguro',
           'A inicialização anterior não terminou; pet e ilha ficarão desligados nesta sessão.',
         );
@@ -228,7 +234,7 @@ export function useAppEffects(state: ReturnType<typeof useAppState>) {
                 await startupInvoke<void>(
                   'set_pet_position',
                   { x, y, size: companion.size },
-                  reportDiagnostic,
+                  reportSystemDiagnostic,
                 );
                 await startupInvoke<void>(
                   'set_pet_size',
@@ -236,36 +242,43 @@ export function useAppEffects(state: ReturnType<typeof useAppState>) {
                     width: (companion.freeMode ? 82 : 280) * companion.size,
                     height: (companion.freeMode ? 82 : 150) * companion.size,
                   },
-                  reportDiagnostic,
+                  reportSystemDiagnostic,
                 );
                 await startupInvoke<void>(
                   'set_pet_position',
                   { x, y, size: companion.size },
-                  reportDiagnostic,
+                  reportSystemDiagnostic,
                 );
                 await startupInvoke<void>(
                   'set_pet_topmost',
                   { enabled: companion.alwaysOnTop },
-                  reportDiagnostic,
+                  reportSystemDiagnostic,
                 );
-                await startupInvoke<void>('set_pet_visible', { visible: true }, reportDiagnostic);
+                await startupInvoke<void>(
+                  'set_pet_visible',
+                  { visible: true },
+                  reportSystemDiagnostic,
+                );
                 setPetVisible(true);
                 await emit('companion-state', { type: 'reveal' });
               })(),
               'restore_pet',
             );
           } catch {
-            reportDiagnostic('set_pet_visible', 'Não foi possível restaurar o pet do assistente.');
+            reportSystemDiagnostic(
+              'set_pet_visible',
+              'Não foi possível restaurar o pet do assistente.',
+            );
           }
         }
       }
       try {
-        await startupInvoke<void>('complete_startup', undefined, reportDiagnostic);
+        await startupInvoke<void>('complete_startup', undefined, reportSystemDiagnostic);
       } catch {
         // A falha fica registrada no banner e a janela principal continua utilizável.
       }
     })().catch((error: unknown) => {
-      reportDiagnostic(
+      reportSystemDiagnostic(
         'startup',
         'A inicialização foi interrompida por uma falha inesperada.',
         sanitizeDiagnosticDetails(error),
@@ -280,7 +293,7 @@ export function useAppEffects(state: ReturnType<typeof useAppState>) {
         void startupInvoke<{ mode: string; halted: boolean }>(
           'get_permission_settings',
           undefined,
-          reportDiagnostic,
+          reportSystemDiagnostic,
         )
           .then(setPermissionIndicator)
           .catch(() => setPermissionIndicator(null));
@@ -289,14 +302,16 @@ export function useAppEffects(state: ReturnType<typeof useAppState>) {
       listen('security-resumed', () => {
         setToast('O OdeKrai foi retomado.');
         if (loadSettings().companion.enabled) {
-          void startupInvoke<void>('set_pet_visible', { visible: true }, reportDiagnostic).then(
-            () => setPetVisible(true),
-          );
+          void startupInvoke<void>(
+            'set_pet_visible',
+            { visible: true },
+            reportSystemDiagnostic,
+          ).then(() => setPetVisible(true));
         }
         void startupInvoke<{ mode: string; halted: boolean }>(
           'get_permission_settings',
           undefined,
-          reportDiagnostic,
+          reportSystemDiagnostic,
         )
           .then(setPermissionIndicator)
           .catch(() => setPermissionIndicator(null));
@@ -305,7 +320,7 @@ export function useAppEffects(state: ReturnType<typeof useAppState>) {
         void startupInvoke<{ mode: string; halted: boolean }>(
           'get_permission_settings',
           undefined,
-          reportDiagnostic,
+          reportSystemDiagnostic,
         )
           .then(setPermissionIndicator)
           .catch(() => setPermissionIndicator(null));
@@ -317,56 +332,21 @@ export function useAppEffects(state: ReturnType<typeof useAppState>) {
         else unlisten = off;
       })
       .catch(() =>
-        reportDiagnostic('listen', 'Não foi possível iniciar alguns avisos de segurança.'),
+        reportSystemDiagnostic('listen', 'Não foi possível iniciar alguns avisos de segurança.'),
       );
-    const onError = (event: ErrorEvent) => {
-      const id = correlationId();
-      const details = sanitizeDiagnosticDetails(event.error ?? event.message);
-      reportDiagnostic(
-        'frontend.window.onerror',
-        'A interface encontrou um erro.',
-        `Referência ${id}: ${details || 'O WebView não informou o motivo do erro.'}`,
-      );
-      void invoke('record_diagnostic_event', {
-        event: 'frontend_window_error',
-        command: 'window.onerror',
-        outcome: 'error',
-        durationMs: 0,
-        section: 'window',
-        category: 'window_error',
-        correlationId: id,
-      }).catch(() =>
-        console.warn('[OdeKrai diagnóstico] Não foi possível persistir um evento local.'),
-      );
-    };
-    const onRejection = (event: PromiseRejectionEvent) => {
-      const detail = sanitizeDiagnosticDetails(event.reason);
-      const id = correlationId();
-      reportDiagnostic(
-        'frontend.unhandledrejection',
-        'Uma ação falhou.',
-        `Referência ${id}: ${detail || 'O WebView não informou o motivo da rejeição.'}`,
-      );
-      void invoke('record_diagnostic_event', {
-        event: 'frontend_unhandled_rejection',
-        command: 'unhandledrejection',
-        outcome: 'error',
-        durationMs: 0,
-        section: 'window',
-        category: 'promise_rejection',
-        correlationId: id,
-      }).catch(() =>
-        console.warn('[OdeKrai diagnóstico] Não foi possível persistir um evento local.'),
-      );
-    };
+    const { onError, onUnhandledRejection } = createGlobalErrorHandlers(
+      reportSystemDiagnostic,
+      (event) => invoke('record_diagnostic_event', event),
+      correlationId,
+    );
     window.addEventListener('error', onError);
-    window.addEventListener('unhandledrejection', onRejection);
+    window.addEventListener('unhandledrejection', onUnhandledRejection);
     return () => {
       current = false;
       listenersDisposed = true;
       unlisten.forEach((off) => off());
       window.removeEventListener('error', onError);
-      window.removeEventListener('unhandledrejection', onRejection);
+      window.removeEventListener('unhandledrejection', onUnhandledRejection);
     };
   }, []);
   useEffect(() => {

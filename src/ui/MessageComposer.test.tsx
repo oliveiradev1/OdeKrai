@@ -14,6 +14,7 @@ describe('MessageComposer', () => {
     );
     expect(shouldSubmitMessageOnEnter('Enter', false)).toBe(true);
     expect(shouldSubmitMessageOnEnter('Enter', true)).toBe(false);
+    expect(shouldSubmitMessageOnEnter('Enter', false, true)).toBe(false);
     expect(shouldSubmitMessageOnEnter('Escape', false)).toBe(false);
     expect(markup).toContain('aria-label="Mensagem"');
     expect(markup).toContain('aria-label="Enviar mensagem"');

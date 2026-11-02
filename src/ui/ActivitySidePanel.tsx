@@ -3,77 +3,17 @@ import { ArrowSquareOut, ClockCounterClockwise, FolderOpen, Pulse, X } from '@ph
 import type { AgentActionCardData } from './AgentControls';
 import type { HomeEvent } from '../core/home';
 import { isSafeArtifactPath } from '../core/agent-card';
+import { activityPanelTabIndex, focusActivityPanel } from '../core/activity-panel';
+import type { ActivityAuditSummary, UpcomingReminder } from '../core/activity-panel';
 
-export type ActivityAuditSummary = {
-  id: string;
-  timestamp: number;
-  tool: string;
-  status: string;
-  decision: string;
-};
-
-export type UpcomingReminder = {
-  title: string;
-  whenLocal: string;
-  status: 'pending' | 'notification_error' | string;
-};
-
-export function activityPanelTabIndex(
-  key: string,
-  shiftKey: boolean,
-  index: number,
-  count: number,
-) {
-  if (key === 'Escape') return -1;
-  if (key !== 'Tab' || count === 0) return null;
-  if (shiftKey && index === 0) return count - 1;
-  if (!shiftKey && index === count - 1) return 0;
-  return null;
-}
-
-export function toggleActivityPanel(open: boolean) {
-  return !open;
-}
-
-export function shouldLoadPanelAudit(open: boolean) {
-  return open;
-}
-
-export function focusActivityPanel(
-  trigger: { focus: () => void },
-  initialFocus: { focus: () => void },
-) {
-  initialFocus.focus();
-  return () => trigger.focus();
-}
-
-export function ActivityPanelTrigger({
-  count,
-  expanded,
-  buttonRef,
-  onClick,
-}: {
-  count: number;
-  expanded: boolean;
-  buttonRef: { current: HTMLButtonElement | null };
-  onClick: () => void;
-}) {
-  const label = count > 0 ? `Atividade; ${count} aprovações pendentes` : 'Abrir atividade';
-  return (
-    <button
-      ref={buttonRef}
-      type="button"
-      className="activity-panel-trigger"
-      aria-label={label}
-      aria-expanded={expanded}
-      onClick={onClick}
-    >
-      <Pulse aria-hidden="true" size={16} />
-      <span>Atividade</span>
-      {count > 0 && <span className="activity-panel-count">{count}</span>}
-    </button>
-  );
-}
+export {
+  activityPanelTabIndex,
+  focusActivityPanel,
+  shouldLoadPanelAudit,
+  toggleActivityPanel,
+} from '../core/activity-panel';
+export type { ActivityAuditSummary, UpcomingReminder } from '../core/activity-panel';
+export { ActivityPanelTrigger } from './ActivityPanelTrigger';
 
 function formatWhen(value: string) {
   const date = new Date(value);
@@ -109,6 +49,7 @@ function auditStateLabel(status: string, decision: string) {
 export function ActivitySidePanel({
   open = true,
   pendingApprovalCount,
+  pendingApprovalError = '',
   running,
   awaitingApproval,
   currentAction,
@@ -135,6 +76,7 @@ export function ActivitySidePanel({
 }: {
   open?: boolean;
   pendingApprovalCount: number;
+  pendingApprovalError?: string;
   running: boolean;
   awaitingApproval: boolean;
   currentAction: AgentActionCardData | null;
@@ -275,7 +217,11 @@ export function ActivitySidePanel({
 
           <section aria-labelledby="activity-awaiting-title">
             <h3 id="activity-awaiting-title">Aguardando você</h3>
-            {pendingApprovalCount > 0 ? (
+            {pendingApprovalError ? (
+              <p className="activity-panel-empty" role="alert">
+                {pendingApprovalError}
+              </p>
+            ) : pendingApprovalCount > 0 ? (
               <div className="activity-panel-card">
                 <p>
                   {pendingApprovalCount}{' '}
