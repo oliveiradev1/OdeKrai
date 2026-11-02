@@ -115,6 +115,7 @@ import {
 } from './SidebarNavigation';
 import {
   loadSavedCredentialProviderIds,
+  setFallbackProviderIds,
   setPrimaryProviderSettings,
   toggleProviderSettings,
 } from '../core/provider-directory';
@@ -2129,6 +2130,9 @@ function MainApp() {
                   onSelect={selectProvider}
                   onSetPrimary={setPrimaryProvider}
                   onToggleEnabled={setProviderEnabled}
+                  onSetFallbacks={(providerIds) =>
+                    setSettings((current) => setFallbackProviderIds(current, providerIds))
+                  }
                   onSave={saveProviderSettings}
                   onChat={beginChat}
                   onCredentialRemoved={handleCredentialRemoved}
@@ -2174,6 +2178,8 @@ function MainApp() {
                 <SettingsScreen
                   settings={settings}
                   update={setSettings}
+                  onSetPrimaryProvider={setPrimaryProvider}
+                  onOpenConnectors={() => navigate('providers')}
                   onOpenPermissions={() => navigate('permissions')}
                   performanceStatus={performanceStatus}
                 />
@@ -2318,6 +2324,7 @@ function MainApp() {
         onSelectSection={selectSettingsSection}
         settings={settings}
         update={setSettings}
+        onSetPrimaryProvider={setPrimaryProvider}
         performanceStatus={performanceStatus}
         profile={profile}
         setProfile={setProfile}

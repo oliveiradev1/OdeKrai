@@ -1,14 +1,17 @@
 /** @vitest-environment jsdom */
-import type { ComponentProps } from 'react';
+import { useState, type ComponentProps } from 'react';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { defaultSettings } from '../core/settings';
+import { defaultSettings, type AppSettings } from '../core/settings';
+import { setPrimaryProviderSettings } from '../core/provider-directory';
 import { SETTINGS_MENU } from '../core/settings-navigation';
 import type { PublicMcpCatalogEntry } from '../core/mcp-service-catalog';
 import { Overview } from './screens/Overview';
 import { ConversationsScreen } from './screens/Conversations';
 import { SkillsCatalogView, SkillsScreen } from './SkillsScreen';
 import { ProvidersScreen } from './screens/Providers';
+import { SettingsScreen } from './screens/Settings';
+import { ProviderCatalog } from './ProviderCatalog';
 import { AssistantScreen } from './screens/Assistant';
 import { ComputerScreen } from './screens/Computer';
 import { SettingsModal } from './SettingsModal';
@@ -145,6 +148,7 @@ function settingsModalProps(section: ComponentProps<typeof SettingsModal>['secti
     onSelectSection: noop,
     settings: defaultSettings,
     update: noop,
+    onSetPrimaryProvider: noop,
     performanceStatus: { enabled: false, reason: 'Desativado no teste.', loading: false },
     profile,
     setProfile: noop,
@@ -644,6 +648,84 @@ describe('renderização das telas principais', () => {
     expect((await screen.findByRole('alert')).textContent).toContain(
       'Não foi possível carregar os limites do agente.',
     );
+  });
+
+  it('o provedor principal sincroniza entre Configurações e Conectores', async () => {
+    tauri.isTauri.mockReturnValue(true);
+    tauri.invoke.mockImplementation(async (command: string) => {
+      if (command === 'has_provider_credential') return true;
+      if (command === 'discover_local_models') {
+        return { onlineEndpoints: ['http://127.0.0.1:11434'], models: [] };
+      }
+      if (command === 'get_agent_limits') {
+        return { maxTurns: 8, maxDurationSeconds: 120, maxTokens: 16000, maxExternalActions: 2 };
+      }
+      if (command === 'get_code_tool_settings') return { tool: 'codex', executable: null };
+      if (command === 'get_provider_usage') return [];
+      return null;
+    });
+
+    function SharedProviderSettings() {
+      const [settings, setSettings] = useState<AppSettings>(() => ({
+        ...defaultSettings,
+        activeProviderId: 'openai',
+        providers: {
+          ...defaultSettings.providers,
+          openai: {
+            ...defaultSettings.providers.openai,
+            lastTest: { status: 'passed', at: '2026-11-02T00:00:00Z', message: 'ok' },
+          },
+          anthropic: {
+            ...defaultSettings.providers.anthropic,
+            lastTest: { status: 'passed', at: '2026-11-02T00:00:00Z', message: 'ok' },
+          },
+        },
+      }));
+      const [selectedId, setSelectedId] = useState('openai');
+      const setPrimary = (providerId: string) =>
+        setSettings((current) => setPrimaryProviderSettings(current, providerId));
+      return (
+        <>
+          <SettingsScreen
+            settings={settings}
+            update={setSettings}
+            onSetPrimaryProvider={setPrimary}
+            onOpenConnectors={noop}
+            onOpenPermissions={noop}
+            performanceStatus={{ enabled: false, reason: 'Desativado no teste.', loading: false }}
+          />
+          <ProviderCatalog
+            settings={settings}
+            selectedId={selectedId}
+            onSelect={(provider) => setSelectedId(provider.id)}
+            onSetPrimary={setPrimary}
+            onSetFallbacks={(providerIds) =>
+              setSettings((current) => ({ ...current, fallbackProviderIds: providerIds }))
+            }
+            onToggleEnabled={noop}
+            onSave={noop}
+            onChat={noop}
+            onCredentialRemoved={noop}
+            onOpenComputer={noop}
+            initialTab="connected"
+          />
+        </>
+      );
+    }
+
+    const { container } = render(<SharedProviderSettings />);
+    const primarySelect = screen.getByRole('combobox', { name: 'Provedor principal' });
+    fireEvent.change(primarySelect, { target: { value: 'anthropic' } });
+    await waitFor(() =>
+      expect(container.querySelector('.provider-tile[title^="Anthropic:"]')?.textContent).toContain(
+        'Principal',
+      ),
+    );
+
+    fireEvent.click(container.querySelector('.provider-tile[title^="OpenAI:"]')!);
+    await screen.findByRole('complementary', { name: 'Detalhes de OpenAI' });
+    fireEvent.click(container.querySelector('.provider-detail-controls button.text-button')!);
+    await waitFor(() => expect((primarySelect as HTMLSelectElement).value).toBe('openai'));
   });
 
   it('Permissões monta e expõe falha da leitura de política', async () => {

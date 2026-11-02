@@ -41,16 +41,13 @@ describe('resumos das seções do modal Configurações', () => {
     };
     expect(summarizeConnectors(settings)).toEqual({
       providerName: 'OpenAI',
-      model: 'gpt-5.1',
-      enabled: true,
-      fallbackCount: 1,
     });
 
     const markup = renderToStaticMarkup(
       <ConnectorsSettingsSummary settings={settings} onOpenPage={() => undefined} />,
     );
     expect(markup).toContain('id="connectors-summary"');
-    expect(markup).toContain('OpenAI · habilitado · modelo gpt-5.1');
+    expect(markup).toContain('Provedor principal: OpenAI.');
     expect(markup).toContain('Abrir central de conectores');
     expect(markup).not.toContain('Conectado');
     expect(markup).not.toContain('Reduzir animações');
@@ -70,9 +67,6 @@ describe('resumos das seções do modal Configurações', () => {
 
     expect(summarizeConnectors(legacySettings)).toEqual({
       providerName: 'OpenAI',
-      model: null,
-      enabled: true,
-      fallbackCount: 0,
     });
     expect(
       renderToStaticMarkup(

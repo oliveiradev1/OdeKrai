@@ -100,9 +100,9 @@ O componente `PetSprite` renderiza o PNG selecionado e animações CSS associada
 
 ## Ilha, áudio e armazenamento
 
-O SQLite também soma tokens de entrada e saída por provedor e dia UTC. A interface consulta os totais do dia e dos últimos sete dias; o limite diário é configurado pelo usuário e zero desativa o limite.
+O SQLite também soma tokens de entrada e saída por provedor e dia UTC. Conectores de IA consulta os totais por provedor do dia e dos últimos sete dias; Configurações mantém apenas o limite diário total, que zero desativa.
 
-`src/core/island.ts` implementa transições e prioridades. `src/core/sounds.ts` carrega sons sob demanda, mantém cache, limita repetições, aplica volume e ignora arquivos ausentes ou inválidos. Preferências não secretas ficam no armazenamento local do WebView; chaves de API não são salvas. O histórico de conversas fica em SQLite na pasta de dados do aplicativo, acessado somente pelos comandos Rust da janela principal.
+`src/core/island.ts` implementa transições e prioridades. `src/core/sounds.ts` carrega sons sob demanda, mantém cache, limita repetições, aplica volume e ignora arquivos ausentes ou inválidos. Preferências não secretas ficam no armazenamento local do WebView; chaves de API são gerenciadas somente em Conectores de IA e ficam no Credential Manager quando suportado. Configurações contém preferências globais, incluindo limite total de tokens e provedor principal, com acesso à central de Conectores; a seleção do provedor principal é compartilhada entre as duas telas e persiste nas mesmas preferências do aplicativo. Conectores concentra edição de credenciais, modelos, configuração específica por provedor, alternativas e status: credencial salva, teste, principal, suporte a ferramentas, plano gratuito verificado e serviço local. O histórico de conversas fica em SQLite na pasta de dados do aplicativo, acessado somente pelos comandos Rust da janela principal.
 
 Conversas apresenta uma lista pesquisável com título, data e prévia; o SQLite armazena título,
 mensagens, modo agente e cartões de ação. A tela permite selecionar, renomear e apagar uma conversa.

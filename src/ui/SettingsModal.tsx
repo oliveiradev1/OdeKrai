@@ -44,6 +44,7 @@ export function SettingsModal({
   onSelectSection,
   settings,
   update,
+  onSetPrimaryProvider,
   performanceStatus,
   profile,
   setProfile,
@@ -68,6 +69,7 @@ export function SettingsModal({
   onSelectSection: (section: SettingsSection) => void;
   settings: AppSettings;
   update: (settings: AppSettings) => void;
+  onSetPrimaryProvider: (providerId: string) => void;
   performanceStatus: PerformanceModeView;
   profile: ProfileData;
   setProfile: (profile: ProfileData) => void;
@@ -146,6 +148,8 @@ export function SettingsModal({
           <SettingsScreen
             settings={settings}
             update={update}
+            onSetPrimaryProvider={onSetPrimaryProvider}
+            onOpenConnectors={() => onOpenPage('providers')}
             performanceStatus={performanceStatus}
             onOpenPermissions={() => chooseSection('privacidade')}
             embedded
@@ -305,18 +309,10 @@ export function summarizeSkillsStatus(skills: Pick<CatalogSkill, 'status'>[]) {
 
 export function summarizeConnectors(settings: AppSettings) {
   const providerId = settings.activeProviderId;
-  const configuration = settings.providers[providerId];
   return {
     providerName: providerId
       ? (providerById(providerId)?.name ?? 'Provedor selecionado')
       : 'Nenhum provedor principal selecionado',
-    model: configuration?.model?.trim() || null,
-    enabled: configuration?.enabled !== false,
-    fallbackCount: settings.fallbackProviderIds.filter(
-      (fallbackId) =>
-        settings.providers[fallbackId]?.enabled !== false &&
-        Boolean(settings.providers[fallbackId]?.model?.trim()),
-    ).length,
   };
 }
 
@@ -409,15 +405,13 @@ export function ConnectorsSettingsSummary({
   onOpenPage: () => void;
 }) {
   const summary = summarizeConnectors(settings);
-  const status = !settings.activeProviderId
-    ? 'Nenhum provedor principal foi selecionado.'
-    : `${summary.providerName} · ${summary.enabled ? 'habilitado' : 'desabilitado'} · ${summary.model ? `modelo ${summary.model}` : 'modelo não selecionado'} · ${summary.fallbackCount} provedores reserva configurados.`;
+  const status = `Provedor principal: ${summary.providerName}.`;
 
   return (
     <SettingsDestinationSummary
       id="connectors-summary"
       title="Conectores de IA"
-      description="A configuração de credenciais, modelos, testes de conexão e provedores reserva é feita na central de Conectores de IA."
+      description="Credenciais, modelos, testes, status e provedores alternativos são gerenciados na central de Conectores de IA."
       status={status}
       actionLabel="Abrir central de conectores"
       onOpenPage={onOpenPage}

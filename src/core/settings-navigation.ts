@@ -94,12 +94,6 @@ export const SETTINGS_INDEX: readonly SettingsIndexEntry[] = [
     anchor: 'mcp-heading',
   },
   {
-    title: 'Provedores alternativos',
-    keywords: ['reserva', 'fallback'],
-    section: 'geral',
-    anchor: 'settings-fallbacks',
-  },
-  {
     title: 'Uso de tokens',
     keywords: ['limite diário', 'consumo'],
     section: 'geral',
@@ -154,8 +148,8 @@ export const SETTINGS_INDEX: readonly SettingsIndexEntry[] = [
     anchor: 'skills-summary',
   },
   {
-    title: 'Provedor principal e reservas',
-    keywords: ['conectores', 'modelo', 'provedor reserva', 'credencial'],
+    title: 'Provedor principal e provedores alternativos',
+    keywords: ['conectores', 'modelo', 'provedor reserva', 'fallback', 'credencial'],
     section: 'conectores',
     anchor: 'connectors-summary',
   },

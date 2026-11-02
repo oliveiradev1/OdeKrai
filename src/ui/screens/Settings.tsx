@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { defaultSettings, type AppSettings } from '../../core/settings';
 import { AI_PROVIDERS } from '../../core/providers';
-import { moveFallbackProvider, setFallbackProviderIds } from '../../core/provider-directory';
 import { PageHeader, Toggle } from '../DesignSystem';
 import { CodeDelegationSettings } from '../CodeDelegationSettings';
 import { localBrazilianPortugueseVoices, type LocalSpeechVoice } from '../../core/speech';
@@ -32,17 +31,20 @@ export function SettingsScreen({
   settings,
   update,
   onOpenPermissions,
+  onOpenConnectors,
+  onSetPrimaryProvider,
   performanceStatus,
   embedded = false,
 }: {
   settings: AppSettings;
   update: (next: AppSettings) => void;
   onOpenPermissions: () => void;
+  onOpenConnectors: () => void;
+  onSetPrimaryProvider: (providerId: string) => void;
   performanceStatus: PerformanceModeView;
   embedded?: boolean;
 }) {
   const [usage, setUsage] = useState<ProviderUsage[]>([]);
-  const [fallbackToAdd, setFallbackToAdd] = useState('');
   const [agentLimits, setAgentLimits] = useState<AgentLimits>({
     maxTurns: 8,
     maxDurationSeconds: 120,
@@ -123,6 +125,39 @@ export function SettingsScreen({
             <option value="pt-BR">Português (Brasil)</option>
           </select>
         </div>
+      </section>
+      <section id="settings-primary-provider" className="settings-panel settings-section">
+        <h2>Provedor principal</h2>
+        <p className="settings-description">
+          Escolha qual provedor será usado primeiro. Chaves, modelos, conexão e compatibilidade
+          ficam em Conectores de IA.
+        </p>
+        <div className="preference-row">
+          <label htmlFor="settings-primary-provider-select">
+            <strong>Provedor principal</strong>
+          </label>
+          <select
+            id="settings-primary-provider-select"
+            aria-label="Provedor principal"
+            value={settings.activeProviderId}
+            onChange={(event) => onSetPrimaryProvider(event.target.value)}
+          >
+            <option value="">Nenhum</option>
+            {AI_PROVIDERS.filter(
+              (provider) =>
+                provider.integration !== 'guide' &&
+                (settings.providers[provider.id]?.enabled !== false ||
+                  settings.activeProviderId === provider.id),
+            ).map((provider) => (
+              <option key={provider.id} value={provider.id}>
+                {provider.name}
+              </option>
+            ))}
+          </select>
+        </div>
+        <button className="secondary-button small-button" type="button" onClick={onOpenConnectors}>
+          Abrir Conectores de IA
+        </button>
       </section>
       <section id="settings-updates" className="settings-panel settings-section">
         <h2>Atualizações</h2>
@@ -436,109 +471,6 @@ export function SettingsScreen({
       </section>
       <CodeDelegationSettings />
       <section
-        id="settings-fallbacks"
-        className="settings-panel settings-section"
-        aria-labelledby="provider-fallback-heading"
-      >
-        <h2 id="provider-fallback-heading">Provedores alternativos</h2>
-        <p className="settings-description">
-          Se o provedor principal estiver temporariamente indisponível, o OdeKrai tentará os
-          próximos desta lista. Provedores sem credencial ou capacidade compatível serão ignorados.
-        </p>
-        <div className="preference-row">
-          <label htmlFor="fallback-provider-select">
-            <strong>Adicionar provedor</strong>
-          </label>
-          <div className="fallback-provider-add">
-            <select
-              id="fallback-provider-select"
-              value={fallbackToAdd}
-              onChange={(event) => setFallbackToAdd(event.target.value)}
-            >
-              <option value="">Selecione</option>
-              {AI_PROVIDERS.filter(
-                (provider) =>
-                  provider.integration !== 'guide' &&
-                  provider.id !== settings.activeProviderId &&
-                  settings.providers[provider.id]?.enabled !== false &&
-                  !settings.fallbackProviderIds.includes(provider.id),
-              ).map((provider) => (
-                <option key={provider.id} value={provider.id}>
-                  {provider.name}
-                </option>
-              ))}
-            </select>
-            <button
-              className="secondary-button small-button"
-              type="button"
-              disabled={!fallbackToAdd}
-              onClick={() => {
-                update(
-                  setFallbackProviderIds(settings, [
-                    ...settings.fallbackProviderIds,
-                    fallbackToAdd,
-                  ]),
-                );
-                setFallbackToAdd('');
-              }}
-            >
-              Adicionar
-            </button>
-          </div>
-        </div>
-        {settings.fallbackProviderIds.some((id) => settings.providers[id]?.enabled !== false) ? (
-          <ol className="fallback-provider-list" aria-label="Ordem dos provedores alternativos">
-            {settings.fallbackProviderIds
-              .filter((id) => settings.providers[id]?.enabled !== false)
-              .map((providerId, index, activeFallbacks) => {
-                const provider = AI_PROVIDERS.find((item) => item.id === providerId);
-                if (!provider) return null;
-                return (
-                  <li key={providerId}>
-                    <span>{provider.name}</span>
-                    <div>
-                      <button
-                        type="button"
-                        className="secondary-button small-button"
-                        aria-label={`Mover ${provider.name} para cima`}
-                        disabled={index === 0}
-                        onClick={() => update(moveFallbackProvider(settings, providerId, -1))}
-                      >
-                        ↑
-                      </button>
-                      <button
-                        type="button"
-                        className="secondary-button small-button"
-                        aria-label={`Mover ${provider.name} para baixo`}
-                        disabled={index === activeFallbacks.length - 1}
-                        onClick={() => update(moveFallbackProvider(settings, providerId, 1))}
-                      >
-                        ↓
-                      </button>
-                      <button
-                        type="button"
-                        className="secondary-button small-button"
-                        onClick={() =>
-                          update(
-                            setFallbackProviderIds(
-                              settings,
-                              settings.fallbackProviderIds.filter((id) => id !== providerId),
-                            ),
-                          )
-                        }
-                      >
-                        Remover
-                      </button>
-                    </div>
-                  </li>
-                );
-              })}
-          </ol>
-        ) : (
-          <p className="settings-description">Nenhum provedor alternativo configurado.</p>
-        )}
-      </section>
-      <section
         id="settings-usage"
         className="settings-panel settings-section"
         aria-labelledby="usage-heading"
@@ -569,28 +501,6 @@ export function SettingsScreen({
             }}
           />
         </div>
-        <ul className="provider-usage-list" aria-label="Uso de tokens por provedor">
-          {AI_PROVIDERS.filter((provider) =>
-            usage.some((item) => item.providerId === provider.id),
-          ).map((provider) => {
-            const item = usage.find((entry) => entry.providerId === provider.id)!;
-            return (
-              <li key={provider.id}>
-                <strong>{provider.name}</strong>
-                <span>
-                  Hoje: {(item.todayInput + item.todayOutput).toLocaleString('pt-BR')} tokens
-                </span>
-                <span>
-                  Últimos 7 dias:{' '}
-                  {(item.sevenDayInput + item.sevenDayOutput).toLocaleString('pt-BR')} tokens
-                </span>
-              </li>
-            );
-          })}
-          {usage.length === 0 && (
-            <li className="settings-description">Ainda não há uso registrado.</li>
-          )}
-        </ul>
       </section>
       <section id="settings-preferences-reset" className="settings-panel settings-section">
         <h2>Preferências deste dispositivo</h2>

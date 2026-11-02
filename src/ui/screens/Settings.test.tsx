@@ -11,6 +11,8 @@ describe('SettingsScreen', () => {
       <SettingsScreen
         settings={defaultSettings}
         update={() => undefined}
+        onOpenConnectors={() => undefined}
+        onSetPrimaryProvider={() => undefined}
         onOpenPermissions={() => undefined}
         performanceStatus={{
           enabled: false,
@@ -19,7 +21,6 @@ describe('SettingsScreen', () => {
         }}
       />,
     );
-    expect(markup).toContain('Provedores alternativos');
     expect(markup).toContain('Uso de tokens');
     expect(markup).toContain('Limite diário');
     expect(markup).toContain('Estado: Dentro do limite');
@@ -34,6 +35,11 @@ describe('SettingsScreen', () => {
     expect(markup).toContain('Mostrar novidades de novas versões');
     expect(markup).toContain('Modo Desempenho');
     expect(markup).toContain('Automático desativado: perfil simulado acima do limite.');
+    expect(markup).toContain('Provedor principal');
+    expect(markup).toContain('Abrir Conectores de IA');
+    expect(markup).not.toContain('type="password"');
+    expect(markup).not.toContain('Chave de API');
+    expect(markup).not.toContain('Uso de tokens por provedor');
   });
 
   it('exibe as informações de versão em um componente independente', () => {
