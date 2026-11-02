@@ -619,12 +619,24 @@ fn vm_power_endpoint(vm_id: &str, action: VmPowerAction) -> Result<Url, String> 
     api_endpoint(&format!("vms/{}/{}", vm_id, action.path()))
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 struct ApiExecCommand {
     cmd: &'static str,
     args: Vec<String>,
     timeout_sec: u64,
     cwd: &'static str,
+}
+
+impl std::fmt::Debug for ApiExecCommand {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ApiExecCommand")
+            .field("cmd", &"[oculto]")
+            .field("args_count", &self.args.len())
+            .field("timeout_sec", &self.timeout_sec)
+            .field("cwd", &self.cwd)
+            .finish()
+    }
 }
 
 #[derive(Serialize)]
@@ -633,7 +645,7 @@ struct ApiExecRequest {
     commands: Vec<ApiExecCommand>,
 }
 
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Default, Deserialize)]
 struct ApiExecEvent {
     #[serde(default)]
     command_index: usize,
@@ -649,6 +661,21 @@ struct ApiExecEvent {
     timed_out: bool,
     #[serde(default)]
     error: String,
+}
+
+impl std::fmt::Debug for ApiExecEvent {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ApiExecEvent")
+            .field("command_index", &self.command_index)
+            .field("output", &"[oculto]")
+            .field("is_error", &self.is_error)
+            .field("command_done", &self.command_done)
+            .field("exit_code", &self.exit_code)
+            .field("timed_out", &self.timed_out)
+            .field("error", &"[oculto]")
+            .finish()
+    }
 }
 
 pub(crate) fn validate_exec_commands(commands: &[String]) -> Result<(), String> {
@@ -1212,6 +1239,31 @@ mod tests {
             .timeout(Duration::from_secs(2))
             .build()
             .unwrap()
+    }
+
+    #[test]
+    fn exec_debug_redacts_command_arguments_and_remote_output() {
+        let command = ApiExecCommand {
+            cmd: "bash",
+            args: vec!["--token=command-secret-fixture".into()],
+            timeout_sec: 30,
+            cwd: "/",
+        };
+        let event = ApiExecEvent {
+            output: "access_token=output-secret-fixture".into(),
+            error: "refresh_token=error-secret-fixture".into(),
+            ..ApiExecEvent::default()
+        };
+        let debug = format!("{command:?} {event:?}");
+        for secret in [
+            "command-secret-fixture",
+            "output-secret-fixture",
+            "error-secret-fixture",
+        ] {
+            assert!(!debug.contains(secret));
+        }
+        assert!(debug.contains("args_count"));
+        assert!(debug.contains("[oculto]"));
     }
 
     #[test]
