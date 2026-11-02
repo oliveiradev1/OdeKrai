@@ -45,7 +45,7 @@ Consulte `docs/IMPLEMENTATION-STATUS.md` e `docs/ROADMAP.md` antes de planejar.
    Nunca marque como validado algo que você não observou.
 5. **Docs coerentes.** Se mudar comportamento, atualize `docs/` no mesmo commit. Não deixe números
    ou afirmações conflitantes entre arquivos.
-6. **Pare ao terminar a fase** e reporte. Não comece a próxima por conta própria.
+6. **Pare ao terminar a fase** e reporte, exceto quando a solicitação atual autorizar explicitamente uma missão composta por subfases ordenadas e execução contínua. Nesse caso, continue somente pelas subfases abrangidas pela autorização, registre checkpoints e não peça uma nova mensagem entre elas. Pare obrigatoriamente quando a próxima ação exigir uma decisão humana não delegada, autorização externa adicional, ação destrutiva/irreversível, credencial ou conta real, violação de segurança/política, ou quando um bloqueio técnico impedir progresso seguro; marque o item bloqueado e siga itens independentes autorizados. Essa exceção não autoriza push, merge, tag, release, publicação, nem reduz requisitos de revisão, testes ou aprovação.
 
 ## Segurança (inegociável)
 
