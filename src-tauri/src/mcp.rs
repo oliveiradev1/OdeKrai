@@ -40,7 +40,7 @@ impl std::fmt::Debug for StdioConfig {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("StdioConfig")
-            .field("command", &self.command)
+            .field("command", &"[oculto]")
             .field(
                 "args",
                 &format!("[{} argumentos omitidos]", self.args.len()),
@@ -64,7 +64,6 @@ impl StdioConfig {
     }
 }
 
-#[derive(Debug)]
 pub enum ClientError {
     Spawn(String),
     Io(String),
@@ -73,6 +72,20 @@ pub enum ClientError {
     Disconnected,
     Protocol(String),
     Remote(String),
+}
+
+impl std::fmt::Debug for ClientError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Spawn(_) => formatter.write_str("Spawn([detalhe omitido])"),
+            Self::Io(_) => formatter.write_str("Io([detalhe omitido])"),
+            Self::Timeout => formatter.write_str("Timeout"),
+            Self::Cancelled => formatter.write_str("Cancelled"),
+            Self::Disconnected => formatter.write_str("Disconnected"),
+            Self::Protocol(_) => formatter.write_str("Protocol([detalhe omitido])"),
+            Self::Remote(_) => formatter.write_str("Remote([detalhe omitido])"),
+        }
+    }
 }
 
 enum ReaderEvent {
@@ -928,9 +941,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn stdio_config_debug_never_prints_environment_values_or_argument_secrets() {
+    fn stdio_debug_never_prints_command_arguments_environment_or_remote_error_text() {
         let mut config = StdioConfig::new(
-            "mcp-test",
+            "mcp-test command-token-fixture",
             vec!["--access-token=argument-token-fixture".into()],
         );
         config
@@ -940,8 +953,13 @@ mod tests {
         let debug = format!("{config:?}");
         assert!(!debug.contains("argument-token-fixture"));
         assert!(!debug.contains("environment-token-fixture"));
+        assert!(!debug.contains("command-token-fixture"));
         assert!(debug.contains("MCP_TOKEN"));
         assert!(debug.contains("argumentos omitidos"));
+
+        let remote_error = format!("{:?}", ClientError::Remote("remote-token-fixture".into()));
+        assert!(!remote_error.contains("remote-token-fixture"));
+        assert!(remote_error.contains("detalhe omitido"));
     }
 
     #[test]
