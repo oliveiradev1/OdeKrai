@@ -19,6 +19,7 @@ const MAX_TASK_BYTES: usize = 12_000;
 const MAX_OUTPUT_BYTES: usize = 8 * 1024;
 const MAX_DIFF_BYTES: usize = 14 * 1024;
 const RUN_TIMEOUT: Duration = Duration::from_secs(600);
+const EXECUTION_DISABLED_REASON: &str = "A delegação de código está desativada até que o OdeKrai possa executar a ferramenta em um sandbox do sistema operacional. O git worktree, sozinho, não isola arquivos, rede ou credenciais.";
 static RUN_ID: AtomicU64 = AtomicU64::new(1);
 static REVIEW_ID: AtomicU64 = AtomicU64::new(1);
 static PENDING_REVIEWS: OnceLock<Mutex<std::collections::HashMap<String, PendingCodeReview>>> =
@@ -137,6 +138,7 @@ pub fn preview(
     project_root: &Path,
     params: &serde_json::Value,
 ) -> Result<String, String> {
+    ensure_execution_available()?;
     let (tool, executable) = configured_tool(app)?;
     let project = params["project"].as_str().ok_or("Informe o projeto.")?;
     let task = params["task"].as_str().ok_or("Descreva a tarefa.")?;
@@ -216,6 +218,22 @@ pub fn validate_request(project: &str, task: &str) -> Result<(), String> {
     Ok(())
 }
 
+pub(crate) const fn execution_isolation_verified() -> bool {
+    false
+}
+
+pub(crate) fn execution_disabled_reason() -> &'static str {
+    EXECUTION_DISABLED_REASON
+}
+
+fn ensure_execution_available() -> Result<(), String> {
+    if execution_isolation_verified() {
+        Ok(())
+    } else {
+        Err(EXECUTION_DISABLED_REASON.into())
+    }
+}
+
 pub fn command_args(tool: CodeTool, worktree: &Path, task: &str) -> Vec<OsString> {
     let delegated_task = format!(
         "Restrições fixas do OdeKrai: trabalhe somente no diretório de execução informado; não leia nem altere caminhos externos a ele. Não execute git commit, git push, criação de tag ou publicação. Deixe as alterações no worktree para revisão.\n\nTarefa do usuário:\n{task}"
@@ -223,7 +241,6 @@ pub fn command_args(tool: CodeTool, worktree: &Path, task: &str) -> Vec<OsString
     match tool {
         CodeTool::Codex => vec![
             "exec".into(),
-            "--full-auto".into(),
             "--json".into(),
             "-C".into(),
             worktree.as_os_str().to_owned(),
@@ -231,7 +248,6 @@ pub fn command_args(tool: CodeTool, worktree: &Path, task: &str) -> Vec<OsString
         ],
         CodeTool::Claude => vec![
             "-p".into(),
-            "--dangerously-skip-permissions".into(),
             "--output-format".into(),
             "stream-json".into(),
             "--verbose".into(),
@@ -280,6 +296,7 @@ pub async fn run(
     config: CodeRunConfig,
     on_output: &mut (dyn FnMut(String) + Send),
 ) -> Result<String, String> {
+    ensure_execution_available()?;
     validate_request(&config.project.to_string_lossy(), &config.task)?;
     let app_data = app
         .path()
@@ -1020,6 +1037,14 @@ mod tests {
     }
 
     #[test]
+    fn code_delegation_is_disabled_without_verified_os_isolation() {
+        assert!(!execution_isolation_verified());
+        let error = ensure_execution_available().expect_err("delegação precisa ficar bloqueada");
+        assert!(error.contains("sandbox do sistema operacional"));
+        assert!(error.contains("worktree"));
+    }
+
+    #[test]
     fn preview_has_complete_separate_arguments_and_quotes_task() {
         let args = command_args(
             CodeTool::Codex,
@@ -1029,6 +1054,10 @@ mod tests {
         assert!(args.iter().any(|arg| arg
             .to_string_lossy()
             .contains("Não execute git commit, git push")));
+        assert!(!args.iter().any(|arg| matches!(
+            arg.to_string_lossy().as_ref(),
+            "--full-auto" | "--dangerously-skip-permissions"
+        )));
         let command = preview_command(
             CodeTool::Codex,
             Path::new("C:\\Tools Folder\\codex.exe"),

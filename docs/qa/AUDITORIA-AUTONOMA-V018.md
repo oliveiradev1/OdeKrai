@@ -16,12 +16,12 @@
 
 ## Registro de alterações
 
-| ID | ESTADO | REPRODUÇÃO | CORREÇÃO | TESTE/COMANDO | COMMIT | PENDÊNCIA |
-|---|---|---|---|---|---|---|
-| G00 | FEITO | Conflito entre item 6 do `AGENTS.md` e autorização contínua identificado. | Regra passou a admitir apenas subfases autorizadas, preservando paradas obrigatórias e proibições. | `npm run check:encoding` passou; `git diff --check` passou. | `8d735e9` | Nenhuma. |
-| G01 | PARCIAL | API GitHub comparou as refs atuais; fetch local falhou pelo proxy. Estado de implementação dos 75 itens anteriores e F0–F9 ainda não foi inventariado. | Registro do baseline e da divergência atualizado nesta tabela; sem merge. | GitHub compare API; `git status`, `git log -5`, `git diff main...HEAD --stat`. | incluído em `8d735e9` | Completar a matriz rastreável por arquivo/commit. |
-| G02 | FEITO LOCALMENTE | `verify.mjs` não incluía o guarda de comandos bloqueantes nem o teste mock de janelas; CI não executava `check:release-features`. | Adicionadas essas etapas em `verify`; CI agora executa `check:release-features`. | `npx vitest run scripts/verify.test.mjs` (3 testes passou); Prettier, codificação e diff check passaram. | pendente de commit | Não executado o verify completo; fluxo Rust depende de Cargo. |
-| G03–Q05 | NÃO AVALIADOS | Inventário detalhado será registrado conforme cada subfase for inspecionada. | — | — | — | 63 itens aguardam auditoria. |
+| ID      | ESTADO           | REPRODUÇÃO                                                                                                                                             | CORREÇÃO                                                                                           | TESTE/COMANDO                                                                                              | COMMIT                | PENDÊNCIA                                                            |
+| ------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | --------------------- | -------------------------------------------------------------------- |
+| G00     | FEITO            | Conflito entre item 6 do `AGENTS.md` e autorização contínua identificado.                                                                              | Regra passou a admitir apenas subfases autorizadas, preservando paradas obrigatórias e proibições. | `npm run check:encoding` passou; `git diff --check` passou.                                                | `8d735e9`             | Nenhuma.                                                             |
+| G01     | PARCIAL          | API GitHub comparou as refs atuais; fetch local falhou pelo proxy. Estado de implementação dos 75 itens anteriores e F0–F9 ainda não foi inventariado. | Registro do baseline e da divergência atualizado nesta tabela; sem merge.                          | GitHub compare API; `git status`, `git log -5`, `git diff main...HEAD --stat`.                             | incluído em `8d735e9` | Completar a matriz rastreável por arquivo/commit.                    |
+| G02     | FEITO LOCALMENTE | `verify.mjs` não incluía o guarda de comandos bloqueantes nem o teste mock de janelas; CI não executava `check:release-features`.                      | Adicionadas essas etapas em `verify`; CI agora executa `check:release-features`.                   | `npx vitest run scripts/verify.test.mjs` (3 testes passaram); Prettier, codificação e diff check passaram. | `94bd0a0`             | Verify completo não executado; Cargo não está disponível localmente. |
+| G03–Q05 | NÃO AVALIADOS    | Inventário detalhado será registrado conforme cada subfase for inspecionada.                                                                           | —                                                                                                  | —                                                                                                          | —                     | 63 itens aguardam auditoria.                                         |
 
 ## Checkpoints
 
@@ -38,3 +38,11 @@ A confirmação remota por API é contemporânea a 2026-11-02: `main` (`57db155`
 ### G02 — runner de validação
 
 O runner executa as guardas e suítes sequencialmente e interrompe no primeiro erro. Foram acrescentados `check:blocking-commands` e `cargo test --test mock_window --features mock-window-tests`; o CI ganhou `check:release-features`, que já era parte do runner. A suíte do runner confirmou ordem e parada no primeiro erro (3 testes). O teste completo do runner não foi iniciado neste checkpoint.
+
+### S01 — isolamento de delegação de código
+
+**Falha reproduzível por inspeção:** `code_delegate::command_args` usava `--full-auto` no Codex e `--dangerously-skip-permissions` no Claude; os próprios textos de aprovação reconheciam que o processo herda os privilégios da conta e que o worktree não é sandbox. A aprovação não impedia acesso do processo a arquivos, rede e credenciais do usuário.
+
+**Correção aplicada:** delegação agora é bloqueada na função Rust, no estado de disponibilidade da habilidade e na prévia; a tela de configuração explica o motivo e não oferece ativação. Removi os flags de bypass da construção de argumentos e atualizei Segurança, Orquestrador e nota v0.18.0. Não afirmei isolamento por prompt ou worktree.
+
+**Verificação:** testes de interface (3 arquivos, 52 testes) passaram, incluindo a mensagem e ausência de controles para iniciar. O teste Rust novo está escrito, mas `cargo test` não executou: `cargo: command not found`. Execução de CLI adversarial fora do diretório não foi tentada, pois a função está bloqueada e não devemos expor arquivos reais.
