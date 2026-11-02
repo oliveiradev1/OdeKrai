@@ -95,6 +95,14 @@ fn valid_mailto_address(path: &str) -> bool {
     !local.is_empty() && !domain.is_empty() && !domain.contains('@')
 }
 
+fn allowlist_domain(url: &Url) -> Option<&str> {
+    url.host_str().or_else(|| {
+        (url.scheme() == "mailto")
+            .then(|| url.path().rsplit_once('@').map(|(_, domain)| domain))
+            .flatten()
+    })
+}
+
 #[tauri::command]
 pub fn open_external_link(
     app: AppHandle,
@@ -104,10 +112,10 @@ pub fn open_external_link(
     crate::require_main(&caller)?;
     let validated = validate_external_url(&url).map_err(str::to_string)?;
     let parsed = Url::parse(&validated).map_err(|_| "O endereço do link é inválido.")?;
-    if let Some(host) = parsed.host_str() {
-        if !crate::security::external_domain_is_trusted(&app, host)? {
-            return Err("Confirme este domínio em Links externos antes de abrir o link.".into());
-        }
+    let domain = allowlist_domain(&parsed)
+        .ok_or("Este endereço não tem um domínio que possa ser autorizado.")?;
+    if !crate::security::external_domain_is_trusted(&app, domain)? {
+        return Err("Confirme este domínio em Links externos antes de abrir o link.".into());
     }
     app.opener()
         .open_url(validated, None::<&str>)
@@ -211,10 +219,19 @@ fn validate_update_release_url(value: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        validate_cloud_link, validate_external_url, validate_update_release_url,
+        allowlist_domain, validate_cloud_link, validate_external_url, validate_update_release_url,
         CLOUD_LINKS_MANIFEST,
     };
     use serde::Deserialize;
+
+    #[test]
+    fn mailto_recipient_domain_is_checked_by_the_external_link_allowlist() {
+        let url = url::Url::parse("mailto:pessoa@example.org?subject=oi").unwrap();
+        assert_eq!(allowlist_domain(&url), Some("example.org"));
+
+        let url = url::Url::parse("https://example.org/help").unwrap();
+        assert_eq!(allowlist_domain(&url), Some("example.org"));
+    }
 
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
