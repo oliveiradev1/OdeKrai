@@ -721,7 +721,7 @@ mod tests {
             (
                 "Não foi possível conectar ao provedor.",
                 "network",
-                "Verifique a conexão",
+                "Verifique sua conexão",
             ),
         ];
         for (technical, expected_kind, expected_message) in cases {

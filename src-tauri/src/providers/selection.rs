@@ -291,7 +291,7 @@ mod tests {
         let choice = choose_provider("primary", &candidates, task_needs(TaskKind::Code, None))
             .expect("primary exists");
         assert_eq!(candidates[choice.index].id, "primary");
-        assert!(choice.reason.contains("provador principal"));
+        assert!(choice.reason.contains("provedor principal"));
     }
 
     #[test]

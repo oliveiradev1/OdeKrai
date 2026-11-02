@@ -310,7 +310,7 @@ mod tests {
         .await
         .unwrap_err();
         server.join().unwrap();
-        assert!(error.contains("credencial") || error.contains("permissão"));
+        assert!(error.contains("chave") || error.contains("acesso"));
 
         let (endpoint, server) = mock_server("200 OK", r#"{"text":"  "}"#);
         let error = upload_audio(

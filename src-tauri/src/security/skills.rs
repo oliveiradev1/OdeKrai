@@ -3266,9 +3266,16 @@ mod tests {
             .iter()
             .all(|id| { id.starts_with("calendar.") || id.starts_with("reminder.") }));
         assert!(!calendar.contains(&"google.calendar.list_events"));
-        let google = group_skill_ids("google", false, true);
-        assert!(google.contains(&"google.calendar.list_events"));
-        assert!(google.iter().all(|id| id.starts_with("google.calendar.")));
+        for id in [
+            "google.calendar.list_events",
+            "google.calendar.create_event",
+            "google.calendar.update_event",
+            "google.calendar.delete_event",
+        ] {
+            assert!(integrations.contains(&id));
+            let skill = registry().into_iter().find(|skill| skill.id == id).unwrap();
+            assert_eq!(skill.family, SkillFamily::Google);
+        }
     }
 
     #[test]
