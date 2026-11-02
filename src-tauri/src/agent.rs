@@ -700,7 +700,7 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn provider_errors_are_classified_into_safe_actionable_messages() {
+    fn erro_generico_do_provedor_nao_substitui_categorias_conhecidas_e_seguras() {
         let cases = [
             (
                 "A credencial é inválida (HTTP 401).",
@@ -757,10 +757,16 @@ mod tests {
                 "invalid_response",
                 "estrutura inv\u{00e1}lida",
             ),
+            (
+                "O serviço do provedor está indisponível (HTTP 503). corpo-privado",
+                "provider_unavailable",
+                "503",
+            ),
         ] {
             let failure = classify_provider_error(technical);
             assert_eq!(failure.kind, expected_kind);
             assert!(failure.technical_details.contains(status));
+            assert!(!failure.message.contains("corpo-privado"));
             assert!(!failure.technical_details.contains("pedido privado"));
         }
         for (technical, expected_kind) in [

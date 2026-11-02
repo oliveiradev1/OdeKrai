@@ -42,6 +42,22 @@ describe('SettingsScreen', () => {
     expect(markup).not.toContain('Uso de tokens por provedor');
   });
 
+  it('regressão F7: Controle total não promete dispensar aprovações de escrita', () => {
+    const markup = renderToStaticMarkup(
+      <SettingsScreen
+        settings={defaultSettings}
+        update={() => undefined}
+        onOpenConnectors={() => undefined}
+        onSetPrimaryProvider={() => undefined}
+        onOpenPermissions={() => undefined}
+        performanceStatus={{ enabled: false, reason: '', loading: false }}
+      />,
+    );
+    expect(markup).toContain('Controle total');
+    expect(markup).toContain('ainda exige aprovação para toda alteração');
+    expect(markup).not.toContain('amplia as ações permitidas');
+  });
+
   it('exibe as informações de versão em um componente independente', () => {
     const markup = renderToStaticMarkup(
       <AboutSettings
