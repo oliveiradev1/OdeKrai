@@ -450,15 +450,19 @@ export function SettingsScreen({
           <h3>Modos de permissão</h3>
           <ul>
             <li>
-              <strong>Sempre perguntar:</strong> solicita aprovação antes de ações que alteram algo.
+              <strong>Sempre perguntar:</strong> leituras em pastas autorizadas seguem sem
+              confirmação; toda alteração, comunicação externa, captura sensível e execução de
+              código pede aprovação.
             </li>
             <li>
-              <strong>Aprovar por mim:</strong> permite leituras em pastas autorizadas sem
-              perguntar; toda alteração e comunicação externa pede aprovação.
+              <strong>Aprovar por mim:</strong> leituras em pastas autorizadas seguem sem
+              confirmação; toda alteração, comunicação externa, captura sensível e execução de
+              código pede aprovação.
             </li>
             <li>
-              <strong>Controle total:</strong> amplia as ações permitidas, mas toda alteração e
-              comunicação externa ainda pede aprovação. Bloqueios fixos continuam ativos.
+              <strong>Controle total:</strong> bloqueios fixos continuam ativos. A matriz atual
+              ainda exige aprovação para toda alteração, comunicação externa, captura sensível e
+              execução de código.
             </li>
           </ul>
           <button
