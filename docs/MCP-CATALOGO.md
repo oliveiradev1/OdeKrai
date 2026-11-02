@@ -1,31 +1,29 @@
-# Catálogo MCP público
+# Catálogo de serviços públicos
 
-Pesquisa documental revisada em **1º de novembro de 2026**. Os links abaixo são as fontes oficiais usadas para identificar endereço e autenticação. A documentação não comprova que a conexão real já foi validada no OdeKrai.
+O catálogo de serviços públicos tem uma única fonte de dados: [`public-mcp-catalog.json`](../src-tauri/resources/public-mcp-catalog.json). O backend valida o arquivo no comando `mcp_public_catalog` e o fornece à tela Habilidades. A interface não mantém cópia dos nomes, fornecedores, links, requisitos ou permissões dos serviços.
 
-## Serviços e formas de conexão
+Cada item contém os campos obrigatórios `id`, `name`, `provider`, `connectionType`, `status`, `officialLink`, `requirements` e `permissions`. O arquivo também contém metadados operacionais para os fluxos existentes, como endpoint fixo, métodos de autenticação e dados de configuração OAuth. Não coloque segredos nesse catálogo.
 
-| Serviço         | Endereço documentado                        | Como conecta no OdeKrai                                                                                                                                                                       | Estado atual e fonte                                                                                                                                                                                                                                                                                                                                            |
-| --------------- | ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| GitHub          | `https://api.githubcopilot.com/mcp/`        | OAuth de um clique depois que o desenvolvedor configura o client ID e o segredo do GitHub App/OAuth App. Como alternativa, a pessoa pode usar seu PAT fine-grained em **Ações > Usar token**. | OAuth exige configuração do aplicativo; PAT é a opção sem client ID do OdeKrai. [Guia oficial do servidor GitHub](https://docs.github.com/en/copilot/how-tos/copilot-in-your-ide/customize-copilot/extend-copilot-with-tools-and-context/set-up-the-github-mcp-server) e [criação de PAT fine-grained](https://github.com/settings/personal-access-tokens/new). |
-| Figma           | `https://mcp.figma.com/mcp`                 | O guia orienta entrar com uma conta Figma.                                                                                                                                                    | A Figma exige que o cliente esteja no catálogo MCP e encaminha novos clientes à lista de espera; até o OdeKrai ser aceito, o cartão abre o guia e não conecta. O protocolo OAuth específico não está descrito na página consultada. [Guia oficial da Figma](https://help.figma.com/hc/en-us/articles/39216419318551-Get-started-with-the-Figma-MCP-server).     |
-| Gmail           | `https://gmailmcp.googleapis.com/mcp/v1`    | OAuth com client ID e segredo do projeto Google Cloud; requer inscrição no Developer Preview. O client ID do OdeKrai precisa ser configurado pelo desenvolvedor.                              | Cartão em Developer Preview; não foi validada uma conta real. [Guia oficial Gmail MCP](https://developers.google.com/workspace/gmail/api/guides/configure-mcp-server).                                                                                                                                                                                          |
-| Google Calendar | `https://calendarmcp.googleapis.com/mcp/v1` | OAuth com client ID e segredo do projeto Google Cloud; requer inscrição no Developer Preview. O client ID do OdeKrai precisa ser configurado pelo desenvolvedor.                              | Cartão em Developer Preview; não foi validada uma conta real. [Guia oficial Calendar MCP](https://developers.google.com/workspace/calendar/api/guides/configure-mcp-server).                                                                                                                                                                                    |
-| Google Sheets   | `https://sheetsmcp.googleapis.com/mcp/v1`   | OAuth com client ID e segredo do projeto Google Cloud; requer inscrição no Developer Preview. O client ID do OdeKrai precisa ser configurado pelo desenvolvedor.                              | Cartão em Developer Preview; não foi validada uma conta real. [Guia oficial Sheets MCP](https://developers.google.com/workspace/sheets/api/guides/configure-mcp-server).                                                                                                                                                                                        |
-| Lovable         | `https://mcp.lovable.dev`                   | OAuth com registro automático quando os metadados do servidor anunciam registro dinâmico. O client ID não precisa ser digitado nesse caso.                                                    | Implementado para cliente local; disponibilidade real aguarda teste com a Lovable. [Documentação oficial MCP da Lovable](https://docs.lovable.dev/integrations/lovable-mcp-server).                                                                                                                                                                             |
-| Notion          | `https://mcp.notion.com/mcp`                | OAuth 2.0 com PKCE. Se os metadados anunciarem `registration_endpoint`, o OdeKrai registra o cliente e não pede client ID manual.                                                             | Implementado; disponibilidade real aguarda teste com uma conta Notion. [Guia oficial MCP do Notion](https://developers.notion.com/guides/mcp/build-mcp-client).                                                                                                                                                                                                 |
+## Tipos de conexão
 
-Os endereços de servidor, links de documentação e métodos exibidos nos cartões vêm de [`src/core/mcp-service-catalog.json`](../src/core/mcp-service-catalog.json). A guarda `npm run check:mcp-catalog` verifica HTTPS, domínios aprovados para cada serviço, presença da fonte oficial e a citação de domínio da página que documenta o endpoint. Ela não faz requisições à rede.
+- `one_click`: autorização pelo navegador, sem token pessoal digitado.
+- `client_id`: depende de um identificador público de cliente configurado pelo desenvolvedor.
+- `personal_token`: autenticação por token pessoal fornecido pelo usuário.
+- `informational`: o cartão só apresenta informações e documentação.
 
-## Legenda dos estados
+Um serviço pode aceitar mais de um tipo, como OAuth e token pessoal.
 
-- **Disponível**: o catálogo declara o serviço configurável e ainda não há servidor salvo.
-- **Configure o serviço**: falta configuração ou existe um servidor salvo sem conexão confirmada.
-- **Conectando**: o runtime está fazendo o handshake e listando ferramentas.
-- **Conectado**: o teste MCP terminou e o runtime ainda mantém a conexão.
-- **Erro**: o runtime registrou falha na conexão.
+## Estados do catálogo
 
-O mapeamento está em [`getPublicMcpStatus`](../src/core/mcp-service-catalog.ts) e o texto dos estados em [`publicMcpStatusLabels`](../src/core/mcp-service-catalog.ts). A ação **Conectar**, o menu **Ações** e os formulários estão em [`PublicMcpServiceCard`](../src/ui/SkillsScreen.tsx). As ferramentas MCP continuam desativadas por padrão; a ativação e as aprovações são controladas pelo Rust em `src-tauri/src/mcp_registry.rs`.
+- `available`: fluxo de conexão pode ser configurado.
+- `in_preview`: serviço em prévia do fornecedor.
+- `configuration_pending`: falta um requisito de configuração ou habilitação do cliente.
+- `not_verified`: documentação ou disponibilidade ainda não foi confirmada.
 
-## Limites de validação
+Esses estados descrevem a oferta do catálogo. A tela calcula separadamente o estado operacional (Disponível, Configure o serviço, Conectando, Conectado ou Erro) a partir dos servidores salvos; só um teste MCP bem-sucedido pode resultar em Conectado.
 
-Os fluxos e os cartões têm testes com servidores simulados. Não foram feitos testes de conexão com contas reais do GitHub, Figma, Google, Lovable ou Notion. A conexão de Figma está bloqueada até a inclusão do cliente no catálogo do fornecedor. Gmail, Calendar e Sheets dependem da configuração do aplicativo OAuth do desenvolvedor e da inscrição Google Workspace Developer Preview.
+## Validação
+
+`npm run check:mcp-catalog` valida o esquema mínimo, links HTTPS, domínios oficiais, fontes e tipos de conexão. O comando não acessa a rede. O teste automatizado também reprova um serviço sem link oficial, um domínio de endpoint não permitido e um link de terceiro sem justificativa.
+
+As conexões de contas reais não são executadas por essa validação. Consulte os requisitos e permissões atuais no arquivo JSON e nas páginas oficiais apontadas por cada item.

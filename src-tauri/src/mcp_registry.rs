@@ -10,6 +10,48 @@ use std::{
 use tauri::{Emitter, Manager, State};
 
 const SERVICE: &str = "site.anceryx.odekrai.mcp";
+const PUBLIC_MCP_CATALOG: &str = include_str!("../resources/public-mcp-catalog.json");
+
+fn load_public_mcp_catalog() -> Result<Vec<serde_json::Value>, String> {
+    let entries: Vec<serde_json::Value> = serde_json::from_str(PUBLIC_MCP_CATALOG)
+        .map_err(|_| "O catálogo público de serviços está inválido.".to_string())?;
+    for entry in &entries {
+        let valid_status = matches!(
+            entry.get("status").and_then(serde_json::Value::as_str),
+            Some("available" | "in_preview" | "configuration_pending" | "not_verified")
+        );
+        let valid_connections = entry
+            .get("connectionType")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|types| {
+                !types.is_empty()
+                    && types.iter().all(|value| {
+                        matches!(
+                            value.as_str(),
+                            Some("one_click" | "client_id" | "personal_token" | "informational")
+                        )
+                    })
+            });
+        let required_strings = ["id", "name", "provider", "officialLink"]
+            .iter()
+            .all(|key| entry.get(key).and_then(serde_json::Value::as_str).is_some());
+        let required_lists = ["requirements", "permissions"]
+            .iter()
+            .all(|key| entry.get(key).and_then(serde_json::Value::as_array).is_some());
+        if !valid_status || !valid_connections || !required_strings || !required_lists {
+            return Err("O catálogo público de serviços está inválido.".to_string());
+        }
+    }
+    Ok(entries)
+}
+
+#[tauri::command]
+pub fn mcp_public_catalog(
+    caller: tauri::WebviewWindow,
+) -> Result<Vec<serde_json::Value>, String> {
+    crate::require_main(&caller)?;
+    load_public_mcp_catalog()
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -1133,6 +1175,22 @@ pub async fn mcp_oauth_disconnect_github(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn public_service_catalog_has_required_metadata_and_unique_ids() {
+        let catalog = load_public_mcp_catalog().expect("catálogo público válido");
+        let mut ids = std::collections::HashSet::new();
+        assert!(!catalog.is_empty());
+        for entry in &catalog {
+            assert!(ids.insert(entry["id"].as_str().unwrap()));
+            assert!(entry["name"].as_str().is_some());
+            assert!(entry["provider"].as_str().is_some());
+            assert!(entry["officialLink"].as_str().unwrap().starts_with("https://"));
+            assert!(entry["requirements"].is_array());
+            assert!(entry["permissions"].is_array());
+            assert!(entry["connectionType"].is_array());
+        }
+    }
 
     fn server_for_catalog() -> McpServer {
         McpServer {

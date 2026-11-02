@@ -1,9 +1,16 @@
 import { readFileSync } from 'node:fs';
 import { renderToStaticMarkup } from 'react-dom/server';
+import type { ComponentProps } from 'react';
 import { describe, expect, it } from 'vitest';
 import type { CatalogSkill } from '../core/skills-catalog';
-import { publicMcpCatalog, publicMcpErrorMessage } from '../core/mcp-service-catalog';
-import { SkillsCatalogView } from './SkillsScreen';
+import { publicMcpErrorMessage, type PublicMcpCatalogEntry } from '../core/mcp-service-catalog';
+import catalog from '../../src-tauri/resources/public-mcp-catalog.json';
+import { SkillsCatalogView as SkillsCatalogViewBase } from './SkillsScreen';
+
+const publicMcpCatalog = catalog as unknown as PublicMcpCatalogEntry[];
+const SkillsCatalogView = (props: ComponentProps<typeof SkillsCatalogViewBase>) => (
+  <SkillsCatalogViewBase publicServices={publicMcpCatalog} {...props} />
+);
 
 const registryFixture: CatalogSkill[] = [
   {
@@ -81,11 +88,21 @@ const discordSkill: CatalogSkill = {
 };
 
 describe('catálogo de habilidades', () => {
+  it('usa os metadados do recurso backend e não fixa nomes dos serviços no cartão', () => {
+    const source = readFileSync(new URL('./SkillsScreen.tsx', import.meta.url), 'utf8');
+    expect(source).toContain("invoke<PublicMcpCatalogEntry[]>('mcp_public_catalog')");
+    expect(source).toContain('<h3>{service.name}</h3>');
+    expect(source).toContain('<p>{service.provider}</p>');
+    expect(source).not.toMatch(
+      />\s*(GitHub|Figma|Gmail|Google Calendar|Google Sheets|Lovable|Notion)\s*</,
+    );
+  });
+
   it('renderiza os cinco estados públicos e os tipos de autenticação do catálogo', () => {
     const github = publicMcpCatalog.find((entry) => entry.name === 'GitHub');
     if (!github) throw new Error('Serviço GitHub ausente do catálogo.');
     const scenarios = [
-      { expected: 'Disponível', servers: [] },
+      { expected: 'Configure o serviço', servers: [] },
       {
         expected: 'Configure o serviço',
         servers: [
@@ -588,7 +605,7 @@ describe('catálogo de habilidades', () => {
     expect(source).toContain("invoke('mcp_remove_http_token', { serverId: server.id })");
     expect(source).toContain("setToken('')");
     expect(source).toContain('event.preventDefault()');
-    expect(source).toContain("readOnly={service.name === 'GitHub'}");
+    expect(source).toContain("readOnly={service.id === 'github'}");
     expect(source).toContain('endpoint !== service.endpoint');
     expect(source).toMatch(
       /isGitHub\s*&&\s*server\s*&&\s*expanded\s*&&\s*authentication === 'bearer'/,
@@ -619,9 +636,7 @@ describe('catálogo de habilidades', () => {
     expect(source).toContain("invoke('mcp_oauth_authorize'");
     expect(source).toContain("invoke<string | null>('mcp_oauth_github_account'");
     expect(source).toContain("invoke<string | null>('mcp_oauth_disconnect_github'");
-    expect(source).toContain(
-      "onConnectGitHubOAuth(server, oauthClientSettings.clientId, 'read:user')",
-    );
+    expect(source).toContain('service.oauthScopes?.join');
   });
 
   it('mostra Developer Preview, preparo individual dos projetos Google e não permite editar escopos', () => {
@@ -639,7 +654,7 @@ describe('catálogo de habilidades', () => {
       const end = markup.indexOf('<article class="public-mcp-card">', start + 1);
       const card = markup.slice(start, end < 0 ? undefined : end);
       expect(card).toContain('Developer Preview');
-      expect(card).toContain('Como preparar o projeto Google');
+      expect(card).toContain('Requisitos e permissões');
       expect(card).toContain('Google Cloud');
       expect(card).toContain('identificador e o segredo');
       expect(card).toContain('Ver documentação');
@@ -714,7 +729,7 @@ describe('catálogo de habilidades', () => {
     );
     expect(source).toContain("invoke('mcp_oauth_save_public_client_secret'");
     expect(source).toContain("invoke('mcp_oauth_remove_public_client_secret'");
-    expect(source).toContain('Segredo do OAuth App do GitHub');
+    expect(source).toContain('service.oauthSecretLabel');
     expect(source).toContain('oauthClientSettings?.clientSecretRequired');
     expect(source).toContain('Veja a documentação no menu');
     expect(source).toContain('publicMcpErrorMessage(cause)');

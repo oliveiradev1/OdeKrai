@@ -1281,6 +1281,7 @@ pub fn run() -> Result<(), tauri::Error> {
             providers::ping_provider,
             providers::get_provider_capabilities,
             providers::audio_transcription::transcribe_audio,
+            mcp_registry::mcp_public_catalog,
             mcp_registry::mcp_list_servers,
             mcp_registry::mcp_add_server,
             mcp_registry::mcp_add_http_server,

@@ -33,7 +33,6 @@ import {
   canConnectWithOAuth,
   getPublicMcpStatus,
   publicOAuthServiceKey,
-  publicMcpCatalog,
   publicMcpErrorMessage,
   publicMcpStatusLabels,
   type PublicMcpCatalogEntry,
@@ -58,6 +57,8 @@ type SkillsCatalogViewProps = {
   googleConnection?: ReactNode;
   prerequisites?: SkillPrerequisites;
   mcpServers?: Array<PublicMcpServer & { id: string }>;
+  publicServices?: PublicMcpCatalogEntry[];
+  catalogError?: string;
   githubOAuthAccount?: string | null;
   mcpBusy?: boolean;
   onConfigurePublicMcp?: (
@@ -134,6 +135,8 @@ export function SkillsCatalogView({
   googleConnection,
   prerequisites = { folderAvailable: true, appCount: 0, googleConnected: null },
   mcpServers = [],
+  publicServices = [],
+  catalogError = '',
   githubOAuthAccount,
   mcpBusy = false,
   onConfigurePublicMcp,
@@ -371,14 +374,19 @@ export function SkillsCatalogView({
                 teste de conexão bem-sucedido.
               </p>
             </div>
+            {catalogError && (
+              <p className="error-banner" role="alert">
+                {catalogError}
+              </p>
+            )}
             <div className="public-mcp-grid" aria-label="Catálogo de serviços MCP">
-              {publicMcpCatalog.map((service) => {
+              {publicServices.map((service) => {
                 const server = mcpServers.find(
                   (item) => item.endpoint === service.endpoint || item.name === service.name,
                 );
                 return (
                   <PublicMcpServiceCard
-                    key={service.name}
+                    key={service.id}
                     service={service}
                     status={getPublicMcpStatus(service, mcpServers)}
                     server={server}
@@ -434,7 +442,7 @@ function PublicMcpServiceCard({
   const [connecting, setConnecting] = useState(false);
   const [endpoint, setEndpoint] = useState(service.endpoint);
   const [authentication, setAuthentication] = useState<'oauth' | 'bearer'>(
-    (service.name === 'GitHub'
+    (service.id === 'github'
       ? 'bearer'
       : (service.authenticationMethods[0] as 'oauth' | 'bearer' | undefined)) ?? 'oauth',
   );
@@ -455,8 +463,8 @@ function PublicMcpServiceCard({
   const [githubAccount, setGithubAccount] = useState<string | null>(initialGitHubAccount ?? null);
   const [githubAccountLoading, setGithubAccountLoading] = useState(false);
   const [githubNotice, setGithubNotice] = useState('');
-  const isGitHub = service.name === 'GitHub';
-  const isGoogleWorkspace = service.supplier === 'Google Workspace';
+  const isGitHub = service.id === 'github';
+  const isGoogleWorkspace = service.id.startsWith('google.');
   const githubOAuthReady = canConnectToPublicOAuth(
     oauthClientSettings,
     { dynamicRegistration: false },
@@ -479,7 +487,7 @@ function PublicMcpServiceCard({
         if (!current) return;
         setOauthClientSettings(settings);
         setClientId(settings.clientId);
-        if (service.supplier === 'Google Workspace') {
+        if (service.id.startsWith('google.')) {
           setRegistrationOptions({ dynamicRegistration: false });
         }
       })
@@ -604,7 +612,11 @@ function PublicMcpServiceCard({
     setGithubNotice('');
     setConnecting(true);
     try {
-      await onConnectGitHubOAuth(server, oauthClientSettings.clientId, 'read:user');
+      await onConnectGitHubOAuth(
+        server,
+        oauthClientSettings.clientId,
+        service.oauthScopes?.join(' ') ?? '',
+      );
     } catch (cause) {
       setGithubNotice(publicMcpErrorMessage(cause));
     } finally {
@@ -629,8 +641,8 @@ function PublicMcpServiceCard({
 
   async function connectOrConfigure() {
     if (busy || connecting) return;
-    if (service.status === 'not_available') {
-      await openOfficialLink(service.documentationUrl);
+    if (!service.connectable) {
+      await openOfficialLink(service.officialLink);
       return;
     }
     if (isGitHub && oauthClientSettings && githubOAuthReady && onConnectGitHubOAuth) {
@@ -679,7 +691,7 @@ function PublicMcpServiceCard({
       <div className="public-mcp-card-heading">
         <div>
           <h3>{service.name}</h3>
-          <p>{service.supplier}</p>
+          <p>{service.provider}</p>
         </div>
         <span
           className={`public-mcp-status public-mcp-status--${isConnecting ? 'connecting' : status}`}
@@ -697,30 +709,29 @@ function PublicMcpServiceCard({
           {publicMcpErrorMessage(server?.status)}
         </p>
       )}
-      {isGoogleWorkspace && (
-        <section className="public-mcp-google-setup" aria-label={`Configuração de ${service.name}`}>
-          <h4>Como preparar o projeto Google</h4>
-          <ul>
-            {service.oauthScopeLabels?.map((scope) => (
-              <li key={scope}>{scope}</li>
-            ))}
-          </ul>
-          <ol>
-            {service.oauthSetupSteps?.map((step) => (
-              <li key={step}>{step}</li>
-            ))}
-          </ol>
+      {(service.requirements.length > 0 || service.permissions.length > 0) && (
+        <section className="public-mcp-service-setup" aria-label="Requisitos do serviço">
+          <h4>Requisitos e permissões</h4>
+          {service.requirements.length > 0 && (
+            <ul>
+              {service.requirements.map((requirement) => (
+                <li key={requirement}>{requirement}</li>
+              ))}
+            </ul>
+          )}
+          {service.permissions.length > 0 && (
+            <ul aria-label="Permissões">
+              {service.permissions.map((permission) => (
+                <li key={permission}>{permission}</li>
+              ))}
+            </ul>
+          )}
           {linkError && <p role="alert">{linkError}</p>}
         </section>
       )}
       {isGitHub && (
         <div className="public-mcp-github-oauth">
-          <p>
-            O OdeKrai pedirá somente <code>read:user</code> para identificar a conta. A conexão do
-            servidor fica em modo somente leitura; não são solicitadas permissões de escrita.
-            Confira as permissões exibidas pelo GitHub antes de autorizar. Sem permissões de
-            repositório, dados privados podem não ficar disponíveis.
-          </p>
+          <p>{service.oauthGuidance}</p>
           {status === 'connected' && githubAccount && (
             <p className="public-mcp-connected" role="status">
               Conectado como <strong>@{githubAccount}</strong>
@@ -730,9 +741,7 @@ function PublicMcpServiceCard({
             <p role="status">Verificando conta…</p>
           )}
           {oauthClientSettings && !oauthClientSettings.clientId.trim() && (
-            <p role="status">
-              Este aplicativo ainda precisa de um OAuth App GitHub registrado pelo desenvolvedor.
-            </p>
+            <p role="status">{service.oauthClientRequirement}</p>
           )}
           {oauthClientSettings?.clientSecretRequired && oauthClientSettings.clientId.trim() && (
             <form
@@ -743,7 +752,7 @@ function PublicMcpServiceCard({
               }}
             >
               <label>
-                Segredo do OAuth App do GitHub
+                {service.oauthSecretLabel ?? 'Segredo do cliente OAuth'}
                 <input
                   id={`${formId}-github-oauth-client-secret`}
                   name={`${formId}-github-oauth-client-secret`}
@@ -752,11 +761,7 @@ function PublicMcpServiceCard({
                   value={clientSecret}
                   onChange={(event) => setClientSecret(event.target.value)}
                 />
-                <small>
-                  O GitHub exige o segredo para trocar o código OAuth. Ele fica no Gerenciador de
-                  Credenciais e não volta a ser exibido. Use um app dedicado ao OdeKrai; o segredo
-                  fica acessível a quem usa este dispositivo.
-                </small>
+                <small>{service.oauthSecretHelp}</small>
               </label>
               {oauthClientSettings.clientSecretSaved ? (
                 <>
@@ -890,36 +895,25 @@ function PublicMcpServiceCard({
           <dd>{service.authentication}</dd>
         </div>
       </dl>
-      {service.setupSteps && (
-        <section className="public-mcp-service-setup" aria-label={`Como conectar ${service.name}`}>
-          <h4>Como conectar</h4>
-          <ol>
-            {service.setupSteps.map((step) => (
-              <li key={step}>{step}</li>
-            ))}
-          </ol>
-          {linkError && <p role="alert">{linkError}</p>}
-        </section>
-      )}
-      {service.tokenCreationUrl && service.tokenPermissions && (
+      {service.tokenCreationUrl && service.permissions.length > 0 && (
         <div className="public-mcp-token-guide">
-          <p>Crie um token pessoal fine-grained no GitHub. Sugestão mínima para leitura:</p>
+          <p>{service.personalTokenIntro}</p>
           <ul>
-            {service.tokenPermissions.map((permission) => (
+            {service.personalTokenPermissions?.map((permission) => (
               <li key={permission}>{permission}</li>
             ))}
           </ul>
           {linkError && <p role="alert">{linkError}</p>}
         </div>
       )}
-      {service.status === 'not_available' && (
+      {!service.connectable && (
         <p className="public-mcp-unavailable">
-          A conexão deste serviço depende da inclusão do OdeKrai no catálogo MCP do fornecedor.
+          {service.unavailableMessage}
           Consulte os requisitos pela documentação no menu Ações.
         </p>
       )}
       <div className="public-mcp-card-actions">
-        {(service.status === 'not_available' ||
+        {(!service.connectable ||
           onConfigure ||
           (server && onTest) ||
           (isGitHub && onConnectGitHubOAuth)) && (
@@ -939,7 +933,7 @@ function PublicMcpServiceCard({
             <Button
               type="button"
               variant="secondary"
-              onClick={() => void openOfficialLink(service.documentationUrl)}
+              onClick={() => void openOfficialLink(service.officialLink)}
             >
               Ver documentação
             </Button>
@@ -1025,7 +1019,7 @@ function PublicMcpServiceCard({
               type="url"
               value={endpoint}
               required
-              readOnly={service.name === 'GitHub'}
+              readOnly={service.id === 'github'}
               onChange={(event) => {
                 setEndpoint(event.target.value);
                 setClientId('');
@@ -1050,7 +1044,7 @@ function PublicMcpServiceCard({
           </label>
           {authentication === 'bearer' && (
             <label>
-              {service.name === 'GitHub' ? 'Token pessoal do GitHub (PAT)' : 'Token Bearer'}
+              {service.personalTokenLabel ?? 'Token Bearer'}
               <input
                 id={`${formId}-bearer-token`}
                 name={`${formId}-bearer-token`}
@@ -1070,9 +1064,9 @@ function PublicMcpServiceCard({
               {service.oauthRegistrationNote && (
                 <div className="public-mcp-oauth-guide">
                   <p>{service.oauthRegistrationNote}</p>
-                  {service.oauthSteps && (
+                  {service.requirements.length > 0 && (
                     <ol>
-                      {service.oauthSteps.map((step) => (
+                      {service.requirements.map((step) => (
                         <li key={step}>{step}</li>
                       ))}
                     </ol>
@@ -1152,6 +1146,7 @@ function PublicMcpServiceCard({
           <GitHubTokenManager
             server={server}
             busy={busy}
+            label={`Substituir ${service.personalTokenLabel ?? 'token pessoal'}`}
             onSave={onSaveGitHubToken}
             onRemove={onRemoveGitHubToken}
           />
@@ -1166,11 +1161,13 @@ function PublicMcpServiceCard({
 function GitHubTokenManager({
   server,
   busy,
+  label,
   onSave,
   onRemove,
 }: {
   server: PublicMcpServer & { id: string };
   busy: boolean;
+  label: string;
   onSave: NonNullable<SkillsCatalogViewProps['onSaveGitHubToken']>;
   onRemove: NonNullable<SkillsCatalogViewProps['onRemoveGitHubToken']>;
 }) {
@@ -1197,7 +1194,7 @@ function GitHubTokenManager({
 
   return (
     <form className="public-mcp-token-manager" onSubmit={(event) => void submit(event)}>
-      <label htmlFor={`${formId}-token`}>Substituir token pessoal do GitHub</label>
+      <label htmlFor={`${formId}-token`}>{label}</label>
       <input
         id={`${formId}-token`}
         name={`${formId}-token`}
@@ -1564,6 +1561,8 @@ export function SkillsScreen({
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [mcpServers, setMcpServers] = useState<Array<PublicMcpServer & { id: string }>>([]);
+  const [publicServices, setPublicServices] = useState<PublicMcpCatalogEntry[]>([]);
+  const [catalogError, setCatalogError] = useState('');
   const [mcpBusy, setMcpBusy] = useState(false);
   const [googleStatus, setGoogleStatus] = useState<GoogleOAuthStatus | null>(null);
   const [prerequisites, setPrerequisites] = useState<SkillPrerequisites>({
@@ -1575,6 +1574,7 @@ export function SkillsScreen({
   const refresh = useCallback(async (silent = false) => {
     if (!isTauri()) {
       setSkills([]);
+      setPublicServices([]);
       setLoadError('As habilidades só podem ser carregadas no aplicativo OdeKrai.');
       setLoading(false);
       return;
@@ -1583,12 +1583,15 @@ export function SkillsScreen({
     try {
       const nextSkills = await invoke<CatalogSkill[]>('get_skills');
       setSkills(nextSkills);
-      const [folders, apps, servers] = await Promise.all([
+      const [folders, apps, servers, catalog] = await Promise.all([
         invoke<Array<{ workspace: boolean }>>('get_allowed_folders').catch(() => null),
         invoke<Array<{ id: string }>>('get_allowed_apps').catch(() => null),
         invoke<Array<PublicMcpServer & { id: string }>>('mcp_list_servers').catch(() => null),
+        invoke<PublicMcpCatalogEntry[]>('mcp_public_catalog').catch(() => null),
       ]);
       if (servers) setMcpServers(servers);
+      setPublicServices(catalog ?? []);
+      setCatalogError(catalog ? '' : 'Não foi possível carregar o catálogo de serviços públicos.');
       setPrerequisites({
         folderAvailable: folders === null ? null : folders.some((folder) => folder.workspace),
         appCount: apps === null ? null : apps.length,
@@ -1644,8 +1647,8 @@ export function SkillsScreen({
       setError('O servidor MCP precisa usar uma URL HTTPS.');
       return false;
     }
-    if (service.name === 'GitHub' && endpoint !== service.endpoint) {
-      setError('O endereço oficial do servidor MCP do GitHub é fixo no catálogo.');
+    if (service.id === 'github' && endpoint !== service.endpoint) {
+      setError(service.endpointError ?? 'O endereço oficial do servidor é fixo no catálogo.');
       return false;
     }
     if (authentication === 'bearer' && !token.trim()) {
@@ -1682,7 +1685,7 @@ export function SkillsScreen({
       const detail = String(cause);
       if (detail.includes('exige um identificador de cliente')) {
         setError(
-          `Este servidor exige um identificador de cliente. Veja a documentação do serviço (${service.documentationUrl}) para criá-lo.`,
+          `Este servidor exige um identificador de cliente. Veja a documentação do serviço (${service.officialLink}) para criá-lo.`,
         );
       } else {
         setError(publicMcpErrorMessage(cause));
@@ -1773,13 +1776,15 @@ export function SkillsScreen({
     clientId: string,
     scopes: string,
   ): Promise<boolean> {
-    const service = publicMcpCatalog.find((item) => item.name === 'GitHub');
+    const service = publicServices.find((item) => item.id === 'github');
     if (!service) return false;
     if (!server) {
       return configurePublicMcp(service, service.endpoint, 'oauth', '', clientId, scopes);
     }
     if (server.endpoint !== service.endpoint) {
-      throw new Error('O endereço salvo não corresponde ao servidor oficial do GitHub.');
+      throw new Error(
+        service.serverMismatchError ?? 'O endereço salvo não corresponde ao endereço oficial.',
+      );
     }
     setMcpBusy(true);
     setError('');
@@ -1839,6 +1844,8 @@ export function SkillsScreen({
         ) : undefined
       }
       mcpServers={mcpServers}
+      publicServices={publicServices}
+      catalogError={catalogError}
       mcpBusy={mcpBusy}
       onConfigurePublicMcp={configurePublicMcp}
       onSaveGitHubToken={saveGitHubToken}

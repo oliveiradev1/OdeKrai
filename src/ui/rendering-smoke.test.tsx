@@ -13,6 +13,7 @@ import { ComputerScreen } from './screens/Computer';
 import { SettingsModal } from './SettingsModal';
 import { PermissionsScreen } from './screens/Permissions';
 import { ActivityScreen } from './screens/Activity';
+import publicCatalogFixture from '../../src-tauri/resources/public-mcp-catalog.json';
 
 const tauri = vi.hoisted(() => ({
   invoke: vi.fn(),
@@ -228,6 +229,21 @@ describe('renderização das telas principais', () => {
     render(<SkillsScreen onOpenPrivacy={noop} onRemovePublicMcp={async () => null} />);
     await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
     expect(screen.getByText('Nenhuma habilidade está registrada nesta versão.')).toBeTruthy();
+  });
+
+  it('Habilidades lê os serviços públicos do comando de catálogo do backend', async () => {
+    tauri.isTauri.mockReturnValue(true);
+    tauri.invoke.mockImplementation(async (command: string) => {
+      if (command === 'get_skills') return [];
+      if (command === 'mcp_public_catalog') return publicCatalogFixture;
+      if (command === 'mcp_list_servers') return [];
+      if (command === 'get_allowed_folders' || command === 'get_allowed_apps') return [];
+      return null;
+    });
+    render(<SkillsScreen onOpenPrivacy={noop} onRemovePublicMcp={async () => null} />);
+    fireEvent.click(await screen.findByRole('tab', { name: 'Público' }));
+    expect(await screen.findByRole('heading', { name: 'GitHub' })).toBeTruthy();
+    expect(tauri.invoke).toHaveBeenCalledWith('mcp_public_catalog');
   });
 
   it('Conectores de IA monta sem conexões e informa falha ao consultar credenciais', async () => {
