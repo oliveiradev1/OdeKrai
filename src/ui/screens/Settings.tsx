@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import '../settings-controls.css';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { defaultSettings, type AppSettings } from '../../core/settings';
 import { AI_PROVIDERS } from '../../core/providers';

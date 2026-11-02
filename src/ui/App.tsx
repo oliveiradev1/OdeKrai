@@ -11,17 +11,18 @@ import {
 } from 'react';
 import { resolveConversationSelection } from '../core/chat';
 import { setActionCardUndoError } from '../core/agent-card';
+import { runOnceWhilePending } from '../core/single-flight';
 import type { ChatMessage } from '../core/provider-messages';
 import type { AgentActionCardData } from './AgentControls';
+import { ActivityPanelTrigger } from './ActivityPanelTrigger';
 import {
-  ActivityPanelTrigger,
-  ActivitySidePanel,
   shouldLoadPanelAudit,
   toggleActivityPanel,
   type ActivityAuditSummary,
   type UpcomingReminder,
-} from './ActivitySidePanel';
+} from '../core/activity-panel';
 import { Channel, invoke, isTauri } from '@tauri-apps/api/core';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { emit, listen } from '@tauri-apps/api/event';
 import {
   normalizeSoundPreferences,
@@ -103,9 +104,7 @@ const ActivityScreen = lazy(() =>
     default: withScreenBoundary(module.ActivityScreen),
   })),
 );
-import { ApprovalWindow, isApprovalWindow, SecurityCenter } from './SecurityCenter';
 import type { AuditEntry } from './SecurityCenter';
-import { SkillsScreen } from './SkillsScreen';
 import { PETS, petAnimationForAssistantActivity, type PetAnimationState } from '../core/pets';
 import {
   navigationItems,
@@ -126,7 +125,6 @@ import { shouldAutomaticallyCheckForUpdates } from '../core/update-check';
 
 import { useAppState } from './hooks/useAppState';
 import { useNavigation } from './hooks/useNavigation';
-import { SettingsModal } from './SettingsModal';
 import { UpdateAvailableBanner, type UpdateCheckResult } from './UpdateAvailableBanner';
 import { FirstUseAssistant, type FirstUseStepContent } from './FirstUseAssistant';
 import { ReleaseNotesModal } from './ReleaseNotesModal';
@@ -143,6 +141,21 @@ import {
   type PaletteItem,
 } from '../core/command-palette';
 import type { SkillFamily } from '../core/skills-catalog';
+const ActivitySidePanel = lazy(() =>
+  import('./ActivitySidePanel').then((module) => ({ default: module.ActivitySidePanel })),
+);
+const SecurityCenter = lazy(() =>
+  import('./SecurityCenter').then((module) => ({ default: module.SecurityCenter })),
+);
+const ApprovalWindow = lazy(() =>
+  import('./SecurityCenter').then((module) => ({ default: module.ApprovalWindow })),
+);
+const SkillsScreen = lazy(() =>
+  import('./SkillsScreen').then((module) => ({ default: module.SkillsScreen })),
+);
+const SettingsModal = lazy(() =>
+  import('./SettingsModal').then((module) => ({ default: module.SettingsModal })),
+);
 const screenLoading = (
   <div className="screen-loading" role="status">
     Carregando tela…
@@ -162,8 +175,31 @@ const withScreenBoundary = <Props extends object>(
 };
 const currentReleaseNotesUrl = `https://github.com/Anceryx/OdeKrai/blob/main/docs/releases/v${releaseNotesManifest.currentVersion}.md`;
 
+type HomeContextSnapshot = {
+  skills: CatalogSkill[];
+  todayEvents: HomeEvent[];
+  scheduledEvents: HomeEvent[];
+  reminderCount: number;
+  scheduleUnavailable: boolean;
+  reminderUnavailable: boolean;
+};
+
+function isApprovalWindow(): boolean {
+  try {
+    return isTauri() && getCurrentWindow().label === 'approval';
+  } catch {
+    return false;
+  }
+}
+
 export function App() {
-  if (isApprovalWindow()) return <ApprovalWindow />;
+  if (isApprovalWindow()) {
+    return (
+      <Suspense fallback={screenLoading}>
+        <ApprovalWindow />
+      </Suspense>
+    );
+  }
   if (
     import.meta.env.DEV &&
     location.pathname === '/__dev/design-system' &&
@@ -243,13 +279,18 @@ function MainApp() {
   }, [undoToast]);
   const [pendingApprovalCount, setPendingApprovalCount] = useState(0);
   const [pendingApprovalCountError, setPendingApprovalCountError] = useState('');
+  const [settingsModalLoaded, setSettingsModalLoaded] = useState(settingsOpen);
   const [activityPanelOpen, setActivityPanelOpen] = useState(false);
+  const [activityPanelVisited, setActivityPanelVisited] = useState(false);
   const activityPanelTriggerRef = useRef<HTMLButtonElement>(null);
   const [activityAuditRecords, setActivityAuditRecords] = useState<AuditEntry[]>([]);
   const [activityAuditVerified, setActivityAuditVerified] = useState<boolean | null>(null);
   const [activityAuditLoading, setActivityAuditLoading] = useState(false);
   const [activityAuditUnavailable, setActivityAuditUnavailable] = useState(false);
   const activityAuditLoadedAt = useRef(0);
+  useEffect(() => {
+    if (settingsOpen) setSettingsModalLoaded(true);
+  }, [settingsOpen]);
   const [homeSkills, setHomeSkills] = useState<CatalogSkill[] | null>(null);
   const [homeSkillsLoadError, setHomeSkillsLoadError] = useState('');
   const [homeContextRetry, setHomeContextRetry] = useState(0);
@@ -262,6 +303,7 @@ function MainApp() {
   const [scheduleUnavailable, setScheduleUnavailable] = useState(false);
   const [reminderUnavailable, setReminderUnavailable] = useState(false);
   const homeContextLoadedAt = useRef(0);
+  const homeContextRequest = useRef<Promise<HomeContextSnapshot> | null>(null);
   const agentRunConversation = useRef<string | null>(null);
   const thinkingSoundGate = useRef(new SoundTriggerGate());
   const lastThinkingSoundKey = useRef<string | null>(null);
@@ -513,63 +555,74 @@ function MainApp() {
     const refreshHomeContext = async (force = false) => {
       if (!force && Date.now() - homeContextLoadedAt.current < 30_000 && homeSkills !== null)
         return;
-      setHomeSkills(null);
-      setTodayEvents([]);
-      setScheduledEvents([]);
-      setReminderCount(0);
-      setScheduleUnavailable(true);
-      setReminderUnavailable(true);
       if (!isTauri()) {
         setHomeSkills([]);
         homeContextLoadedAt.current = Date.now();
         return;
       }
+      if (!homeContextRequest.current) {
+        setHomeSkills(null);
+        setTodayEvents([]);
+        setScheduledEvents([]);
+        setReminderCount(0);
+        setScheduleUnavailable(true);
+        setReminderUnavailable(true);
+      }
       try {
-        const skills = await invoke<CatalogSkill[]>('get_skills');
+        const request = runOnceWhilePending(
+          homeContextRequest,
+          async (): Promise<HomeContextSnapshot> => {
+            const skills = await invoke<CatalogSkill[]>('get_skills');
+            const active = skills.filter((skill) => skill.enabled && skill.status === 'installed');
+            const canReadCalendar = active.some(
+              (skill) => skill.id === 'calendar.list_events' && skill.family === 'agenda_lembretes',
+            );
+            const canReadReminders = active.some(
+              (skill) => skill.id === 'reminder.list' && skill.family === 'agenda_lembretes',
+            );
+            const now = new Date();
+            const todayBounds = getTodayBounds(now);
+            const next24Hours = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+            const bounds = {
+              from: todayBounds.from,
+              to: new Date(
+                Math.max(new Date(todayBounds.to).getTime(), next24Hours.getTime()),
+              ).toISOString(),
+            };
+            const [events, reminders] = await Promise.allSettled([
+              canReadCalendar
+                ? invoke<HomeEvent[]>('calendar_list_events', bounds)
+                : Promise.resolve([] as HomeEvent[]),
+              canReadReminders ? invoke<number>('get_home_reminder_count') : Promise.resolve(0),
+            ]);
+            const availableEvents = events.status === 'fulfilled' ? events.value : [];
+            const todayStart = new Date(todayBounds.from).getTime();
+            const todayEnd = new Date(todayBounds.to).getTime();
+            return {
+              skills,
+              todayEvents: availableEvents.filter((event) => {
+                const startsAt = new Date(event.start).getTime();
+                return startsAt >= todayStart && startsAt < todayEnd;
+              }),
+              scheduledEvents: availableEvents.filter((event) => {
+                const startsAt = new Date(event.start).getTime();
+                return startsAt >= now.getTime() && startsAt <= next24Hours.getTime();
+              }),
+              reminderCount: reminders.status === 'fulfilled' ? reminders.value : 0,
+              scheduleUnavailable: events.status === 'rejected' || !canReadCalendar,
+              reminderUnavailable: reminders.status === 'rejected' || !canReadReminders,
+            };
+          },
+        );
+        const snapshot = await request;
         if (disposed) return;
-        setHomeSkills(skills);
+        setHomeSkills(snapshot.skills);
         setHomeSkillsLoadError('');
-        const active = skills.filter((skill) => skill.enabled && skill.status === 'installed');
-        const canReadCalendar = active.some(
-          (skill) => skill.id === 'calendar.list_events' && skill.family === 'agenda_lembretes',
-        );
-        const canReadReminders = active.some(
-          (skill) => skill.id === 'reminder.list' && skill.family === 'agenda_lembretes',
-        );
-        const now = new Date();
-        const todayBounds = getTodayBounds(now);
-        const next24Hours = new Date(now.getTime() + 24 * 60 * 60 * 1000);
-        const bounds = {
-          from: todayBounds.from,
-          to: new Date(
-            Math.max(new Date(todayBounds.to).getTime(), next24Hours.getTime()),
-          ).toISOString(),
-        };
-        const [events, reminders] = await Promise.allSettled([
-          canReadCalendar
-            ? invoke<HomeEvent[]>('calendar_list_events', bounds)
-            : Promise.resolve([] as HomeEvent[]),
-          canReadReminders ? invoke<number>('get_home_reminder_count') : Promise.resolve(0),
-        ]);
-        if (disposed) return;
-        const availableEvents = events.status === 'fulfilled' ? events.value : [];
-        const todayStart = new Date(todayBounds.from).getTime();
-        const todayEnd = new Date(todayBounds.to).getTime();
-        setTodayEvents(
-          availableEvents.filter((event) => {
-            const startsAt = new Date(event.start).getTime();
-            return startsAt >= todayStart && startsAt < todayEnd;
-          }),
-        );
-        setScheduledEvents(
-          availableEvents.filter((event) => {
-            const startsAt = new Date(event.start).getTime();
-            return startsAt >= now.getTime() && startsAt <= next24Hours.getTime();
-          }),
-        );
-        setReminderCount(reminders.status === 'fulfilled' ? reminders.value : 0);
-        setScheduleUnavailable(events.status === 'rejected' || !canReadCalendar);
-        setReminderUnavailable(reminders.status === 'rejected' || !canReadReminders);
+        setTodayEvents(snapshot.todayEvents);
+        setScheduledEvents(snapshot.scheduledEvents);
+        setReminderCount(snapshot.reminderCount);
+        setScheduleUnavailable(snapshot.scheduleUnavailable);
+        setReminderUnavailable(snapshot.reminderUnavailable);
         homeContextLoadedAt.current = Date.now();
       } catch {
         if (!disposed) {
@@ -1849,7 +1902,10 @@ function MainApp() {
               count={pendingApprovalCount}
               expanded={activityPanelOpen}
               buttonRef={activityPanelTriggerRef}
-              onClick={() => setActivityPanelOpen(toggleActivityPanel)}
+              onClick={() => {
+                setActivityPanelVisited(true);
+                setActivityPanelOpen(toggleActivityPanel);
+              }}
             />
             {shouldShowStopAll(busy, agentRunning) && (
               <button type="button" className="stop-all-button" onClick={() => void stopAll()}>
@@ -2247,50 +2303,54 @@ function MainApp() {
           )}
         </Suspense>
       </main>
-      <ActivitySidePanel
-        open={activityPanelOpen}
-        triggerRef={activityPanelTriggerRef}
-        pendingApprovalCount={pendingApprovalCount}
-        pendingApprovalError={pendingApprovalCountError}
-        running={agentRunning}
-        awaitingApproval={agentAwaitingApproval}
-        currentAction={currentActivityAction}
-        events={scheduledEvents}
-        reminderCount={reminderCount}
-        reminders={upcomingReminders}
-        remindersLoading={upcomingRemindersLoading}
-        upcomingReminderUnavailable={upcomingRemindersUnavailable}
-        scheduleUnavailable={scheduleUnavailable}
-        reminderUnavailable={reminderUnavailable}
-        actions={agentActionCards}
-        artifactHistoryAvailable={Boolean(conversationId)}
-        audit={activityAudit}
-        scheduleLoading={homeSkills === null}
-        auditLoading={activityAuditLoading}
-        auditUnavailable={activityAuditUnavailable}
-        onClose={() => setActivityPanelOpen(false)}
-        onStop={cancelRequest}
-        onReview={() =>
-          void invoke('show_pending_approval_window').catch(() =>
-            setToast('Não foi possível abrir a janela de aprovação.'),
-          )
-        }
-        onOpenArtifact={(path) =>
-          void invoke('open_agent_artifact', { path }).catch(() =>
-            setToast('Não foi possível abrir o arquivo.'),
-          )
-        }
-        onRevealArtifact={(path) =>
-          void invoke('reveal_agent_artifact', { path }).catch(() =>
-            setToast('Não foi possível mostrar o arquivo.'),
-          )
-        }
-        onViewAll={() => {
-          setActivityPanelOpen(false);
-          setChatMode(false);
-          navigate('activity');
-        }}
-      />
+      {activityPanelVisited && (
+        <Suspense fallback={null}>
+          <ActivitySidePanel
+            open={activityPanelOpen}
+            triggerRef={activityPanelTriggerRef}
+            pendingApprovalCount={pendingApprovalCount}
+            pendingApprovalError={pendingApprovalCountError}
+            running={agentRunning}
+            awaitingApproval={agentAwaitingApproval}
+            currentAction={currentActivityAction}
+            events={scheduledEvents}
+            reminderCount={reminderCount}
+            reminders={upcomingReminders}
+            remindersLoading={upcomingRemindersLoading}
+            upcomingReminderUnavailable={upcomingRemindersUnavailable}
+            scheduleUnavailable={scheduleUnavailable}
+            reminderUnavailable={reminderUnavailable}
+            actions={agentActionCards}
+            artifactHistoryAvailable={Boolean(conversationId)}
+            audit={activityAudit}
+            scheduleLoading={homeSkills === null}
+            auditLoading={activityAuditLoading}
+            auditUnavailable={activityAuditUnavailable}
+            onClose={() => setActivityPanelOpen(false)}
+            onStop={cancelRequest}
+            onReview={() =>
+              void invoke('show_pending_approval_window').catch(() =>
+                setToast('Não foi possível abrir a janela de aprovação.'),
+              )
+            }
+            onOpenArtifact={(path) =>
+              void invoke('open_agent_artifact', { path }).catch(() =>
+                setToast('Não foi possível abrir o arquivo.'),
+              )
+            }
+            onRevealArtifact={(path) =>
+              void invoke('reveal_agent_artifact', { path }).catch(() =>
+                setToast('Não foi possível mostrar o arquivo.'),
+              )
+            }
+            onViewAll={() => {
+              setActivityPanelOpen(false);
+              setChatMode(false);
+              navigate('activity');
+            }}
+          />
+        </Suspense>
+      )}
       {toast && (
         <div className="toast" role="status">
           {toast}
@@ -2365,34 +2425,38 @@ function MainApp() {
         onShowCurrent={() => setShowAllReleaseNotes(false)}
         onClose={() => setReleaseNotesOpen(false)}
       />
-      <SettingsModal
-        open={settingsOpen}
-        section={route.settingsSection ?? 'geral'}
-        onClose={closeSettings}
-        onSelectSection={selectSettingsSection}
-        settings={settings}
-        update={setSettings}
-        onSetPrimaryProvider={setPrimaryProvider}
-        performanceStatus={performanceStatus}
-        profile={profile}
-        setProfile={setProfile}
-        petVisible={petVisible}
-        setPetVisible={setPetVisible}
-        selectedPet={selectedPet}
-        onSelectPet={(petId) => void choosePet(petId)}
-        onError={setToast}
-        onDeleteAllHistory={deleteAllConversations}
-        onOpenPage={(page) => navigate(page)}
-        onOpenActivityFullPage={() => openLegacyScreen('activity')}
-        onAgentStatus={() => reportSystemDiagnostic('agent_home_status', '')}
-        releaseNotesUrl={currentReleaseNotesUrl}
-        onOpenReleaseNotes={() => void openResponseLink(currentReleaseNotesUrl)}
-        onUpdateFound={(result) =>
-          setAvailableUpdate(result.check_succeeded && result.available_version ? result : null)
-        }
-        sharedAudit={sharedAudit}
-        requestedEntry={requestedSettingsEntry}
-      />
+      {settingsModalLoaded && (
+        <Suspense fallback={null}>
+          <SettingsModal
+            open={settingsOpen}
+            section={route.settingsSection ?? 'geral'}
+            onClose={closeSettings}
+            onSelectSection={selectSettingsSection}
+            settings={settings}
+            update={setSettings}
+            onSetPrimaryProvider={setPrimaryProvider}
+            performanceStatus={performanceStatus}
+            profile={profile}
+            setProfile={setProfile}
+            petVisible={petVisible}
+            setPetVisible={setPetVisible}
+            selectedPet={selectedPet}
+            onSelectPet={(petId) => void choosePet(petId)}
+            onError={setToast}
+            onDeleteAllHistory={deleteAllConversations}
+            onOpenPage={(page) => navigate(page)}
+            onOpenActivityFullPage={() => openLegacyScreen('activity')}
+            onAgentStatus={() => reportSystemDiagnostic('agent_home_status', '')}
+            releaseNotesUrl={currentReleaseNotesUrl}
+            onOpenReleaseNotes={() => void openResponseLink(currentReleaseNotesUrl)}
+            onUpdateFound={(result) =>
+              setAvailableUpdate(result.check_succeeded && result.available_version ? result : null)
+            }
+            sharedAudit={sharedAudit}
+            requestedEntry={requestedSettingsEntry}
+          />
+        </Suspense>
+      )}
       <CommandPalette
         open={commandPaletteOpen}
         items={paletteItems}
