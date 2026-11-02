@@ -250,7 +250,12 @@ export function PrivacyConfigurations({
       await refresh();
       return true;
     } catch (cause) {
-      setError(String(cause));
+      const message = String(cause);
+      setError(message);
+      if (message.includes('Não coloque tokens, senhas ou chaves')) {
+        setServerCommand('');
+        setServerArgs('');
+      }
       return false;
     } finally {
       setBusy(false);
@@ -523,6 +528,11 @@ export function PrivacyConfigurations({
                 rows={3}
               />
             </label>
+            <p>
+              Não informe tokens, senhas ou chaves nos argumentos. Cadastre o nome da variável de
+              ambiente abaixo e salve o valor no Gerenciador de Credenciais. Se um valor sensível
+              for detectado, o formulário será limpo.
+            </p>
             <label>
               Nomes das variáveis de ambiente (um por linha)
               <textarea

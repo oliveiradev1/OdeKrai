@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use std::{
     collections::{BTreeMap, HashMap},
+    fmt,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -61,7 +62,7 @@ pub fn mcp_public_catalog(
     load_public_mcp_catalog()
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct McpServer {
     pub id: String,
@@ -74,6 +75,24 @@ pub struct McpServer {
     pub enabled: bool,
     pub status: String,
     pub error: Option<String>,
+}
+
+impl fmt::Debug for McpServer {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("McpServer")
+            .field("id", &self.id)
+            .field("name", &"[oculto]")
+            .field("command", &"[oculto]")
+            .field("args_count", &self.args.len())
+            .field("env_names", &self.env_names)
+            .field("transport", &self.transport)
+            .field("endpoint", &"[oculto]")
+            .field("enabled", &self.enabled)
+            .field("status", &self.status)
+            .field("error", &"[oculto]")
+            .finish()
+    }
 }
 
 enum RuntimeStatus {
@@ -349,6 +368,9 @@ fn validate(
     {
         return Err("Os argumentos excedem o limite permitido.".into());
     }
+    if contains_inline_credential(command, args) {
+        return Err("Não coloque tokens, senhas ou chaves no comando ou nos argumentos MCP. Use uma variável de ambiente guardada no Gerenciador de Credenciais do Windows.".into());
+    }
     if env_names.len() > 32
         || env_names.iter().any(|key| !valid_env_name(key))
         || env_names
@@ -360,6 +382,69 @@ fn validate(
         return Err("Use nomes de variáveis únicos no formato A-Z, 0-9 e _.".into());
     }
     Ok(())
+}
+
+fn sensitive_argument_name(value: &str) -> bool {
+    let key = value
+        .trim_start_matches('-')
+        .split_once('=')
+        .map_or(value.trim_start_matches('-'), |(key, _)| key)
+        .to_ascii_lowercase()
+        .replace('-', "_");
+    ["token", "secret", "password", "passwd", "api_key", "apikey", "authorization", "bearer", "private_key"]
+        .iter()
+        .any(|marker| key.contains(marker))
+}
+
+fn looks_like_credential(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    [
+        "ghp_", "github_pat_", "glpat-", "xoxb-", "xoxp-", "xoxs-", "ya29.", "AIza", "sk-",
+        "bearer ", "-----begin ",
+    ]
+    .iter()
+    .any(|marker| lower.contains(&marker.to_ascii_lowercase()))
+        || value
+            .split('.')
+            .filter(|part| !part.is_empty())
+            .count()
+            == 3
+            && value.starts_with("eyJ")
+}
+
+fn contains_inline_credential(command: &str, args: &[String]) -> bool {
+    if looks_like_credential(command)
+        || command
+            .split_whitespace()
+            .filter_map(|part| part.split_once('='))
+            .any(|(key, value)| sensitive_argument_name(key) && !value.is_empty())
+    {
+        return true;
+    }
+    args.iter().enumerate().any(|(index, argument)| {
+        if looks_like_credential(argument) {
+            return true;
+        }
+        let (key, value) = argument
+            .split_once('=')
+            .map_or((argument.as_str(), None), |(key, value)| (key, Some(value)));
+        if !sensitive_argument_name(key) {
+            return argument
+                .split_once('=')
+                .is_some_and(|(key, value)| sensitive_argument_name(key) && !value.is_empty());
+        }
+        value.is_some_and(|value| !value.is_empty())
+            || args.get(index + 1).is_some_and(|next| !next.is_empty())
+    })
+}
+
+fn redact_inline_credential_config(server: &mut McpServer) {
+    if contains_inline_credential(&server.command, &server.args) {
+        server.command = "[cadastro ocultado]".into();
+        server.args.clear();
+        server.status = "Erro".into();
+        server.error = Some("Cadastro antigo contém credencial no comando ou nos argumentos. Remova esse valor e use uma variável de ambiente protegida.".into());
+    }
 }
 
 fn entry(server_id: &str, key: &str) -> Result<Entry, String> {
@@ -587,6 +672,9 @@ fn inspect(
         };
         let result = client.tools_list()?;
         return Ok((client, result));
+    }
+    if contains_inline_credential(&server.command, &server.args) {
+        return Err("Cadastro antigo contém credencial no comando ou nos argumentos. Remova esse valor e use uma variável de ambiente protegida.".into());
     }
     let mut env = BTreeMap::new();
     for key in &server.env_names {
@@ -879,6 +967,9 @@ pub fn mcp_list_servers(
             server.error = Some(status.clone());
             states.insert(server.id.clone(), RuntimeStatus::Error(status));
         }
+    }
+    for server in &mut servers {
+        redact_inline_credential_config(server);
     }
     Ok(servers)
 }
@@ -1287,6 +1378,46 @@ mod tests {
             status: "Conectado".into(),
             error: None,
         }
+    }
+
+    #[test]
+    fn cadastro_mcp_recusa_segredos_inline_e_orienta_credencial_protegida() {
+        for args in [
+            vec!["--token".into(), "token-fixture-123".into()],
+            vec!["--api-key=api-key-fixture".into()],
+            vec!["ghp_secret_fixture".into()],
+        ] {
+            let error = validate("Teste", "mcp-server", &args, &["TOKEN".into()])
+                .expect_err("segredo inline deve ser recusado");
+            assert!(error.contains("Gerenciador de Credenciais"));
+        }
+        assert!(validate(
+            "Teste",
+            "mcp-server",
+            &["--project".into(), "demo".into()],
+            &["TOKEN".into()]
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn legado_com_segredo_e_ocultado_da_interface_e_debug() {
+        let mut server = server_for_catalog();
+        server.command = "mcp-server".into();
+        server.args = vec!["--token=legacy-secret-fixture".into()];
+        let debug = format!("{server:?}");
+        assert!(!debug.contains("legacy-secret-fixture"));
+
+        redact_inline_credential_config(&mut server);
+        let serialized = serde_json::to_string(&server).unwrap();
+        assert!(!serialized.contains("legacy-secret-fixture"));
+        assert!(!serialized.contains("--token"));
+        assert_eq!(server.status, "Erro");
+        assert!(server
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("variável de ambiente protegida"));
     }
 
     #[test]

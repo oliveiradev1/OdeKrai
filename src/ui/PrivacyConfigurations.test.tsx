@@ -103,6 +103,19 @@ describe('configurações de privacidade', () => {
     expect(ui.match(/autoComplete="off"/g)).toHaveLength(4);
   });
 
+  it('orienta não colocar credenciais em argumentos MCP e limpa o formulário quando detectadas', () => {
+    const ui = readFileSync(new URL('./PrivacyConfigurations.tsx', import.meta.url), 'utf8');
+    const rust = readFileSync(
+      new URL('../../src-tauri/src/mcp_registry.rs', import.meta.url),
+      'utf8',
+    );
+    expect(ui).toContain('Não informe tokens, senhas ou chaves nos argumentos');
+    expect(ui).toContain("setServerCommand('')");
+    expect(ui).toContain("setServerArgs('')");
+    expect(rust).toContain('contains_inline_credential(command, args)');
+    expect(rust).toContain('redact_inline_credential_config(server)');
+  });
+
   it('apresenta ferramentas MCP separadas por disponibilidade e trata anotações como sugestão', () => {
     const ui = readFileSync(new URL('./PrivacyConfigurations.tsx', import.meta.url), 'utf8');
     expect(ui).toContain('Ferramentas encontradas');
