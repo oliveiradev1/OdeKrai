@@ -25,3 +25,7 @@
 ## Regra de leitura
 
 “Renderização” significa React montado em jsdom. “Integração mock” significa comunicação entre componentes ou runtime simulado. Nenhuma dessas categorias deve ser reportada como E2E nativo. Apenas uma sessão Windows observável, com versão/SHA e roteiro preenchido, pode fechar a validação manual indicada acima.
+
+## Reexecução de verificação após C11
+
+No HEAD `e00fd90`, `npm run verify` passou `npm run build`, 88 arquivos/515 testes Vitest, Prettier, encoding, version e todas as guardas Node (comandos, ACL, release features e catálogo MCP). O runner parou em `cargo fmt --check` com `spawnSync cargo ENOENT`; nenhuma etapa Rust foi executada. O build sinalizou o chunk principal de 556 kB acima do limite informativo de 500 kB.
