@@ -5557,6 +5557,18 @@ html[data-performance='on'] .free-mode .island-shell {
   outline: 2px solid #f97316;
   outline-offset: 2px;
 }
+.agent-provider-selection {
+  align-self: flex-start;
+  max-width: min(100%, 52rem);
+  margin: 0.25rem 0 0.5rem 2.5rem;
+  padding: 0.55rem 0.8rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+}
+
 .agent-action-card {
   display: grid;
   gap: 8px;

@@ -61,6 +61,8 @@ pub struct ProviderCapabilities {
     pub streaming: bool,
     pub tools: bool,
     pub vision: bool,
+    #[serde(default)]
+    pub context_window_tokens: Option<u32>,
     pub image_generation: bool,
     pub verified: bool,
 }

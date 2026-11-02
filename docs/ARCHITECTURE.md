@@ -81,8 +81,21 @@ são limitados pelo motor. O roteador só troca de provedor em falhas transitór
 saída. A tabela `agent_messages` registra tipo, habilidade, id de auditoria e hashes; argumentos e
 resultados brutos não são persistidos.
 
-`AgentEvent` é o contrato serializado do canal: `step`, `toolCall`, `actionCard`, `awaitingApproval`,
-`toolResult`, `finalResponse`, `error` e `stopped`. Cartões guardam descrição, risco, decisão,
+No início de uma execução do agente, `providers::select_agent_provider` classifica o pedido em
+conversa, pesquisa, código, arquivos, agenda ou visão e usa a capacidade do catálogo, a credencial,
+o limite de uso diário e o estado recente de falha para ordenar os destinos configurados. Código,
+pesquisa, arquivos, agenda e visão pedem capacidades de ferramenta; visão também exige um modelo
+explicitamente permitido. Se nenhuma regra de capacidade se aplicar, preserva-se a ordem do usuário
+com o provedor principal primeiro. Quando uma alternativa é escolhida, o evento
+`ProviderSelection` mostra na conversa qual provedor foi usado e por quê. Falha transitória marca
+provedor/modelo indisponível por 60 segundos; erro de cota/saldo os mantém indisponíveis até a
+próxima meia-noite UTC. Janelas de contexto são aceitas pelo seletor somente quando declaradas no
+catálogo; atualmente estão desconhecidas (`null`) para os provedores, portanto essa regra não troca
+provedor com base em contexto até os valores serem verificados e cadastrados. O failover durante a
+chamada mantém a regra anterior: só tenta outro provedor antes de observar saída.
+
+`AgentEvent` é o contrato serializado do canal: `providerSelection`, `step`, `toolCall`, `actionCard`,
+`awaitingApproval`, `toolResult`, `finalResponse`, `error` e `stopped`. Cartões guardam descrição, risco, decisão,
 status e um resumo sem parâmetros ou resultados brutos. `agent_cancel(conversation_id)` cancela uma
 execução; o kill switch para todas. `approval_respond` apenas resolve a decisão pendente; o loop
 retoma a ação após receber o canal.

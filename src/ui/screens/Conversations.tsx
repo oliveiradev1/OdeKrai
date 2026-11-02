@@ -98,6 +98,7 @@ export function ConversationsScreen({
   agentRunning,
   agentAwaitingApproval,
   agentActionCards,
+  agentProviderSelection,
   onReviewApproval,
   onConfigureDiscord,
   onUndo,
@@ -151,6 +152,7 @@ export function ConversationsScreen({
   agentRunning: boolean;
   agentAwaitingApproval: boolean;
   agentActionCards: AgentActionCardData[];
+  agentProviderSelection?: string | null;
   onReviewApproval: () => void;
   onConfigureDiscord?: () => void;
   onUndo: (action: AgentActionCardData) => void;
@@ -857,6 +859,11 @@ export function ConversationsScreen({
                 <p className="speech-error" role="alert">
                   {speechError}
                 </p>
+              )}
+              {agentProviderSelection && (
+                <article className="agent-provider-selection" role="status">
+                  {agentProviderSelection}
+                </article>
               )}
               {agentActionCards.map((action) => (
                 <AgentActionCard

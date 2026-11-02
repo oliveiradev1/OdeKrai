@@ -31,6 +31,7 @@ use http::{
     read_provider_error_body, safe_transport_error, AuthRequest,
 };
 mod perplexity;
+mod selection;
 mod stream;
 mod types;
 #[cfg(test)]
@@ -44,6 +45,9 @@ pub use types::{
 };
 
 pub(crate) fn supports_vision_model(provider_id: &str, model: &str) -> bool {
+    if !catalog_entry(provider_id).is_some_and(|entry| entry.capabilities.vision) {
+        return false;
+    }
     match provider_id {
         // The official OpenAI vision guide demonstrates this exact Chat Completions model ID.
         "openai" => model == "gpt-6-astra",
@@ -218,6 +222,152 @@ pub struct ProviderTarget {
     provider_id: String,
     base_url: String,
     model: String,
+}
+
+pub(crate) struct AgentProviderSelection {
+    pub(crate) targets: Vec<crate::history::ConversationProviderTarget>,
+    pub(crate) provider_id: String,
+    pub(crate) model: String,
+    pub(crate) reason: &'static str,
+}
+
+pub(crate) fn select_agent_provider(
+    app: &tauri::AppHandle,
+    primary_id: &str,
+    configured_targets: Vec<crate::history::ConversationProviderTarget>,
+    messages: &[Message],
+    daily_token_limit: u64,
+) -> Result<AgentProviderSelection, String> {
+    use selection::{
+        choose_provider, classify_task, task_needs, CandidateAvailability,
+        CandidateCapabilities, ProviderCandidate,
+    };
+
+    let primary = configured_targets
+        .iter()
+        .position(|target| target.provider_id == primary_id)
+        .ok_or("O provedor principal não está na lista da conversa.")?;
+    let user_message = messages.iter().rev().find(|message| message.role == "user");
+    let task_text = user_message
+        .into_iter()
+        .flat_map(|message| message.blocks.iter())
+        .filter_map(|block| match block {
+            Block::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    let has_image = messages.iter().any(|message| {
+        message
+            .blocks
+            .iter()
+            .any(|block| matches!(block, Block::Image { .. }))
+    });
+    let kind = classify_task(&task_text, has_image);
+
+    let known_context = configured_targets.iter().any(|target| {
+        catalog_entry(&target.provider_id)
+            .and_then(|entry| entry.capabilities.context_window_tokens)
+            .is_some()
+    });
+    let estimated_context_tokens = known_context.then(|| {
+        (messages
+            .iter()
+            .flat_map(|message| message.blocks.iter())
+            .map(|block| match block {
+                Block::Text { text } => text.len(),
+                Block::Image { data_base64, .. } => data_base64.len(),
+                Block::ToolCall { name, args, .. } => name.len() + args.to_string().len(),
+                Block::ToolResult { content, .. } => content.len(),
+            })
+            .sum::<usize>()
+            / 4)
+        .min(u32::MAX as usize) as u32
+    });
+    let primary_context = catalog_entry(primary_id)
+        .and_then(|entry| entry.capabilities.context_window_tokens);
+    let required_context = primary_context
+        .zip(estimated_context_tokens)
+        .and_then(|(primary_capacity, required)| (required > primary_capacity).then_some(required));
+    let needs = task_needs(kind, required_context);
+    let used_today = crate::history::provider_usage_total_today(app)?;
+    let daily_quota_available = !crate::history::daily_token_limit_exceeded(
+        used_today,
+        daily_token_limit,
+    );
+    let mut candidates = Vec::with_capacity(configured_targets.len());
+    for target in &configured_targets {
+        let Some(entry) = catalog_entry(&target.provider_id) else {
+            candidates.push(ProviderCandidate {
+                id: target.provider_id.clone(),
+                capabilities: CandidateCapabilities::default(),
+                availability: CandidateAvailability::default(),
+            });
+            continue;
+        };
+        let credential = match credential_entry(&target.provider_id) {
+            Ok(entry) => match entry.get_password() {
+                Ok(_) => true,
+                Err(keyring::Error::NoEntry) => false,
+                Err(_) => false,
+            },
+            Err(_) => false,
+        };
+        let effective = effective_capabilities(app, &target.provider_id, &target.model).ok();
+        candidates.push(ProviderCandidate {
+            id: target.provider_id.clone(),
+            capabilities: CandidateCapabilities {
+                tools: effective.is_some_and(|capabilities| {
+                    capabilities.tools && capabilities.verified
+                }),
+                vision: entry.capabilities.vision
+                    && supports_vision_model(&target.provider_id, &target.model),
+                context_tokens: entry.capabilities.context_window_tokens,
+            },
+            availability: CandidateAvailability {
+                credential,
+                quota: daily_quota_available
+                    && selection::is_quota_available(&target.provider_id, &target.model),
+                recent_failure: selection::is_recent_failure(
+                    &target.provider_id,
+                    &target.model,
+                ),
+            },
+        });
+    }
+    let choice = choose_provider(primary_id, &candidates, needs)
+        .ok_or("O provedor principal não está disponível.")?;
+    let selected = configured_targets[choice.index].clone();
+    let mut ordered = vec![selected.clone()];
+    if needs.tools || needs.vision || needs.context_tokens.is_some() {
+        for (index, target) in configured_targets.into_iter().enumerate() {
+            if index != choice.index
+                && candidates.get(index).is_some_and(|candidate| {
+                    candidate.availability.credential
+                        && candidate.availability.quota
+                        && !candidate.availability.recent_failure
+                        && (!needs.tools || candidate.capabilities.tools)
+                        && (!needs.vision || candidate.capabilities.vision)
+                        && needs.context_tokens.map_or(true, |required| {
+                            candidate
+                                .capabilities
+                                .context_tokens
+                                .is_some_and(|available| available >= required)
+                        })
+                })
+            {
+                ordered.push(target);
+            }
+        }
+    } else {
+        ordered = configured_targets;
+    }
+    Ok(AgentProviderSelection {
+        provider_id: selected.provider_id.clone(),
+        model: selected.model.clone(),
+        targets: ordered,
+        reason: choice.reason,
+    })
 }
 
 #[derive(Default)]
@@ -921,6 +1071,7 @@ async fn send_message_inner(
                     attempt.model = target.model.clone();
                     let provider_id = target.provider_id.clone();
                     let base_url = target.base_url.clone();
+                    let model_for_health = attempt.model.clone();
                     let channel = on_chunk.clone();
                     let seen_output = observed_output.clone();
                     let app = &app;
@@ -928,7 +1079,9 @@ async fn send_message_inner(
                         if let Some(channel) = channel.as_ref() {
                             channel.send(ProviderEvent::ProviderSelected { provider_id: provider_id.clone() });
                         }
-                        request_provider(app, &provider_id, &base_url, attempt, channel, Some(seen_output)).await
+                        let result = request_provider(app, &provider_id, &base_url, attempt, channel, Some(seen_output)).await;
+                        selection::record_result(&provider_id, &model_for_health, result.as_ref().map(|_| ()).map_err(String::as_str));
+                        result
                     }
                 },
                 |from, to, reason| crate::security::audit_provider_fallback(&app, &security, &from.provider_id, &to.provider_id, reason),
@@ -1167,6 +1320,7 @@ async fn request_provider(
         streaming: chat_capabilities.streaming && protocol_capabilities.streaming,
         tools: chat_capabilities.tools && protocol_capabilities.tools,
         vision: chat_capabilities.vision && protocol_capabilities.vision,
+        context_window_tokens: chat_capabilities.context_window_tokens,
         image_generation: chat_capabilities.image_generation
             && protocol_capabilities.image_generation,
         verified: chat_capabilities.verified && protocol_capabilities.verified,
@@ -1298,6 +1452,9 @@ pub(crate) async fn agent_model_turn(
     messages: &[Message],
     tools: &[ToolDef],
     daily_token_limit: u64,
+    preferred_provider_id: &str,
+    selection_reason: &'static str,
+    selection_events: tauri::ipc::Channel<crate::agent::AgentEvent>,
 ) -> Result<ProviderReply, String> {
     if !valid_tools(tools) {
         return Err("As ferramentas disponíveis para o agente têm definições inválidas.".into());
@@ -1347,6 +1504,11 @@ pub(crate) async fn agent_model_turn(
             let app = app_handle.clone();
             let provider_id = candidate.provider_id.clone();
             let base_url = candidate.base_url.clone();
+            let model_for_health = candidate.model.clone();
+            let selected_model = model_for_health.clone();
+            let preferred_provider_id = preferred_provider_id.to_owned();
+            let selection_reason = selection_reason.to_owned();
+            let selection_events = selection_events.clone();
             let sink = sink.clone();
             let observed = observed.clone();
             let request = ChatRequest {
@@ -1356,7 +1518,18 @@ pub(crate) async fn agent_model_turn(
                 streaming: true,
             };
             async move {
-                request_provider(
+                let reason = if provider_id == preferred_provider_id {
+                    selection_reason
+                } else {
+                    "o provedor anterior falhou antes de responder; usando o fallback configurado"
+                        .into()
+                };
+                let _ = selection_events.send(crate::agent::AgentEvent::ProviderSelection {
+                    provider_id: provider_id.clone(),
+                    model: selected_model,
+                    reason,
+                });
+                let result = request_provider(
                     &app,
                     &provider_id,
                     &base_url,
@@ -1364,7 +1537,13 @@ pub(crate) async fn agent_model_turn(
                     Some(sink),
                     Some(observed),
                 )
-                .await
+                .await;
+                selection::record_result(
+                    &provider_id,
+                    &model_for_health,
+                    result.as_ref().map(|_| ()).map_err(String::as_str),
+                );
+                result
             }
         },
         |from, to, reason| {
@@ -1874,6 +2053,7 @@ mod tests {
             streaming: true,
             tools: true,
             vision: false,
+            context_window_tokens: None,
             image_generation: false,
             verified: true,
         };

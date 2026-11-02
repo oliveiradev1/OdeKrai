@@ -101,6 +101,11 @@ impl Default for AgentLimits {
     tag = "type"
 )]
 pub enum AgentEvent {
+    ProviderSelection {
+        provider_id: String,
+        model: String,
+        reason: String,
+    },
     Step {
         turn: usize,
     },

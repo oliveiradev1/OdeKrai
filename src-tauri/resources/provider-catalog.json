@@ -16,7 +16,8 @@
       "tools": false,
       "vision": false,
       "imageGeneration": false,
-      "verified": false
+      "verified": false,
+      "contextWindowTokens": null
     }
   },
   {
@@ -34,9 +35,10 @@
     "capabilities": {
       "streaming": true,
       "tools": true,
-      "vision": false,
+      "vision": true,
       "imageGeneration": false,
-      "verified": true
+      "verified": true,
+      "contextWindowTokens": null
     }
   },
   {
@@ -54,9 +56,10 @@
     "capabilities": {
       "streaming": true,
       "tools": true,
-      "vision": false,
+      "vision": true,
       "imageGeneration": false,
-      "verified": true
+      "verified": true,
+      "contextWindowTokens": null
     }
   },
   {
@@ -76,7 +79,8 @@
       "tools": false,
       "vision": false,
       "imageGeneration": false,
-      "verified": false
+      "verified": false,
+      "contextWindowTokens": null
     }
   },
   {
@@ -96,7 +100,8 @@
       "tools": false,
       "vision": false,
       "imageGeneration": false,
-      "verified": false
+      "verified": false,
+      "contextWindowTokens": null
     }
   },
   {
@@ -116,7 +121,8 @@
       "tools": true,
       "vision": false,
       "imageGeneration": false,
-      "verified": true
+      "verified": true,
+      "contextWindowTokens": null
     }
   },
   {
@@ -136,7 +142,8 @@
       "tools": false,
       "vision": false,
       "imageGeneration": false,
-      "verified": false
+      "verified": false,
+      "contextWindowTokens": null
     }
   },
   {
@@ -156,7 +163,8 @@
       "tools": true,
       "vision": false,
       "imageGeneration": false,
-      "verified": true
+      "verified": true,
+      "contextWindowTokens": null
     }
   },
   {
@@ -176,7 +184,8 @@
       "tools": true,
       "vision": false,
       "imageGeneration": false,
-      "verified": true
+      "verified": true,
+      "contextWindowTokens": null
     }
   },
   {
@@ -196,7 +205,8 @@
       "tools": false,
       "vision": false,
       "imageGeneration": false,
-      "verified": false
+      "verified": false,
+      "contextWindowTokens": null
     }
   },
   {
@@ -216,7 +226,8 @@
       "tools": false,
       "vision": false,
       "imageGeneration": false,
-      "verified": false
+      "verified": false,
+      "contextWindowTokens": null
     }
   },
   {
@@ -236,7 +247,8 @@
       "tools": false,
       "vision": false,
       "imageGeneration": false,
-      "verified": false
+      "verified": false,
+      "contextWindowTokens": null
     }
   },
   {
@@ -256,7 +268,8 @@
       "tools": true,
       "vision": false,
       "imageGeneration": false,
-      "verified": true
+      "verified": true,
+      "contextWindowTokens": null
     }
   },
   {
@@ -276,7 +289,8 @@
       "tools": false,
       "vision": false,
       "imageGeneration": false,
-      "verified": false
+      "verified": false,
+      "contextWindowTokens": null
     }
   },
   {
@@ -296,7 +310,8 @@
       "tools": false,
       "vision": false,
       "imageGeneration": false,
-      "verified": false
+      "verified": false,
+      "contextWindowTokens": null
     }
   },
   {
@@ -316,7 +331,8 @@
       "tools": false,
       "vision": false,
       "imageGeneration": false,
-      "verified": false
+      "verified": false,
+      "contextWindowTokens": null
     }
   },
   {
@@ -336,7 +352,8 @@
       "tools": false,
       "vision": false,
       "imageGeneration": false,
-      "verified": false
+      "verified": false,
+      "contextWindowTokens": null
     }
   }
 ]

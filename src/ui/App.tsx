@@ -210,6 +210,7 @@ function MainApp() {
   const [agentErrorDetails, setAgentErrorDetails] = useState('');
   const [agentAwaitingApproval, setAgentAwaitingApproval] = useState(false);
   const [agentActionCards, setAgentActionCards] = useState<AgentActionCardData[]>([]);
+  const [agentProviderSelection, setAgentProviderSelection] = useState<string | null>(null);
   const [assistantPetState, setAssistantPetState] = useState<PetAnimationState>('idle');
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [recentCommands, setRecentCommands] = useState<string[]>([]);
@@ -454,7 +455,16 @@ function MainApp() {
     const checkAvailability = () =>
       invoke<{ available: boolean; reason: string | null; workspacePath: string | null }>(
         'agent_availability',
-        { providerId: activeProvider.providerId, model: activeProvider.model },
+        {
+          providerId: activeProvider.providerId,
+          model: activeProvider.model,
+          fallbacks: settings.fallbackProviderIds.flatMap((providerId) => {
+            const config = settings.providers[providerId];
+            return config?.enabled !== false && config?.model
+              ? [{ providerId, baseUrl: config.baseUrl, model: config.model }]
+              : [];
+          }),
+        },
       )
         .then((availability) => {
           setAgentAvailability(availability);
@@ -490,6 +500,8 @@ function MainApp() {
     activeProvider.providerId,
     activeProvider.model,
     conversationId,
+    settings.fallbackProviderIds,
+    settings.providers,
     permissionIndicator?.halted,
   ]);
 
@@ -1069,6 +1081,7 @@ function MainApp() {
   ): Promise<boolean> {
     const text = rawText.trim();
     if (!text || busy) return false;
+    setAgentProviderSelection(null);
     const isNewConversation = options.newConversation ?? !conversationId;
     const useAgent = options.agentEnabled ?? agentEnabled;
     if (useAgent && !agentAvailability.available) {
@@ -1177,6 +1190,7 @@ function MainApp() {
       if (useAgent && agentAvailability.available) {
         const onEvent = new Channel<{
           type:
+            | 'providerSelection'
             | 'step'
             | 'toolCall'
             | 'awaitingApproval'
@@ -1196,13 +1210,22 @@ function MainApp() {
           kind?: string;
           message?: string;
           technicalDetails?: string | null;
+          providerId?: string;
+          model?: string;
+          reason?: string;
           card?: AgentActionCardData & { createdAt: number };
         }>();
         agentRunConversation.current = activeId;
         setAgentRunning(true);
         setAgentAwaitingApproval(false);
+        setAgentProviderSelection(null);
         onEvent.onmessage = (event) => {
-          if (event.type === 'actionCard' && event.card) {
+          if (event.type === 'providerSelection' && event.providerId && event.reason) {
+            const providerName =
+              AI_PROVIDERS.find((item) => item.id === event.providerId)?.name ?? event.providerId;
+            setUsedProviderId(event.providerId);
+            setAgentProviderSelection(`Usando ${providerName} porque ${event.reason}.`);
+          } else if (event.type === 'actionCard' && event.card) {
             setAgentActionCards((items) => {
               const next = items.filter((item) => item.id !== event.card!.id);
               return [...next, event.card!].slice(-100);
@@ -1499,6 +1522,7 @@ function MainApp() {
         setMessages(loaded);
         setAgentEnabled(enabled);
         setAgentActionCards(cards);
+        setAgentProviderSelection(null);
       })
       .catch(() => setError('Não foi possível abrir a conversa.'));
   }
@@ -2013,6 +2037,7 @@ function MainApp() {
               agentRunning={agentRunning}
               agentAwaitingApproval={agentAwaitingApproval}
               agentActionCards={agentActionCards}
+              agentProviderSelection={agentProviderSelection}
               onReviewApproval={() =>
                 void invoke('show_pending_approval_window').catch(() =>
                   setToast('Não foi possível abrir a janela de aprovação.'),
