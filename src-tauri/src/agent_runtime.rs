@@ -805,7 +805,7 @@ async fn agent_run_inner(context: AgentRunContext<'_>) -> Result<String, String>
     if state.is_halted() {
         return Err("O agente está parado pelo kill switch.".into());
     }
-    let (provider_id, model, enabled, targets, _) =
+    let (provider_id, _model, enabled, targets, _) =
         crate::history::load_agent_context(&app, &conversation_id)?;
     if !enabled {
         return Err("Modo agente indisponível: ele está desativado nesta conversa. Ative-o nas configurações da conversa.".into());

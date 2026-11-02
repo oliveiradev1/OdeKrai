@@ -67,7 +67,7 @@ pub(super) fn is_quota_available(provider_id: &str, model: &str) -> bool {
         .ok()
         .and_then(|states| states.get(&failure_key(provider_id, model)).copied())
         .and_then(|state| state.quota_blocked_until_utc)
-        .map_or(true, |until| now >= until)
+        .is_none_or(|until| now >= until)
 }
 
 pub(super) fn record_result(provider_id: &str, model: &str, result: Result<(), &str>) {
@@ -204,7 +204,7 @@ pub(super) fn choose_provider(
             && !candidate.availability.recent_failure
             && (!needs.tools || candidate.capabilities.tools)
             && (!needs.vision || candidate.capabilities.vision)
-            && needs.context_tokens.map_or(true, |required| {
+            && needs.context_tokens.is_none_or(|required| {
                 candidate
                     .capabilities
                     .context_tokens

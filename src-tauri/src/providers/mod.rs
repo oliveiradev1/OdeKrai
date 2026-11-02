@@ -243,7 +243,7 @@ pub(crate) fn select_agent_provider(
         ProviderCandidate,
     };
 
-    let primary = configured_targets
+    let _primary = configured_targets
         .iter()
         .position(|target| target.provider_id == primary_id)
         .ok_or("O provedor principal não está na lista da conversa.")?;
@@ -342,7 +342,7 @@ pub(crate) fn select_agent_provider(
                         && !candidate.availability.recent_failure
                         && (!needs.tools || candidate.capabilities.tools)
                         && (!needs.vision || candidate.capabilities.vision)
-                        && needs.context_tokens.map_or(true, |required| {
+                        && needs.context_tokens.is_none_or(|required| {
                             candidate
                                 .capabilities
                                 .context_tokens
@@ -1439,6 +1439,10 @@ fn openai_reasoning_effort(
     (provider_id == "openai" && model == "gpt-6-luna" && tools_requested).then_some("none")
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "o contexto do turno é explícito e a função coordena uma chamada única do agente"
+)]
 pub(crate) async fn agent_model_turn(
     app: &tauri::AppHandle,
     security: &crate::security::SecurityState,

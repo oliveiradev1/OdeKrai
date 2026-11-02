@@ -143,6 +143,10 @@ pub enum SkillFamily {
     Computador,
     Codigo,
     Nuvem,
+    #[expect(
+        dead_code,
+        reason = "família reservada para integrações MCP quando ferramentas forem materializadas no registro"
+    )]
     IntegracoesMcp,
 }
 
